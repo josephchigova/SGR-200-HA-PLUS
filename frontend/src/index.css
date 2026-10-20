@@ -1,0 +1,281 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  font-family: Inter, "Segoe UI", sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  color: #1f2937;
+  background: #f4f7f3;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --green-900: #1e3a2f;
+  --green-700: #2d5a47;
+  --green-600: #3c7d5e;
+  --green-200: #dfeee4;
+  --grey-100: #f5f7f6;
+  --grey-200: #e5e7eb;
+  --white: #ffffff;
+  --shadow: 0 10px 25px rgba(17, 24, 39, 0.08);
+}
+
+html, body, #root {
+  margin: 0;
+  min-height: 100%;
+  min-height: 100vh;
+  background: linear-gradient(180deg, #eef4ef 0%, #f7f8f6 100%);
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: var(--green-900);
+  color: var(--white);
+  padding: 28px 20px;
+}
+
+.brand-block {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 32px;
+}
+
+.brand-mark {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.1);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 1.2rem;
+}
+
+.brand-block h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: var(--white);
+}
+
+.brand-block p {
+  margin: 0;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.nav-section {
+  margin-top: 24px;
+}
+
+.nav-title {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.65);
+  margin-bottom: 16px;
+}
+
+.nav-section ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.main-panel {
+  padding: 28px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 0.7rem;
+  color: #6b7280;
+  margin: 0;
+}
+
+.topbar h2 {
+  margin: 6px 0 0;
+  font-size: 2.2rem;
+  color: var(--green-900);
+}
+
+.season-selector-row,
+.period-selectors {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.period-block {
+  display: grid;
+  gap: 8px;
+}
+
+.period-field {
+  display: grid;
+  gap: 6px;
+}
+
+.period-banner,
+.period-note {
+  margin: 0;
+  max-width: 680px;
+}
+
+.season-selector {
+  border: 1px solid var(--grey-200);
+  border-radius: 10px;
+  background: var(--white);
+  padding: 10px 12px;
+  min-width: 160px;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 12px;
+}
+
+@media (max-width: 900px) {
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .topbar h2 {
+    font-size: 1.5rem;
+  }
+
+  .season-selector-row {
+    flex-wrap: wrap;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+.ghost-btn,
+.primary-btn {
+  border: 1px solid var(--grey-200);
+  background: var(--white);
+  border-radius: 10px;
+  padding: 10px 14px;
+}
+
+.primary-btn {
+  background: var(--green-700);
+  color: var(--white);
+  border-color: var(--green-700);
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(180px, 1fr));
+  gap: 18px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  background: var(--white);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stat-card span {
+  color: #4b5563;
+  font-size: 0.8rem;
+}
+
+.stat-card strong {
+  font-size: 2rem;
+  color: var(--green-900);
+}
+
+.stat-card small {
+  color: #6b7280;
+}
+
+.content-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 18px;
+}
+
+.panel {
+  background: var(--white);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.panel h3 {
+  margin-top: 0;
+  color: var(--green-900);
+}
+
+.chart-placeholder {
+  display: flex;
+  align-items: end;
+  gap: 18px;
+  min-height: 220px;
+  background: linear-gradient(180deg, #f4f9f5 0%, #fbfcfb 100%);
+  border-radius: 12px;
+  padding: 18px;
+}
+
+.bar {
+  flex: 1;
+  border-radius: 12px 12px 0 0;
+  background: linear-gradient(180deg, var(--green-600), var(--green-900));
+}
+
+.bar-lg { height: 85%; }
+.bar-md { height: 70%; }
+.bar-sm { height: 50%; }
+.bar-xs { height: 30%; }
+
+.action-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 10px;
+  color: #374151;
+}
