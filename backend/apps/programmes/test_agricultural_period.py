@@ -19,6 +19,7 @@ from .calendar import (
     crop_season_for_date,
     crop_seasons_for_date,
     ensure_current_agricultural_year,
+    season_is_selectable,
 )
 from .models import Crop, Programme, Season
 
@@ -202,6 +203,8 @@ class AgriculturalPeriodApiTests(TestCase):
         self.assertEqual(first.data["agricultural_year"]["id"], second.data["agricultural_year"]["id"])
         self.assertEqual(Season.objects.filter(name="2026/2027").count(), 1)
         self.assertTrue(first.data["agricultural_year"]["is_current"])
+        self.assertTrue(first.data["agricultural_year"]["selectable"])
+        self.assertFalse(season_is_selectable(self.old_season))
         self.assertEqual(first.data["agricultural_year"]["crop_seasons"][0]["code"], "SUMMER")
         self.assertEqual(first.data["agricultural_year"]["crop_seasons"][1]["code"], "WINTER")
 

@@ -2,12 +2,13 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from .calendar import crop_seasons_for_date, season_is_current_year
+from .calendar import crop_seasons_for_date, season_is_current_year, season_is_selectable
 from .models import Crop, CropInputRequirement, CropSellingPrice, Programme, ProgrammeAllocation, Season
 
 
 class SeasonSerializer(serializers.ModelSerializer):
     is_current = serializers.SerializerMethodField()
+    selectable = serializers.SerializerMethodField()
     crop_seasons = serializers.SerializerMethodField()
 
     class Meta:
@@ -22,12 +23,16 @@ class SeasonSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "is_current",
+            "selectable",
             "crop_seasons",
         ]
-        read_only_fields = ["created_at", "updated_at", "is_current", "crop_seasons"]
+        read_only_fields = ["created_at", "updated_at", "is_current", "selectable", "crop_seasons"]
 
     def get_is_current(self, obj):
         return season_is_current_year(obj)
+
+    def get_selectable(self, obj):
+        return season_is_selectable(obj)
 
     def get_crop_seasons(self, obj):
         return crop_seasons_for_date(obj.start_date)
@@ -35,6 +40,7 @@ class SeasonSerializer(serializers.ModelSerializer):
 
 class ProgrammeSerializer(serializers.ModelSerializer):
     remaining_capacity = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
+    season_name = serializers.SerializerMethodField()
 
     class Meta:
         model = Programme
@@ -44,6 +50,7 @@ class ProgrammeSerializer(serializers.ModelSerializer):
             "code",
             "description",
             "season",
+            "season_name",
             "crop",
             "institution",
             "announced_hectares",
@@ -57,7 +64,10 @@ class ProgrammeSerializer(serializers.ModelSerializer):
             "end_date",
             "is_active",
         ]
-        read_only_fields = ["total_allocated_hectares", "remaining_capacity"]
+        read_only_fields = ["total_allocated_hectares", "remaining_capacity", "season_name"]
+
+    def get_season_name(self, obj):
+        return obj.season.name if obj.season_id else ""
 
     def validate_announced_hectares(self, value):
         if value < 0:
@@ -65,6 +75,35 @@ class ProgrammeSerializer(serializers.ModelSerializer):
         if self.instance and value < self.instance.total_allocated_hectares:
             raise serializers.ValidationError("Capacity cannot be lower than hectares already allocated.")
         return value
+
+    def validate_code(self, value):
+        normalized = value.strip()
+        queryset = Programme.objects.filter(code__iexact=normalized)
+        if self.instance is not None:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        if queryset.exists():
+            raise serializers.ValidationError("A programme with this code already exists.")
+        return normalized
+
+    def validate_season(self, value):
+        if value is None:
+            raise serializers.ValidationError("Select an agricultural year.")
+        return value
+
+    def validate_crop(self, value):
+        normalized = " ".join((value or "").split())
+        if not normalized:
+            raise serializers.ValidationError("Select a crop from the catalogue.")
+        crop = Crop.objects.filter(name__iexact=normalized, active=True).first()
+        if crop is None:
+            raise serializers.ValidationError("Select an active crop from the catalogue.")
+        request = self.context.get("request")
+        from .period import parse_crop_season
+
+        crop_season = parse_crop_season(request.query_params.get("crop_season")) if request is not None else None
+        if crop_season and crop.category != crop_season:
+            raise serializers.ValidationError("That crop does not belong to the selected season.")
+        return crop.name
 
 
 class ProgrammeAllocationSerializer(serializers.ModelSerializer):
@@ -172,7 +211,7 @@ class CropInputRequirementSerializer(serializers.ModelSerializer):
 
 class CropSellingPriceSerializer(serializers.ModelSerializer):
     crop_name = serializers.CharField(source="crop.name", read_only=True)
-    season_name = serializers.CharField(source="season.name", read_only=True)
+    season_name = serializers.SerializerMethodField()
 
     class Meta:
         model = CropSellingPrice
@@ -190,3 +229,27 @@ class CropSellingPriceSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+    def get_season_name(self, obj):
+        return obj.season.name if obj.season_id else ""
+
+    def validate(self, attrs):
+        crop = attrs.get("crop", getattr(self.instance, "crop", None))
+        season = attrs.get("season", getattr(self.instance, "season", None))
+        if season is None:
+            raise serializers.ValidationError({"season": ["Select an agricultural year."]})
+        if not season_is_selectable(season):
+            raise serializers.ValidationError({"season": ["Select the configured agricultural year."]})
+        price = attrs.get("price_per_tonne", getattr(self.instance, "price_per_tonne", None))
+        if price is None or Decimal(str(price)) <= 0:
+            raise serializers.ValidationError({"price_per_tonne": ["Price per tonne must be greater than zero."]})
+        active = attrs.get("active", getattr(self.instance, "active", True))
+        if active and crop is not None:
+            existing = CropSellingPrice.objects.filter(crop=crop, season=season, active=True)
+            if self.instance is not None:
+                existing = existing.exclude(pk=self.instance.pk)
+            if existing.exists():
+                raise serializers.ValidationError({
+                    "season": [f"An active selling price already exists for {crop.name} in agricultural year {season.name}."],
+                })
+        return attrs

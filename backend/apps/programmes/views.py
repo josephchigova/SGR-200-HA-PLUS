@@ -1,5 +1,6 @@
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from apps.accounts.permissions import ProgrammeWorkflowPermission
@@ -24,6 +25,37 @@ class ProgrammeViewSet(viewsets.ModelViewSet):
         if crop_season:
             queryset = filter_by_crop_name(queryset, crop_season, "crop")
         return queryset
+
+    def perform_destroy(self, instance):
+        from apps.finance.models import ExpenseClaim, JournalEntry, RecognizedReceipt, TradeReceivable
+        from apps.recovery.models import InputDebt
+
+        blockers = []
+        if instance.request_batches.exists():
+            blockers.append("ARDA requests")
+        if instance.input_allocations.exists():
+            blockers.append("input allocations")
+        if instance.allocations.exists():
+            blockers.append("programme allocations")
+        if InputDebt.objects.filter(programme=instance).exists():
+            blockers.append("recovery records")
+        if JournalEntry.objects.filter(programme=instance).exists():
+            blockers.append("journal entries")
+        if RecognizedReceipt.objects.filter(programme=instance).exists():
+            blockers.append("recognized receipts")
+        if ExpenseClaim.objects.filter(programme=instance).exists():
+            blockers.append("expense claims")
+        if TradeReceivable.objects.filter(programme=instance).exists():
+            blockers.append("receivables")
+        if blockers:
+            raise ValidationError({
+                "detail": [
+                    "This programme cannot be deleted because it is used by "
+                    + ", ".join(blockers)
+                    + ". Close or archive it instead."
+                ],
+            })
+        instance.delete()
 
 
 class SeasonViewSet(viewsets.ModelViewSet):

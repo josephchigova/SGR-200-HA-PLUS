@@ -279,3 +279,145 @@ button {
   gap: 10px;
   color: #374151;
 }
+
+.finance-tabs, .finance-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.finance-tabs button, .finance-filters button {
+  border: 1px solid var(--grey-200);
+  background: var(--white);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.finance-tabs button.active {
+  background: var(--green-900);
+  color: var(--white);
+}
+
+.finance-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.finance-table th, .finance-table td {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--grey-200);
+  vertical-align: top;
+}
+
+.finance-page {
+  display: grid;
+  gap: 16px;
+}
+
+.finance-grid, .ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.ops-card {
+  background: var(--white);
+  border: 1px solid var(--grey-200);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.ops-card h4, .finance-stack h4 {
+  margin: 0 0 8px;
+}
+
+.metric {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0;
+}
+
+.metric strong, .finance-table .num, .finance-total {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.finance-table .num {
+  text-align: right;
+}
+
+.finance-stack {
+  display: grid;
+  gap: 16px;
+}
+
+.journal-form {
+  border-top: 1px solid var(--grey-200);
+  padding-top: 16px;
+}
+
+.journal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.journal-grid label, .finance-filters label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+.journal-grid input, .journal-grid select, .finance-filters input {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid var(--grey-200);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--white);
+}
+
+.journal-grid button, .finance-filters .ghost-btn {
+  min-height: 40px;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+.finance-table small {
+  display: block;
+}
+
+.finance-note {
+  color: #4b5563;
+  margin-top: 12px;
+}
+
+.finance-tabs, .finance-filters, .finance-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.finance-tabs button.active {
+  background: var(--green-700);
+  color: white;
+}
+
+.finance-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.finance-table th, .finance-table td {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--grey-200);
+}

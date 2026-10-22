@@ -56,6 +56,7 @@ class InputAllocationViewSet(viewsets.ModelViewSet):
                 crop_reference=crop_reference,
                 crop_name=crop_name,
                 hectares=hectares,
+                crop_season=parse_crop_season(request.query_params.get("crop_season")),
             )
         except Farmer.DoesNotExist as error:
             raise ValidationError({"farmer": ["Select a valid farmer."]}) from error

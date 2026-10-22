@@ -69,7 +69,8 @@ export function resolvePeriodSelection({ seasons, currentYear, currentCropSeason
     return { mode, yearId: currentId, cropSeason: currentCropSeason || '' }
   }
 
-  const season = findSeason(stored?.yearId) || findSeason(currentId)
+  const storedSeason = findSeason(stored?.yearId)
+  const season = storedSeason && storedSeason.selectable !== false ? storedSeason : findSeason(currentId)
   return {
     mode,
     yearId: season ? String(season.id) : '',

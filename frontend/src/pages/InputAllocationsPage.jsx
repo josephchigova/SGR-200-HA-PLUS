@@ -62,7 +62,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
       try {
         const [allocationRows, cropRows, programmeRows] = await Promise.all([
           getAllPages(scoped('/input-allocations/')),
-          getAllPages('/crops/?active=true'),
+          getAllPages(cropSeason ? `/crops/?active=true&category=${cropSeason}` : '/crops/?active=true'),
           getAllPages(scoped('/programmes/')),
         ])
         if (!mounted) return
@@ -82,13 +82,13 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
     return () => {
       mounted = false
     }
-  }, [periodStatus, requestKey, scoped, selectedSeason])
+  }, [cropSeason, periodStatus, requestKey, scoped, selectedSeason])
 
   const refresh = async () => {
     try {
       const [allocationRows, cropRows, programmeRows] = await Promise.all([
         getAllPages(scoped('/input-allocations/')),
-        getAllPages('/crops/?active=true'),
+        getAllPages(cropSeason ? `/crops/?active=true&category=${cropSeason}` : '/crops/?active=true'),
         getAllPages(scoped('/programmes/')),
       ])
       setRows(allocationRows)
@@ -151,6 +151,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
           hectares: form.hectares,
         })
         if (form.farm) params.set('farm', form.farm)
+        if (cropSeason) params.set('crop_season', cropSeason)
         const response = await apiClient.get(`/input-allocations/preview/?${params.toString()}`)
         setPreview(response.data)
       } catch (requestError) {
@@ -162,7 +163,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
       }
     }
     loadPreview()
-  }, [form])
+  }, [cropSeason, form])
 
   const submit = async (event) => {
     event.preventDefault()
@@ -174,7 +175,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
     setError('')
     setMessage('')
     try {
-      await apiClient.post('/input-allocations/', {
+      await apiClient.post(cropSeason ? `/input-allocations/?crop_season=${cropSeason}` : '/input-allocations/', {
         farmer: Number(form.farmer),
         farm: form.farm ? Number(form.farm) : null,
         crop_reference: Number(form.crop_reference),
@@ -225,6 +226,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
             <select value={form.crop_reference} onChange={(event) => updateForm({ crop_reference: event.target.value })} required>
               <option value="">Select</option>
               {visibleCrops.map((crop) => <option key={crop.id} value={crop.id}>{crop.name}</option>)}
+              {!visibleCrops.length ? <option value="" disabled>{cropSeason === 'WINTER' ? 'No winter crops are configured.' : 'No summer crops are configured.'}</option> : null}
             </select>
           </label>
           <label className="form-field">Programme

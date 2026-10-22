@@ -520,3 +520,17 @@ class ARDARequestTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("active season", str(response.data).lower())
+
+    def test_empty_batch_can_be_deleted_but_a_batch_with_farmers_cannot(self):
+        season = Season.objects.create(name="2026/2027", start_date="2026-10-01", end_date="2027-09-30", status=Season.STATUS_ACTIVE)
+        programme = Programme.objects.create(name="Delete Programme", code="DEL-PROG", season=season, announced_hectares="1000.00", status=Programme.STATUS_OPEN)
+        empty = self.client.post(reverse("arda-request-batch-list"), {"programme": programme.pk, "season": season.pk, "requested_hectares": "20.00"}, format="json")
+        self.assertEqual(empty.status_code, 201, empty.data)
+        deleted = self.client.delete(reverse("arda-request-batch-detail", args=[empty.data["id"]]))
+        self.assertEqual(deleted.status_code, 204)
+        kept = ARDARequestBatch.objects.create(request_number="SGR1888", programme=programme, season=season, crop="Maize", requested_hectares="10.00")
+        from apps.arda_requests.models import ARDAFarmerRequest
+        ARDAFarmerRequest.objects.create(request_batch=kept, farmer=self.farmer, requested_hectares="5.00")
+        blocked = self.client.delete(reverse("arda-request-batch-detail", args=[kept.pk]))
+        self.assertEqual(blocked.status_code, 400)
+        self.assertTrue(ARDARequestBatch.objects.filter(pk=kept.pk).exists())

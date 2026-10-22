@@ -22,6 +22,8 @@ from .models import Season
 
 SUMMER = "SUMMER"
 WINTER = "WINTER"
+# The first operating year. Other Season rows stay in the database and are hidden from the selector.
+SELECTABLE_AGRICULTURAL_YEARS = ("2026/2027",)
 CROP_SEASONS = (SUMMER, WINTER)
 APRIL_SUMMER_LAST_DAY = 15
 APRIL_CONVENTION = (
@@ -82,6 +84,10 @@ def crop_seasons_for_date(on_date):
             "end_date": spec["end_date"].isoformat(),
         },
     ]
+
+
+def season_is_selectable(season):
+    return bool(season) and season.name in SELECTABLE_AGRICULTURAL_YEARS
 
 
 def season_is_current_year(season, on_date=None):

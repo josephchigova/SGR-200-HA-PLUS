@@ -12,6 +12,7 @@ import {
   writeStoredPeriod,
 } from './period'
 import DashboardPage from './pages/DashboardPage'
+import FinancePage from './pages/FinancePage'
 import CropCataloguePage from './pages/CropCataloguePage'
 import FarmerDetailsPage from './pages/FarmerDetailsPage'
 import FarmersPage from './pages/FarmersPage'
@@ -38,6 +39,7 @@ const navItems = [
   { label: 'Seasonal Planting', to: '/seasonal-planting' },
   { label: 'GMB Deliveries', to: '/deliveries' },
   { label: 'Recovery', to: '/recovery' },
+  { label: 'Finance', to: '/finance' },
   { label: 'Sign in', to: '/login' },
 ]
 
@@ -192,8 +194,8 @@ export function AppShell() {
                       })
                     }}
                   >
-                    {!seasons.length ? <option value="">No years</option> : null}
-                    {seasons.map((season) => (
+                    {!seasons.some((season) => season.selectable !== false) ? <option value="">{periodError ? 'Sign in' : 'No years'}</option> : null}
+                    {seasons.filter((season) => season.selectable !== false).map((season) => (
                       <option key={season.id} value={season.id}>{season.name}</option>
                     ))}
                   </select>
@@ -275,6 +277,7 @@ export function AppShell() {
             <Route path="/seasonal-planting" element={<WorkflowPage {...workflowPages.seasonalPlanting} selectedSeason={selectedSeason} cropSeason={cropSeason} periodStatus={periodStatus} />} />
             <Route path="/deliveries" element={<WorkflowPage {...workflowPages.deliveries} selectedSeason={selectedSeason} cropSeason={cropSeason} periodStatus={periodStatus} />} />
             <Route path="/recovery" element={<InputDebtPage selectedSeason={selectedSeason} cropSeason={cropSeason} periodStatus={periodStatus} />} />
+            <Route path="/finance" element={<FinancePage selectedSeason={selectedSeason} />} />
             <Route path="/inputs" element={<Navigate to="/input-allocations" replace />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />

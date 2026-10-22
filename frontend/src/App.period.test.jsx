@@ -14,6 +14,7 @@ const currentYear = {
   name: '2026/2027',
   status: 'ACTIVE',
   is_current: true,
+  selectable: true,
   crop_seasons: [
     { code: 'SUMMER', label: 'Summer' },
     { code: 'WINTER', label: 'Winter' },
@@ -24,6 +25,7 @@ const olderYear = {
   name: '2025/2026',
   status: 'CLOSED',
   is_current: false,
+  selectable: false,
   crop_seasons: [{ code: 'SUMMER', label: 'Summer' }],
 }
 
@@ -65,13 +67,12 @@ describe('agricultural year and season selectors', () => {
     expect(screen.getByLabelText('Season').value).toBe('WINTER')
   })
 
-  it('updates seasons for another year, then restores the manual choice after refresh', async () => {
+  it('offers only the configured agricultural year and restores the season after refresh', async () => {
     const { unmount } = renderShell()
     const year = await screen.findByLabelText('Agricultural year')
-    fireEvent.change(year, { target: { value: '2' } })
-    expect(screen.getByLabelText('Season').value).toBe('SUMMER')
-    expect(screen.queryByRole('option', { name: 'Winter' })).toBeNull()
-    expect(screen.getByRole('status').textContent).toContain('2025/2026')
+    expect(screen.getByRole('option', { name: '2026/2027' })).toBeTruthy()
+    expect(screen.queryByRole('option', { name: '2025/2026' })).toBeNull()
+    expect(year.value).toBe('1')
 
     fireEvent.click(screen.getByRole('button', { name: 'Current period' }))
     expect(screen.getByLabelText('Agricultural year').value).toBe('1')

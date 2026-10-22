@@ -35,7 +35,7 @@ const getAllPages = async (path) => {
   return records
 }
 
-function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, editAction = false, summaryEndpoint = '', summaryColumns = [], eligibleEndpoint = '', eligibleTitle = '', eligibleColumns = [], selectedSeason = null, seasonScoped = false, activeSeasonOnly = false, cropSeason = '', periodStatus = 'ready' }) {
+function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, editAction = false, deleteAction = false, summaryEndpoint = '', summaryColumns = [], eligibleEndpoint = '', eligibleTitle = '', eligibleColumns = [], selectedSeason = null, seasonScoped = false, activeSeasonOnly = false, cropSeason = '', periodStatus = 'ready' }) {
   const [rows, setRows] = useState([])
   const [summaryRows, setSummaryRows] = useState([])
   const [eligibleData, setEligibleData] = useState({ key: '', rows: [] })
@@ -47,6 +47,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [editingId, setEditingId] = useState(null)
+  const [pendingDelete, setPendingDelete] = useState(null)
   const farmerOptionRequests = useRef({})
 
   const waitingForPeriod = seasonScoped && periodStatus === 'loading'
@@ -247,9 +248,10 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
     if (form.globalSeasonField) payload[form.globalSeasonField] = selectedSeason.id
     try {
       const requestUrl = editingId && form.editable ? `${endpoint}${editingId}/` : form.endpoint || endpoint
+      const scopedRequestUrl = cropSeason ? withQueryParams(requestUrl, { crop_season: cropSeason }) : requestUrl
       const response = editingId && form.editable
-        ? await apiClient.patch(requestUrl, payload)
-        : await apiClient.post(requestUrl, payload)
+        ? await apiClient.patch(scopedRequestUrl, payload)
+        : await apiClient.post(scopedRequestUrl, payload)
       setMessage(`${form.submitLabel || 'Record'} saved.`)
       setValues((current) => ({ ...current, [form.key]: {} }))
       setEditingId(null)
@@ -288,8 +290,27 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  const removeRecord = async () => {
+    if (!pendingDelete) return
+    setError('')
+    setMessage('')
+    try {
+      await apiClient.delete(`${endpoint}${pendingDelete.id}/`)
+      setMessage('Record deleted.')
+      setPendingDelete(null)
+      if (editingId === pendingDelete.id) setEditingId(null)
+      await refresh()
+    } catch (requestError) {
+      const data = requestError.response?.data
+      const text = data ? Object.values(data).flat().join(' ') : 'This record could not be deleted.'
+      setError(text)
+      setPendingDelete(null)
+    }
+  }
+
   const editForm = forms.find((candidate) => candidate.editable)
   const editButtonLabel = editForm?.editButtonLabel || 'Edit'
+  const showActions = approveAction || editAction || deleteAction
 
   return (
     <section className="workflow-page">
@@ -344,9 +365,11 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
                         ? field.choices.map(([value, label]) => <option key={value} value={value}>{label}</option>)
                         : fieldOptions
                           .filter((option) => !field.category || option.category === field.category)
+                          .filter((option) => !field.categoryFromSeason || !cropSeason || option.category === cropSeason)
+                          .filter((option) => !field.selectableOnly || option.selectable !== false)
                           .filter((option) => !field.dependsOn || String(option[field.dependsOnId || field.dependsOn]) === String(values[form.key]?.[field.dependsOn] || ''))
                           .map((option) => (
-                            <option key={option.id} value={option.id}>{option[field.optionLabel || 'name'] || option.full_name || option.id}</option>
+                            <option key={option.id} value={field.optionValue ? option[field.optionValue] : option.id}>{option[field.optionLabel || 'name'] || option.full_name || option.id}</option>
                           ))}
                     </select>
                   ) : (
@@ -400,23 +423,31 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
                 </table>
               </div>
             </> : null}
+      {pendingDelete ? (
+        <div className="form-message error" role="alert">
+          Delete {pendingDelete.request_number || pendingDelete.name || 'this record'}? This cannot be undone.
+          <button type="button" className="ghost-btn small" onClick={removeRecord}>Confirm delete</button>
+          <button type="button" className="ghost-btn small" onClick={() => setPendingDelete(null)}>Cancel</button>
+        </div>
+      ) : null}
       <div className="workflow-list-heading"><h4>Records</h4><span>{loading ? 'Loading…' : `${visibleRows.length} records`}</span></div>
       <div className="table-wrap">
         <table className="data-table">
-          <thead><tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}{approveAction || editAction ? <th>Action</th> : null}</tr></thead>
+          <thead><tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}{showActions ? <th>Action</th> : null}</tr></thead>
           <tbody>
             {visibleRows.map((row) => (
               <tr key={row.id}>
                 {columns.map((column) => <td key={column.key}>{column.render ? column.render(row) : row[column.key] ?? '—'}</td>)}
-                {approveAction || editAction ? <td>
+                {showActions ? <td>
                   {approveAction && row.status === 'PENDING' ? <button className="primary-btn small" type="button" onClick={() => approve(row)}>Approve</button> : null}
                   {editAction && !seasonReadOnly ? <button className="ghost-btn small" type="button" onClick={() => startEditing(row)}>{editButtonLabel}</button> : null}
+                  {deleteAction && !seasonReadOnly ? <button className="ghost-btn small" type="button" onClick={() => setPendingDelete(row)}>Delete</button> : null}
                   {approveAction && row.status !== 'PENDING' ? row.status : null}
                   {editAction && seasonReadOnly ? 'Read-only' : null}
                 </td> : null}
               </tr>
             ))}
-            {!loading && visibleRows.length === 0 ? <tr><td colSpan={columns.length + (approveAction || editAction ? 1 : 0)}>{seasonScoped ? 'No records for the selected period.' : 'No records yet.'}</td></tr> : null}
+            {!loading && visibleRows.length === 0 ? <tr><td colSpan={columns.length + (showActions ? 1 : 0)}>{seasonScoped ? 'No records for the selected period.' : 'No records yet.'}</td></tr> : null}
           </tbody>
         </table>
       </div>

@@ -1,6 +1,6 @@
+from django.db import transaction
 from rest_framework import permissions, viewsets
 from rest_framework.exceptions import ValidationError
-from django.db import transaction
 
 from apps.accounts.permissions import ProgrammeWorkflowPermission, RecoveryWorkflowPermission
 from apps.programmes.models import Crop, CropInputRequirement, CropSellingPrice
@@ -94,6 +94,9 @@ class CropViewSet(viewsets.ModelViewSet):
         active = self.request.query_params.get("active")
         if active is not None:
             queryset = queryset.filter(active=str(active).lower() in {"1", "true", "yes"})
+        category = parse_crop_season(self.request.query_params.get("category") or self.request.query_params.get("crop_season"))
+        if category:
+            queryset = queryset.filter(category=category)
         return queryset
 
 
@@ -108,6 +111,15 @@ class CropInputRequirementViewSet(viewsets.ModelViewSet):
         if crop_id:
             queryset = queryset.filter(crop_id=crop_id)
         return queryset
+
+    def perform_destroy(self, instance):
+        from apps.inputs.models import InputAllocationLine
+
+        if InputAllocationLine.objects.filter(source_requirement=instance).exists():
+            raise ValidationError({
+                "detail": ["This input requirement is used by allocations. Deactivate it instead of deleting it."],
+            })
+        instance.delete()
 
 
 class CropSellingPriceViewSet(viewsets.ModelViewSet):
@@ -127,6 +139,23 @@ class CropSellingPriceViewSet(viewsets.ModelViewSet):
         if crop_season:
             queryset = queryset.filter(crop__category=crop_season)
         return queryset
+
+    def perform_destroy(self, instance):
+        from apps.inputs.models import InputAllocation
+        from apps.production.models import GMBDelivery
+        from apps.recovery.models import InputDebt
+
+        used_by_debt = InputDebt.objects.filter(crop__iexact=instance.crop.name, programme__season=instance.season).exists()
+        used_by_delivery = GMBDelivery.objects.filter(crop__iexact=instance.crop.name, season=instance.season).exists()
+        used_by_allocation = InputAllocation.objects.filter(crop_reference=instance.crop, programme__season=instance.season).exists()
+        if used_by_debt or used_by_delivery or used_by_allocation:
+            raise ValidationError({
+                "detail": [
+                    "This selling price has already been used for this crop and agricultural year. "
+                    "Deactivate it instead of deleting it. Saved deliveries and recovery records keep their own price."
+                ],
+            })
+        instance.delete()
 
 
 class SeasonalPlantingPlanViewSet(viewsets.ModelViewSet):

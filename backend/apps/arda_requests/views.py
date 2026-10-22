@@ -35,11 +35,27 @@ class ARDARequestBatchViewSet(viewsets.ModelViewSet):
         serializer.save(created_by=self.request.user)
 
     def perform_destroy(self, instance):
+        from apps.inputs.models import InputAllocation
         from apps.programmes.models import Season
 
         season = instance.season
         if season is None or season.status != Season.STATUS_ACTIVE:
             raise ValidationError({"non_field_errors": ["Past-season ARDA requests are read-only and cannot be modified."]})
+        if instance.farmer_requests.exists():
+            raise ValidationError({
+                "detail": ["This request has farmer lines. Reject it instead of deleting the history."],
+            })
+        allocations = InputAllocation.objects.filter(programme=instance.programme).exclude(status=InputAllocation.STATUS_CANCELLED)
+        if instance.crop:
+            allocations = allocations.filter(crop__iexact=instance.crop)
+        if allocations.exists():
+            raise ValidationError({
+                "detail": ["This request already has input allocations. Reject or close it instead of deleting it."],
+            })
+        if instance.status == instance.STATUS_APPROVED:
+            raise ValidationError({
+                "detail": ["An approved request cannot be deleted. Reject it if it should no longer be used."],
+            })
         super().perform_destroy(instance)
 
 
