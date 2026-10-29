@@ -88,14 +88,14 @@ else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.getenv("DB_NAME", "sgr_management_system"),
-            "USER": os.getenv("DB_USER", "sgr_user"),
-            "PASSWORD": os.getenv("DB_PASSWORD", "securepassword"),
-            "HOST": os.getenv("DB_HOST", "localhost"),
+            "NAME": os.environ["DB_NAME"],
+            "USER": os.environ["DB_USER"],
+            "PASSWORD": os.environ["DB_PASSWORD"],
+            "HOST": os.environ["DB_HOST"],
             "PORT": os.getenv("DB_PORT", "5432"),
+            "CONN_MAX_AGE": 600,
         }
     }
-
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
