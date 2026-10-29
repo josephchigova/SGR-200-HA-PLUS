@@ -24,3 +24,9 @@ class WardSerializer(serializers.ModelSerializer):
     class Meta:
         model = Ward
         fields = ["id", "district", "district_name", "name", "code", "active"]
+
+    def validate_name(self, value):
+        name = " ".join(str(value or "").split())
+        if not name:
+            raise serializers.ValidationError("Enter the confirmed ward name.")
+        return name

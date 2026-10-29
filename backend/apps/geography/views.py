@@ -1,5 +1,7 @@
 from rest_framework import viewsets
 
+from apps.accounts.permissions import LocationReferencePermission
+
 from .models import District, Province, Ward
 from .serializers import DistrictSerializer, ProvinceSerializer, WardSerializer
 
@@ -7,6 +9,7 @@ from .serializers import DistrictSerializer, ProvinceSerializer, WardSerializer
 class ProvinceViewSet(viewsets.ModelViewSet):
     queryset = Province.objects.all()
     serializer_class = ProvinceSerializer
+    permission_classes = [LocationReferencePermission]
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -18,6 +21,7 @@ class ProvinceViewSet(viewsets.ModelViewSet):
 class DistrictViewSet(viewsets.ModelViewSet):
     queryset = District.objects.select_related("province").filter(active=True)
     serializer_class = DistrictSerializer
+    permission_classes = [LocationReferencePermission]
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -28,8 +32,9 @@ class DistrictViewSet(viewsets.ModelViewSet):
 
 
 class WardViewSet(viewsets.ModelViewSet):
-    queryset = Ward.objects.select_related("district__province").all()
+    queryset = Ward.objects.select_related("district__province").filter(active=True)
     serializer_class = WardSerializer
+    permission_classes = [LocationReferencePermission]
 
     def get_queryset(self):
         queryset = super().get_queryset()

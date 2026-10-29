@@ -111,3 +111,22 @@ class GeographyDropdownTests(TestCase):
         scoped.force_authenticate(user=coordinator)
         visible = scoped.get(reverse("farmer-list"), {"search": "Geo"})
         self.assertEqual([row["province_name"] for row in visible.data["results"]], ["Mashonaland West"])
+
+    def test_authorized_officer_can_add_a_confirmed_ward_and_viewers_cannot(self):
+        call_command("load_zimbabwe_geography")
+        district = District.objects.get(name="Makoni")
+        officer = User.objects.create_user(
+            email="ward-officer@example.com", username="ward-officer", password="StrongPass123!",
+            role=User.ROLE_VERIFICATION_OFFICER,
+        )
+        officer_client = APIClient()
+        officer_client.force_authenticate(user=officer)
+        created = officer_client.post(reverse("ward-list"), {"district": district.pk, "name": "  Ward 12  ", "active": True})
+        self.assertEqual(created.status_code, 201, created.data)
+        self.assertEqual(created.data["name"], "Ward 12")
+        again = officer_client.post(reverse("ward-list"), {"district": district.pk, "name": "Ward 12", "active": True})
+        self.assertEqual(again.status_code, 400)
+        denied = self.client.post(reverse("ward-list"), {"district": district.pk, "name": "Ward 13", "active": True})
+        self.assertEqual(denied.status_code, 403)
+        listed = self.client.get(reverse("ward-list"), {"district": district.pk})
+        self.assertEqual([row["name"] for row in listed.data["results"]], ["Ward 12"])

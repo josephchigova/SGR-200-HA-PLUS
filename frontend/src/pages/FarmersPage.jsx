@@ -56,12 +56,16 @@ const getAllPages = async (path, params = {}) => {
 function FarmersPage() {
   const [farmers, setFarmers] = useState([])
   const [provinces, setProvinces] = useState([])
+  const [provincesLoading, setProvincesLoading] = useState(true)
   const [districts, setDistricts] = useState([])
   const [wards, setWards] = useState([])
   const [clusters, setClusters] = useState([])
   const [districtsLoading, setDistrictsLoading] = useState(false)
-  const [clustersLoading, setClustersLoading] = useState(false)
+  const [locationsLoading, setLocationsLoading] = useState(false)
   const [geographyError, setGeographyError] = useState('')
+  const [newWardName, setNewWardName] = useState('')
+  const [newClusterName, setNewClusterName] = useState('')
+  const [savingLocation, setSavingLocation] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
@@ -110,9 +114,12 @@ function FarmersPage() {
   useEffect(() => {
     const loadGeography = async () => {
       try {
+        setProvincesLoading(true)
         setProvinces(await getAllPages('/provinces/', { official: 'true' }))
       } catch {
         setGeographyError('Unable to load provinces. Refresh the page and try again.')
+      } finally {
+        setProvincesLoading(false)
       }
     }
 
@@ -176,11 +183,42 @@ function FarmersPage() {
         if (active) setGeographyError('Unable to load wards or clusters for this district.')
       })
       .finally(() => {
-        if (active) setClustersLoading(false)
+        if (active) setLocationsLoading(false)
       })
 
     return () => { active = false }
   }, [form.district])
+
+  const saveLocation = async (kind) => {
+    const name = (kind === 'ward' ? newWardName : newClusterName).trim()
+    if (!form.district || !form.province || !name) return
+    setSavingLocation(true)
+    setGeographyError('')
+    try {
+      const response = await apiClient.post(kind === 'ward' ? '/wards/' : '/clusters/', kind === 'ward'
+        ? { district: Number(form.district), name, active: true }
+        : { province: Number(form.province), district: Number(form.district), name, active: true })
+      const created = response.data
+      if (kind === 'ward') {
+        setWards((current) => [...current, created].sort((left, right) => left.name.localeCompare(right.name)))
+        setForm((previous) => ({ ...previous, ward: String(created.id) }))
+        setNewWardName('')
+      } else {
+        setClusters((current) => [...current, created].sort((left, right) => left.name.localeCompare(right.name)))
+        setForm((previous) => ({ ...previous, cluster: String(created.id) }))
+        setNewClusterName('')
+      }
+    } catch (requestError) {
+      const status = requestError.response?.status
+      const detail = requestError.response?.data
+      const message = status === 403
+        ? 'Only an authorized officer can add wards and clusters.'
+        : detail ? Object.values(detail).flat().join(' ') : `Unable to save this ${kind}.`
+      setGeographyError(message)
+    } finally {
+      setSavingLocation(false)
+    }
+  }
 
   const handleChange = (event) => {
     const { name, value } = event.target
@@ -209,10 +247,15 @@ function FarmersPage() {
     setError('')
 
     try {
-      const payload = {
+      const locationId = (value) => (value ? Number(value) : null)
+    const payload = {
         ...form,
         gender: form.gender,
         phone_secondary: form.phone_secondary || '',
+        province: locationId(form.province),
+        district: locationId(form.district),
+        ward: locationId(form.ward),
+        cluster: locationId(form.cluster),
         latitude: form.latitude.trim() || null,
         longitude: form.longitude.trim() || null,
       }
@@ -297,17 +340,19 @@ function FarmersPage() {
                 setWards([])
                 setClusters([])
                 setDistrictsLoading(Boolean(province))
-                setClustersLoading(false)
+                setLocationsLoading(false)
+                setNewWardName('')
+                setNewClusterName('')
                 setGeographyError('')
                 setForm((previous) => ({ ...previous, province, district: '', ward: '', cluster: '' }))
-              }}>
-                <option value="">Select</option>
-                
+              }} required>
+                <option value="">{provincesLoading ? 'Loading provinces...' : 'Select'}</option>
                 {
                   provinces.map((province) => (
                   <option key={province.id} value={province.id}>{province.name}</option>
                 ))}
               </select>
+              {!provincesLoading && provinces.length === 0 && !geographyError ? <small>No provinces are loaded. Run the reference-data command on the server, then refresh.</small> : null}
             </label>
             <label className="form-field">
               District
@@ -315,10 +360,12 @@ function FarmersPage() {
                 const district = event.target.value
                 setWards([])
                 setClusters([])
-                setClustersLoading(Boolean(district))
+                setLocationsLoading(Boolean(district))
+                setNewWardName('')
+                setNewClusterName('')
                 setGeographyError('')
                 setForm((previous) => ({ ...previous, district, ward: '', cluster: '' }))
-              }} disabled={!form.province}>
+              }} required disabled={!form.province}>
                 <option value="">{districtsLoading ? 'Loading districts...' : 'Select'}</option>
                 {districts.map((district) => (
                   <option key={district.id} value={district.id}>{district.name}</option>
@@ -328,24 +375,37 @@ function FarmersPage() {
             </label>
             <label className="form-field">
               Ward
-              <select name="ward" value={form.ward} onChange={handleChange} disabled={!form.district}>
-                <option value="">Select</option>
+              <select name="ward" value={form.ward} onChange={handleChange} disabled={!form.district || locationsLoading}>
+                <option value="">{locationsLoading ? 'Loading wards...' : 'Select'}</option>
                 {wards.map((ward) => (
                   <option key={ward.id} value={ward.id}>{ward.name}</option>
                 ))}
               </select>
+              {form.district && !locationsLoading && wards.length === 0 && !geographyError ? <small>No verified ward list is stored for this district. An authorized officer can add a confirmed ward below.</small> : null}
+              {form.district ? (
+                <span className="workflow-form-actions">
+                  <input value={newWardName} onChange={(event) => setNewWardName(event.target.value)} placeholder="Confirmed ward name" maxLength={150} />
+                  <button type="button" className="ghost-btn small" disabled={savingLocation || !newWardName.trim()} onClick={() => saveLocation('ward')}>Add ward</button>
+                </span>
+              ) : null}
             </label>
             <label className="form-field">
               Cluster
-              <select name="cluster" value={form.cluster} onChange={handleChange} disabled={!form.district || clustersLoading}>
+              <select name="cluster" value={form.cluster} onChange={handleChange} disabled={!form.district || locationsLoading}>
                 <option value="">
-                  {clustersLoading ? 'Loading clusters...' : clusters.length ? 'Select cluster' : form.district ? 'No clusters configured for this district' : 'Select a district first'}
+                  {locationsLoading ? 'Loading clusters...' : clusters.length ? 'Select cluster' : form.district ? 'No clusters configured for this district' : 'Select a district first'}
                 </option>
                 {clusters.map((cluster) => (
                   <option key={cluster.id} value={cluster.id}>{cluster.name}</option>
                 ))}
               </select>
-              {form.district && !clustersLoading && clusters.length === 0 && !geographyError ? <small>Ask an administrator to assign cluster records to this district.</small> : null}
+              {form.district && !locationsLoading && clusters.length === 0 && !geographyError ? <small>Clusters follow SGR operations and are not generated automatically. An authorized officer can add one for this district.</small> : null}
+              {form.district ? (
+                <span className="workflow-form-actions">
+                  <input value={newClusterName} onChange={(event) => setNewClusterName(event.target.value)} placeholder="Cluster name" maxLength={180} />
+                  <button type="button" className="ghost-btn small" disabled={savingLocation || !newClusterName.trim()} onClick={() => saveLocation('cluster')}>Add cluster</button>
+                </span>
+              ) : null}
             </label>
             <label className="form-field">
               Farm name

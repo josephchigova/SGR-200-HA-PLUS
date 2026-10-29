@@ -1,13 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import apiClient from '../api/client'
+import { addDecimal, multiplyDecimal } from '../decimal'
 
 const costTypeChoices = [
   ['AGRICULTURAL_INPUT', 'Agricultural input'],
   ['OTHER_OPERATIONAL', 'Other agricultural inputs (not debt)'],
 ]
 
-const toList = (data) => (Array.isArray(data) ? data : data?.results || [])
+const toList = (data) => (Array.isArray(data) ? data : Array.isArray(data?.results) ? data.results : [])
+
+const getAllPages = async (path) => {
+  const records = []
+  let response = await apiClient.get(path)
+  records.push(...toList(response.data))
+  while (response.data?.next) {
+    response = await apiClient.get(response.data.next)
+    records.push(...toList(response.data))
+  }
+  return records
+}
 
 const dedupeCrops = (records) => {
   const byName = new Map()
@@ -61,23 +73,23 @@ function CropCataloguePage() {
     [crops, selectedCropId],
   )
 
-  const calculatedCostPerHa = useMemo(() => {
-    const rate = Number(requirementForm.rate_per_hectare || 0)
-    const costPerUnit = Number(requirementForm.cost_per_unit || 0)
-    if (!Number.isFinite(rate) || !Number.isFinite(costPerUnit)) return '0.0000'
-    return String((rate * costPerUnit).toFixed(4))
-  }, [requirementForm.rate_per_hectare, requirementForm.cost_per_unit])
+  const calculatedCostPerHa = useMemo(
+    () => multiplyDecimal(requirementForm.rate_per_hectare, requirementForm.cost_per_unit, 4),
+    [requirementForm.rate_per_hectare, requirementForm.cost_per_unit],
+  )
 
   const totalCostPerHa = useMemo(
-    () => requirements
-      .filter((requirement) => requirement.active && requirement.include_in_input_cost)
-      .reduce((sum, requirement) => sum + Number(requirement.cost_per_hectare || 0), 0),
+    () => addDecimal(
+      requirements
+        .filter((requirement) => requirement.active && requirement.include_in_input_cost)
+        .map((requirement) => requirement.cost_per_hectare || '0'),
+      4,
+    ),
     [requirements],
   )
 
   const loadCrops = async (preferredCropId = '') => {
-    const response = await apiClient.get('/crops/?active=true')
-    const records = dedupeCrops(toList(response.data))
+    const records = dedupeCrops(await getAllPages('/crops/'))
     setCrops(records)
     if (records.length === 0) {
       setSelectedCropId('')
@@ -92,8 +104,7 @@ function CropCataloguePage() {
       setRequirements([])
       return
     }
-    const response = await apiClient.get(`/crop-input-requirements/?crop=${cropId}`)
-    setRequirements(toList(response.data))
+    setRequirements(await getAllPages(`/crop-input-requirements/?crop=${cropId}`))
   }
 
   const loadPrices = async (cropId) => {
@@ -164,7 +175,7 @@ function CropCataloguePage() {
       ...requirementForm,
       crop: Number(selectedCropId),
       cost_per_unit: requirementForm.cost_per_unit === '' ? null : requirementForm.cost_per_unit,
-      cost_per_hectare: calculatedCostPerHa,
+      cost_per_hectare: calculatedCostPerHa || null,
     }
     try {
       if (editingRequirementId) {
@@ -313,7 +324,7 @@ function CropCataloguePage() {
                 <td><button type="button" className="ghost-btn small" onClick={() => setSelectedCropId(String(crop.id))}>View / Edit</button></td>
               </tr>
             ))}
-            {!loading && crops.length === 0 ? <tr><td colSpan={5}>No crops configured.</td></tr> : null}
+            {!loading && crops.length === 0 ? <tr><td colSpan={5}>No crops are configured. Run the reference-data load on the server, then refresh. Maize, sorghum and wheat are not typed into this page.</td></tr> : null}
           </tbody>
         </table>
       </div>
@@ -383,12 +394,12 @@ function CropCataloguePage() {
                 </td>
               </tr>
             ))}
-            {selectedCropId && !requirements.length ? <tr><td colSpan={8}>No input requirements configured.</td></tr> : null}
+            {selectedCropId && !requirements.length ? <tr><td colSpan={8}>No input requirements are configured for {selectedCrop?.name || 'this crop'}. Add the rate and cost for this crop. Other crops are not changed.</td></tr> : null}
             {!selectedCropId ? <tr><td colSpan={8}>Select a crop to view input requirements.</td></tr> : null}
           </tbody>
         </table>
       </div>
-      <div className="form-message">TOTAL INPUT COST / HA: ${totalCostPerHa.toFixed(2)}</div>
+      <div className="form-message">TOTAL INPUT COST / HA: {totalCostPerHa}</div>
 
       <form className="workflow-form" onSubmit={submitPrice}>
         <h4>{selectedCrop ? `${selectedCrop.name} — Selling Price per Tonne — Agricultural Year ${seasons.find((season) => String(season.id) === String(priceForm.season))?.name || ''}`.trim() : 'Selling Price per Tonne'}</h4>

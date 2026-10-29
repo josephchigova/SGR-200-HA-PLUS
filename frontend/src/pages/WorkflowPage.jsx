@@ -49,6 +49,8 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
   const [summaryRows, setSummaryRows] = useState([])
   const [eligibleData, setEligibleData] = useState({ key: '', rows: [] })
   const [options, setOptions] = useState({})
+  const [optionsKey, setOptionsKey] = useState('')
+  const [eligibleNotice, setEligibleNotice] = useState('')
   const [dependentOptions, setDependentOptions] = useState({})
   const [values, setValues] = useState({})
   const [loadedKey, setLoadedKey] = useState('')
@@ -73,6 +75,8 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
   const visibleRows = rowsReady ? rows : []
   const visibleSummaryRows = rowsReady ? summaryRows : []
   const loading = waitingForPeriod || (!periodUnavailable && !missingSeason && !rowsReady)
+  const optionRequestKey = JSON.stringify([scopedEndpoint, cropSeason, selectedSeason?.id])
+  const optionsReady = optionsKey === optionRequestKey
 
   const refresh = async () => {
     try {
@@ -140,11 +144,14 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
           return [path, []]
         }
       }))
-      if (mounted) setOptions(Object.fromEntries(entries))
+      if (mounted) {
+        setOptions(Object.fromEntries(entries))
+        setOptionsKey(optionRequestKey)
+      }
     }
     load()
     return () => { mounted = false }
-  }, [forms, scopedEndpoint, scopedSummaryEndpoint, selectedSeason, seasonScoped, cropSeason, waitingForPeriod, periodUnavailable, missingSeason])
+  }, [forms, scopedEndpoint, scopedSummaryEndpoint, selectedSeason, seasonScoped, cropSeason, waitingForPeriod, periodUnavailable, missingSeason, optionRequestKey])
 
   useEffect(() => () => {
     Object.values(farmerOptionRequests.current).forEach((controller) => controller?.abort())
@@ -161,10 +168,17 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
     })
     getAllPages(eligiblePath)
       .then((eligibleFarmers) => {
-        if (mounted) setEligibleData({ key: eligibleRequestKey, rows: eligibleFarmers })
+        if (!mounted) return
+        setEligibleData({ key: eligibleRequestKey, rows: eligibleFarmers })
+        setEligibleNotice(eligibleFarmers.length ? '' : 'No farmers qualify for this agricultural year. A farmer must be verified and active, have a farm record, and have a paid or partially paid subscription. Unpaid farmers and farmers without those records stay off this list.')
       })
-      .catch(() => {
-        if (mounted) setEligibleData({ key: eligibleRequestKey, rows: [] })
+      .catch((requestError) => {
+        if (!mounted) return
+        setEligibleData({ key: eligibleRequestKey, rows: [] })
+        const status = requestError.response?.status
+        setEligibleNotice(status === 401 || status === 403
+          ? 'Your account cannot load subscription-eligible farmers.'
+          : 'Unable to load subscription-eligible farmers from the server.')
       })
 
     return () => { mounted = false }
@@ -357,6 +371,19 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
               const fieldOptions = field.dependsOn === 'farmer'
                 ? dependentOptions[`${form.key}:${field.name}`] || []
                 : options[field.optionsPath] || []
+              const visibleOptions = fieldOptions
+                .filter((option) => !field.category || option.category === field.category)
+                .filter((option) => !field.categoryFromSeason || !cropSeason || option.category === cropSeason)
+                .filter((option) => !field.activeOnly || option.active !== false)
+                .filter((option) => !field.selectableOnly || option.selectable !== false)
+                .filter((option) => !field.dependsOn || String(option[field.dependsOnId || field.dependsOn]) === String(values[form.key]?.[field.dependsOn] || ''))
+              const emptyOptionMessage = !field.optionsPath || !optionsReady || visibleOptions.length
+                ? ''
+                : field.name === 'programme'
+                  ? 'No programmes are configured for this agricultural year and season. Create one on the Programmes page. Programmes are not inserted automatically.'
+                  : field.optionsPath === '/crops/'
+                    ? 'No active crops are available for this season. Load the crop catalogue on the server, then refresh.'
+                    : 'No records are available for this list.'
 
               return (
                 <label className="form-field" key={field.name}>
@@ -371,12 +398,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
                       <option value="">Select</option>
                       {field.choices
                         ? field.choices.map(([value, label]) => <option key={value} value={value}>{label}</option>)
-                        : fieldOptions
-                          .filter((option) => !field.category || option.category === field.category)
-                          .filter((option) => !field.categoryFromSeason || !cropSeason || option.category === cropSeason)
-                          .filter((option) => !field.selectableOnly || option.selectable !== false)
-                          .filter((option) => !field.dependsOn || String(option[field.dependsOnId || field.dependsOn]) === String(values[form.key]?.[field.dependsOn] || ''))
-                          .map((option) => (
+                        : visibleOptions.map((option) => (
                             <option key={option.id} value={field.optionValue ? option[field.optionValue] : option.id}>{option[field.optionLabel || 'name'] || option.full_name || option.id}</option>
                           ))}
                     </select>
@@ -392,6 +414,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
                       onChange={(event) => changeValue(form.key, field.name, field.type === 'checkbox' ? event.target.checked : event.target.value)}
                     />
                   )}
+                  {emptyOptionMessage ? <small>{emptyOptionMessage}</small> : null}
                 </label>
               )
             })}
@@ -425,7 +448,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
                       </tr>
                     ))}
                     {!eligibleLoading && eligibleRows.length === 0 ? (
-                      <tr><td colSpan={eligibleColumns.length}>No verified farmers have a paid or partially paid subscription for this season.</td></tr>
+                      <tr><td colSpan={eligibleColumns.length}>{eligibleNotice || 'No verified farmers have a paid or partially paid subscription for this season.'}</td></tr>
                     ) : null}
                   </tbody>
                 </table>

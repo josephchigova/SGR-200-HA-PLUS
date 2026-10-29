@@ -1,6 +1,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
@@ -14,9 +15,31 @@ def env_list(name, default):
     return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
 
 
+def postgres_from_url(database_url):
+    parsed = urlparse(database_url)
+    query = parse_qs(parsed.query)
+    config = {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": unquote(parsed.path.lstrip("/")),
+        "USER": unquote(parsed.username or ""),
+        "PASSWORD": unquote(parsed.password or ""),
+        "HOST": parsed.hostname or "",
+        "PORT": str(parsed.port or 5432),
+        "CONN_MAX_AGE": 600,
+    }
+    if query.get("sslmode"):
+        config["OPTIONS"] = {"sslmode": query["sslmode"][-1]}
+    elif (parsed.hostname or "").endswith(".render.com"):
+        config["OPTIONS"] = {"sslmode": "require"}
+    return config
+
+
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-local-development-only-key-change-me")
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
 ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1,0.0.0.0")
+render_host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
+if render_host and render_host not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(render_host)
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -76,8 +99,13 @@ TEMPLATES = [
 WSGI_APPLICATION = "config.wsgi.application"
 
 USE_SQLITE = os.getenv("USE_SQLITE", "true").lower() == "true"
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 
-if USE_SQLITE:
+if DATABASE_URL:
+    DATABASES = {"default": postgres_from_url(DATABASE_URL)}
+elif USE_SQLITE:
+    if not DEBUG:
+        raise ImproperlyConfigured("Set DATABASE_URL or USE_SQLITE=false before running with DEBUG=False.")
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import apiClient from '../api/client'
@@ -19,20 +19,16 @@ const farmer = {
 
 afterEach(() => {
   vi.clearAllMocks()
-  vi.useRealTimers()
 })
 
 describe('FarmerAutocomplete', () => {
   it('searches the selected endpoint and returns the chosen farmer', async () => {
-    vi.useFakeTimers()
     apiClient.get.mockResolvedValue({ data: { results: [farmer], next: null } })
     const onChange = vi.fn()
     render(<FarmerAutocomplete label="Eligible farmer" endpoint="/farmers/eligible/" onChange={onChange} />)
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Eligible farmer' }), { target: { value: 'Tariro' } })
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(300)
-    })
+    expect(await screen.findByRole('option', { name: /Tariro Moyo/ })).toBeTruthy()
 
     expect(apiClient.get).toHaveBeenCalledWith(
       expect.stringContaining('/farmers/eligible/?search=Tariro&page_size=20'),
@@ -45,7 +41,6 @@ describe('FarmerAutocomplete', () => {
   })
 
   it('includes the global season when searching eligible farmers', async () => {
-    vi.useFakeTimers()
     apiClient.get.mockResolvedValue({ data: { results: [farmer], next: null } })
     render(
       <FarmerAutocomplete
@@ -58,9 +53,7 @@ describe('FarmerAutocomplete', () => {
     )
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Eligible farmer' }), { target: { value: 'Tariro' } })
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(300)
-    })
+    await waitFor(() => expect(apiClient.get).toHaveBeenCalled())
 
     expect(apiClient.get).toHaveBeenCalledWith(
       expect.stringContaining('season=3&season_name=2026%2F2027'),

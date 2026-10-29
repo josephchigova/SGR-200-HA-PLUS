@@ -5,7 +5,10 @@ from apps.programmes.models import Crop, CropInputRequirement
 
 
 class Command(BaseCommand):
-    help = "Seed crop catalogue with Sorghum and Maize input requirements, and create Wheat scaffold."
+    help = (
+        "Development seed that writes sample maize and sorghum input rates and prices. "
+        "Do not run this on production. Use load_reference_data to add crops without prices."
+    )
 
     def handle(self, *args, **options):
         source_rows = {

@@ -13,7 +13,7 @@ fi
 
 cd "$ROOT/frontend"
 npm ci
-npm run build
+VITE_BASE=/static/ npm run build
 
 cd "$ROOT/backend"
 "$PYTHON_BIN" -m pip install -r requirements.txt
@@ -22,3 +22,4 @@ cd "$ROOT/backend"
 "$PYTHON_BIN" manage.py collectstatic --noinput
 
 echo "Ready. Start with: $PYTHON_BIN -m gunicorn config.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 60"
+echo "Migrations do not insert reference data. On the Render shell run: python manage.py load_reference_data"

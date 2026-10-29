@@ -142,6 +142,49 @@ class ProgrammeAllocationTests(TestCase):
         self.assertEqual(seeded_programme.institution, "ARDA")
 
 
+class ReferenceDataLoadTests(TestCase):
+    def test_reference_load_is_repeatable_and_preserves_configured_prices(self):
+        maize = Crop.objects.create(name="Maize", category=Crop.CATEGORY_SUMMER, active=True)
+        requirement = CropInputRequirement.objects.create(
+            crop=maize,
+            group_name="Seed",
+            item_name="Configured seed",
+            rate_per_hectare="2.5000",
+            unit="kg",
+            cost_per_unit="4.0000",
+            include_in_input_cost=True,
+            active=True,
+        )
+        original_cost = requirement.cost_per_hectare
+
+        call_command("load_reference_data", stdout=StringIO())
+        call_command("load_reference_data", stdout=StringIO())
+
+        self.assertEqual(Crop.objects.filter(name__iexact="maize").count(), 1)
+        self.assertEqual(Crop.objects.filter(name__iexact="sorghum").count(), 1)
+        self.assertEqual(Crop.objects.filter(name__iexact="wheat").count(), 1)
+        requirement.refresh_from_db()
+        self.assertEqual(requirement.cost_per_hectare, original_cost)
+        self.assertEqual(requirement.rate_per_hectare, Decimal("2.5000"))
+        self.assertEqual(CropInputRequirement.objects.filter(crop__name__iexact="wheat").count(), 0)
+        self.assertEqual(CropInputRequirement.objects.filter(crop__name__iexact="sorghum").count(), 0)
+
+        officer = User.objects.create_user(
+            email="catalogue-load@example.com", username="catalogue-load", password="StrongPass123!",
+            role=User.ROLE_PROGRAMME_OFFICER,
+        )
+        client = APIClient()
+        client.force_authenticate(officer)
+        crops = client.get(reverse("crop-list"))
+        self.assertEqual(crops.status_code, 200)
+        self.assertEqual(
+            {row["name"] for row in crops.data["results"]},
+            {"Maize", "Sorghum", "Wheat"},
+        )
+        summer = client.get(reverse("crop-list"), {"crop_season": "SUMMER"})
+        self.assertEqual({row["name"] for row in summer.data["results"]}, {"Maize", "Sorghum"})
+
+
 class CropCatalogueSeedTests(TestCase):
     def test_seed_crop_catalogue_is_idempotent_and_populates_expected_data(self):
         call_command("seed_crop_catalogue", stdout=StringIO())
@@ -268,6 +311,28 @@ class ProgrammeAndPriceCrudTests(TestCase):
         self.client.force_authenticate(self.viewer)
         forbidden = self.client.delete(reverse("programme-detail", args=[programme_id]))
         self.assertEqual(forbidden.status_code, 403)
+
+    def test_crop_requirement_is_saved_for_one_crop_and_cost_is_calculated(self):
+        self.client.force_authenticate(self.user)
+        created = self.client.post(reverse("crop-input-requirement-list"), {
+            "crop": self.maize.pk,
+            "group_name": "Seed",
+            "item_name": "SC659",
+            "rate_per_hectare": "6.0000",
+            "unit": "kg",
+            "cost_per_unit": "23.0000",
+            "cost_type": "AGRICULTURAL_INPUT",
+            "include_in_input_cost": True,
+            "active": True,
+        }, format="json")
+        self.assertEqual(created.status_code, 201, created.data)
+        self.assertEqual(created.data["cost_per_hectare"], "138.0000")
+        wheat_rows = self.client.get(reverse("crop-input-requirement-list"), {"crop": self.wheat.pk})
+        maize_rows = self.client.get(reverse("crop-input-requirement-list"), {"crop": self.maize.pk})
+        self.assertEqual(wheat_rows.data["results"], [])
+        self.assertEqual([row["item_name"] for row in maize_rows.data["results"]], ["SC659"])
+        programmes = self.client.get(reverse("programme-list"), {"season": self.year.pk, "crop_season": "SUMMER"})
+        self.assertEqual(programmes.status_code, 200)
 
     def test_selling_price_is_per_agricultural_year_and_historical_debt_keeps_its_price(self):
         created = self.client.post(reverse("crop-selling-price-list"), {

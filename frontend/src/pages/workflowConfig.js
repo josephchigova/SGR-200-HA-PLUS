@@ -33,7 +33,7 @@ export const workflowPages = {
     forms: [{ key: 'programme', title: 'Create programme', editable: true, editSubmitLabel: 'Update programme', editButtonLabel: 'Edit', fields: [
       { name: 'name', label: 'Name' }, { name: 'code', label: 'Code' },
       { ...select('season', 'Agricultural year', '/seasons/'), selectableOnly: true },
-      { name: 'crop', label: 'Crop', optionsPath: '/crops/', optionLabel: 'name', optionValue: 'name', categoryFromSeason: true },
+      { name: 'crop', label: 'Crop', optionsPath: '/crops/', optionLabel: 'name', optionValue: 'name', categoryFromSeason: true, activeOnly: true },
       { name: 'institution', label: 'Institution' }, number('announced_hectares', 'Capacity (ha)', '0'),
       { name: 'status', label: 'Status', required: false, choices: [['DRAFT', 'Draft'], ['OPEN', 'Open'], ['CLOSED', 'Closed'], ['ARCHIVED', 'Archived']] },
     ] }],
@@ -71,7 +71,7 @@ export const workflowPages = {
         duplicateMessage: 'An ARDA request for this programme and crop already exists for the selected season. Please edit the existing request instead.',
         fields: [
         select('programme', 'Programme', '/programmes/'),
-        { name: 'crop', label: 'Crop', optionsPath: '/crops/', optionLabel: 'name', optionValue: 'name', categoryFromSeason: true, required: false },
+        { name: 'crop', label: 'Crop', optionsPath: '/crops/', optionLabel: 'name', optionValue: 'name', categoryFromSeason: true, activeOnly: true, required: false },
         number('requested_hectares', 'Requested hectares', '0.01'),
       ],
         globalSeasonField: 'season',

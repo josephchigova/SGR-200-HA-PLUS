@@ -197,6 +197,27 @@ class FarmerWorkflowPermission(permissions.BasePermission):
         return True
 
 
+class LocationReferencePermission(permissions.BasePermission):
+    """Authenticated users can read locations. Officers configure wards and clusters."""
+
+    write_roles = {
+        User.ROLE_SUPER_ADMIN,
+        User.ROLE_SGR_EXECUTIVE,
+        User.ROLE_PROGRAMME_OFFICER,
+        User.ROLE_VERIFICATION_OFFICER,
+        User.ROLE_PROVINCIAL_COORDINATOR,
+        User.ROLE_DISTRICT_COORDINATOR,
+    }
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser or request.method in permissions.SAFE_METHODS:
+            return True
+        return user.role in self.write_roles
+
+
 class DistrictScopedPermission(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         user = request.user
