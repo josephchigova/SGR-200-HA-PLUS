@@ -3,7 +3,7 @@ import { defineConfig } from 'vitest/config'
 
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
-  base: mode === 'production' ? '/static/' : '/',
+  base: '/',
   plugins: [react()],
   server: { port: 5175, strictPort: true },
   preview: { port: 5175, strictPort: true },
