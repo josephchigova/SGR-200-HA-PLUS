@@ -485,6 +485,12 @@ def build_report(report, request):
         return {"rows": rows, "note": "Net book value changes only when a depreciation entry is posted."}
     if report == "operations":
         return operations_report(params)
+    if report == "subscription-report":
+        return subscription_finance_report(params.get("season_name") or "")
+    if report == "expense-report":
+        return expense_finance_report(start, end)
+    if report == "cash-bank":
+        return cash_bank_report(start, end)
     if report == "audit":
         events = FinanceAuditEvent.objects.select_related("actor", "journal").order_by("-created_at")[:100]
         return {
@@ -640,3 +646,165 @@ def pdf_document(lines):
         output.extend(f"{offset:010d} 00000 n \n".encode())
     output.extend(f"trailer << /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF".encode())
     return bytes(output)
+
+
+def subscription_finance_report(season_name):
+    rows = FarmerSubscription.objects.select_related("farmer")
+    if season_name:
+        rows = rows.filter(season__iexact=season_name)
+    totals = rows.aggregate(
+        due=Sum("expected_amount"),
+        received=Sum("paid_amount"),
+        outstanding=Sum("outstanding_amount"),
+    )
+    counts = {
+        "paid": rows.filter(payment_status="PAID").count(),
+        "partial": rows.filter(payment_status="PARTIAL").count(),
+        "unpaid": rows.filter(payment_status="UNPAID").count(),
+    }
+    return {
+        "season": season_name,
+        "obligations_due": ledger.text_amount(totals["due"] or 0),
+        "payments_received": ledger.text_amount(totals["received"] or 0),
+        "outstanding_receivables": ledger.text_amount(totals["outstanding"] or 0),
+        **counts,
+        "note": "Payments received are amounts actually collected. Outstanding balances are not cash.",
+    }
+
+
+def expense_finance_report(start, end):
+    from django.db.models.functions import TruncMonth
+
+    from .schedule import EXPENSE_CATEGORIES, expense_queryset, expense_total
+
+    claims = expense_queryset(start, end)
+    grouped = claims.values("expense_account__name").annotate(amount=Sum("amount")).order_by("expense_account__name")
+    by_method = claims.values("method").annotate(amount=Sum("amount"))
+    by_month = claims.annotate(month=TruncMonth("expense_date")).values("month").annotate(amount=Sum("amount")).order_by("month")
+    paid = claims.filter(status=ExpenseClaim.STATUS_PAID).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+    outstanding = claims.filter(status=ExpenseClaim.STATUS_RECOGNIZED).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+    return {
+        "by_category": [{"category": row["expense_account__name"], "amount": ledger.text_amount(row["amount"])} for row in grouped],
+        "by_method": [{"method": row["method"] or "Not set", "amount": ledger.text_amount(row["amount"])} for row in by_method],
+        "by_month": [{"month": row["month"].strftime("%Y-%m") if row["month"] else "", "amount": ledger.text_amount(row["amount"])} for row in by_month],
+        "paid": ledger.text_amount(paid),
+        "outstanding": ledger.text_amount(outstanding),
+        "total": ledger.text_amount(expense_total(claims)),
+        "categories": [{"code": key, "label": label} for key, (_account, label) in EXPENSE_CATEGORIES.items()],
+    }
+
+
+def cash_bank_report(start, end):
+    from apps.subscriptions.models import SubscriptionPayment
+    from .workbook_statement import workbook_opening_position
+
+    receipts = SubscriptionPayment.objects.filter(payment_date__gte=start, payment_date__lte=end)
+    expenses = ExpenseClaim.objects.filter(status=ExpenseClaim.STATUS_PAID, expense_date__gte=start, expense_date__lte=end)
+    other = RecognizedReceipt.objects.filter(status=RecognizedReceipt.STATUS_POSTED, subscription__isnull=True, received_on__gte=start, received_on__lte=end)
+    transfers = CashMovement.objects.filter(status=CashMovement.STATUS_POSTED, kind=CashMovement.KIND_TRANSFER, movement_date__gte=start, movement_date__lte=end)
+
+    def total(queryset, method, field="amount"):
+        return queryset.filter(method=method).aggregate(total=Sum(field))["total"] or Decimal("0.00")
+
+    def transfer_net(kind):
+        outgoing = transfers.filter(cash_account__kind=kind).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+        incoming = transfers.filter(transfer_to__kind=kind).aggregate(total=Sum("amount"))["total"] or Decimal("0.00")
+        return incoming - outgoing
+
+    cash_in = total(receipts, "CASH")
+    bank_in = total(receipts, "BANK")
+    other_cash = total(other, "CASH")
+    other_bank = total(other, "BANK")
+    cash_out = total(expenses, "CASH")
+    bank_out = total(expenses, "BANK")
+    cash_transfers = transfer_net("CASH")
+    bank_transfers = transfer_net("BANK")
+    opening = workbook_opening_position()
+    opening_bank = next((row["amount"] for row in opening["assets"] if row["name"] == "Cash at Bank"), None)
+    return {
+        "workbook_opening_bank": opening_bank,
+        "cash_receipts": ledger.text_amount(cash_in),
+        "bank_receipts": ledger.text_amount(bank_in),
+        "other_cash_receipts": ledger.text_amount(other_cash),
+        "other_bank_receipts": ledger.text_amount(other_bank),
+        "cash_expenses": ledger.text_amount(cash_out),
+        "bank_expenses": ledger.text_amount(bank_out),
+        "cash_transfers": ledger.text_amount(cash_transfers),
+        "bank_transfers": ledger.text_amount(bank_transfers),
+        "closing_cash_movement": ledger.text_amount(cash_in + other_cash - cash_out + cash_transfers),
+        "closing_bank_movement": ledger.text_amount(bank_in + other_bank - bank_out + bank_transfers),
+        "note": "Closing movement is collected cash for this period only. The workbook opening bank balance is shown separately and is not added again. Unpaid balances, ARDA hectares and input allocations are not cash.",
+    }
+
+
+class ExpenseScheduleView(APIView):
+    permission_classes = [FinanceAccessPermission]
+
+    def get(self, request):
+        from .schedule import EXPENSE_CATEGORIES, expense_queryset, expense_total
+
+        params = request.query_params
+        claims = expense_queryset(params.get("start"), params.get("end"), params.get("category", ""), params.get("method", ""), params.get("search", ""))
+        page = max(int(params.get("page") or 1), 1)
+        page_size = min(max(int(params.get("page_size") or 25), 1), 100)
+        count = claims.count()
+        offset = (page - 1) * page_size
+        rows = [_expense_row(claim) for claim in claims[offset:offset + page_size]]
+        report = expense_finance_report(params.get("start"), params.get("end"))
+        return Response({
+            "count": count,
+            "total": ledger.text_amount(expense_total(claims)),
+            "paid": report["paid"],
+            "outstanding": report["outstanding"],
+            "by_category": report["by_category"],
+            "by_method": report["by_method"],
+            "by_month": report["by_month"],
+            "categories": [{"code": key, "label": label} for key, (_account, label) in EXPENSE_CATEGORIES.items()],
+            "results": rows,
+        })
+
+    def post(self, request):
+        from .schedule import record_expense
+
+        paid = request.data.get("paid", True)
+        if isinstance(paid, str):
+            paid = paid.lower() not in {"false", "0", "unpaid"}
+        claim = record_expense(
+            expense_date=request.data.get("expense_date"),
+            description=request.data.get("description", ""),
+            amount=request.data.get("amount"),
+            method=request.data.get("method"),
+            category=request.data.get("category"),
+            reference=request.data.get("reference", ""),
+            paid=bool(paid),
+            notes=request.data.get("notes", ""),
+            user=request.user,
+        )
+        return Response(_expense_row(claim), status=status.HTTP_201_CREATED)
+
+
+class ExpenseScheduleDetailView(APIView):
+    permission_classes = [FinanceAccessPermission]
+
+    def patch(self, request, pk):
+        claim = ExpenseClaim.objects.filter(pk=pk).exclude(status=ExpenseClaim.STATUS_DRAFT).first()
+        if claim is None:
+            return Response({"detail": "Expense not found."}, status=status.HTTP_404_NOT_FOUND)
+        if "description" in request.data and str(request.data.get("description") or "").strip():
+            claim.description = str(request.data["description"]).strip()
+            claim.save(update_fields=["description"])
+        return Response(_expense_row(claim))
+
+
+def _expense_row(claim):
+    return {
+        "id": claim.pk,
+        "date": claim.expense_date.isoformat(),
+        "description": claim.description,
+        "category": claim.expense_account.name,
+        "amount": ledger.text_amount(claim.amount),
+        "method": claim.method,
+        "status": claim.status,
+        "reference": claim.reference,
+        "created_by": getattr(claim.created_by, "email", ""),
+    }

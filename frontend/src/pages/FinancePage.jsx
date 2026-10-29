@@ -4,16 +4,13 @@ import apiClient from '../api/client'
 
 const REPORTS = [
   ['dashboard', 'Dashboard'],
+  ['operations', 'Operations'],
+  ['subscription-report', 'Subscriptions'],
+  ['debtors', 'Debtors'],
+  ['expense-schedule', 'Expenses'],
+  ['cash-bank', 'Cash and Bank'],
   ['profit-loss', 'Profit & Loss'],
   ['balance-sheet', 'Balance Sheet'],
-  ['cash-flow', 'Cash Flow'],
-  ['trial-balance', 'Trial Balance'],
-  ['journal-register', 'Journals'],
-  ['receivables-aging', 'Receivables'],
-  ['payables-aging', 'Payables'],
-  ['operations', 'Operations'],
-  ['asset-register', 'Assets'],
-  ['audit', 'Audit'],
 ]
 
 function money(value) {
@@ -26,14 +23,15 @@ function money(value) {
 function FinancePage({ selectedSeason }) {
   const [reportName, setReportName] = useState('dashboard')
   const [report, setReport] = useState(null)
-  const [accounts, setAccounts] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [manualRange, setManualRange] = useState(false)
-  const [journalError, setJournalError] = useState('')
+  const [schedule, setSchedule] = useState(null)
+  const [debtors, setDebtors] = useState(null)
+  const [expenseForm, setExpenseForm] = useState({ expense_date: '', description: '', amount: '', method: 'CASH', category: 'OTHER', reference: '', paid: true, notes: '' })
   const [reload, setReload] = useState(0)
   const requestId = useRef(0)
 
@@ -53,14 +51,23 @@ function FinancePage({ selectedSeason }) {
       try {
         const params = { start, end, as_of: end }
         if (selectedSeason?.name) params.season_name = selectedSeason.name
-        const [reportResponse, accountResponse] = await Promise.all([
-          apiClient.get(`/finance-reports/${reportName}/`, { params }),
-          apiClient.get('/ledger-accounts/'),
-        ])
+        if (reportName === 'debtors') {
+          const response = await apiClient.get('/farmer-subscriptions/debtors/', { params: { season_name: selectedSeason?.name || '' } })
+          if (current !== requestId.current) return
+          setDebtors(response.data)
+          setReport(null)
+          return
+        }
+        if (reportName === 'expense-schedule') {
+          const response = await apiClient.get('/expense-schedule/', { params: { start, end } })
+          if (current !== requestId.current) return
+          setSchedule(response.data)
+          setReport(null)
+          return
+        }
+        const reportResponse = await apiClient.get(`/finance-reports/${reportName}/`, { params })
         if (current !== requestId.current) return
         setReport(reportResponse.data)
-        const loadedAccounts = accountResponse.data?.results || accountResponse.data || []
-        setAccounts(loadedAccounts)
       } catch (requestError) {
         if (current !== requestId.current) return
         const detail = requestError.response?.data?.detail
@@ -91,43 +98,18 @@ function FinancePage({ selectedSeason }) {
     }
   }
 
-  const postJournal = async (event) => {
+  const saveExpense = async (event) => {
     event.preventDefault()
-    setJournalError('')
     setNotice('')
-    const form = new FormData(event.target)
-    const amount = form.get('amount')
-    const debit = form.get('debit_account')
-    const credit = form.get('credit_account')
-    if (!amount || Number(amount) <= 0) {
-      setJournalError('Enter an amount greater than zero.')
-      return
-    }
-    if (!debit || !credit) {
-      setJournalError('Choose both a debit account and a credit account.')
-      return
-    }
-    if (debit === credit) {
-      setJournalError('The debit account and the credit account must be different.')
-      return
-    }
+    setError('')
     try {
-      await apiClient.post('/journals/', {
-        entry_date: form.get('entry_date'),
-        description: form.get('description'),
-        post: true,
-        lines: [
-          { account: Number(debit), debit: amount, credit: '0.00' },
-          { account: Number(credit), debit: '0.00', credit: amount },
-        ],
-      })
-      event.target.reset()
-      setNotice('The journal was posted.')
-      setReportName('journal-register')
+      await apiClient.post('/expense-schedule/', { ...expenseForm, paid: expenseForm.paid })
+      setNotice('Expense recorded.')
+      setExpenseForm({ expense_date: end, description: '', amount: '', method: 'CASH', category: 'OTHER', reference: '', paid: true, notes: '' })
       setReload((value) => value + 1)
     } catch (requestError) {
-      const detail = requestError.response?.data?.detail
-      setJournalError(typeof detail === 'string' ? detail : 'The journal was not posted.')
+      const detail = requestError.response?.data
+      setError(detail ? Object.values(detail).flat().join(' ') : 'The expense was not recorded.')
     }
   }
 
@@ -166,10 +148,11 @@ function FinancePage({ selectedSeason }) {
       {!loading && reportName === 'dashboard' && report ? <Dashboard report={report} /> : null}
       {!loading && reportName === 'profit-loss' && report ? <ProfitAndLoss report={report} /> : null}
       {!loading && reportName === 'balance-sheet' && report ? <BalanceSheet report={report} /> : null}
-      {!loading && reportName === 'cash-flow' && report ? <CashFlow report={report} /> : null}
       {!loading && reportName === 'operations' && report ? <Operations report={report} seasonName={selectedSeason?.name} /> : null}
-      {!loading && ['trial-balance', 'journal-register', 'receivables-aging', 'payables-aging', 'asset-register', 'audit'].includes(reportName) ? <RecordTable report={report} /> : null}
-      <JournalForm accounts={accounts} defaultDate={end} error={journalError} onSubmit={postJournal} />
+      {!loading && reportName === 'subscription-report' && report ? <SubscriptionReport report={report} /> : null}
+      {!loading && reportName === 'cash-bank' && report ? <CashBank report={report} /> : null}
+      {!loading && reportName === 'debtors' ? <Debtors rows={debtors?.results || []} /> : null}
+      {!loading && reportName === 'expense-schedule' ? <ExpenseSchedule schedule={schedule} form={expenseForm} setForm={setExpenseForm} onSubmit={saveExpense} /> : null}
     </div>
   )
 }
@@ -231,28 +214,6 @@ function BalanceSheet({ report }) {
   )
 }
 
-function CashFlow({ report }) {
-  const rows = [
-    ['Opening cash', report.opening_cash],
-    ['Operating', report.operating],
-    ['Investing', report.investing],
-    ['Financing', report.financing],
-    ['Net change', report.net_change],
-    ['Closing cash', report.closing_cash],
-  ]
-  return (
-    <section>
-      <table className="finance-table">
-        <thead><tr><th>Movement</th><th className="num">Amount</th></tr></thead>
-        <tbody>
-          {rows.map(([label, value]) => <tr key={label}><td>{label}</td><td className="num">{money(value)}</td></tr>)}
-        </tbody>
-      </table>
-      {report.note ? <p className="finance-note">{report.note}</p> : null}
-    </section>
-  )
-}
-
 function Operations({ report, seasonName }) {
   const subscriptions = report.subscriptions || {}
   const allocations = report.input_allocations || {}
@@ -277,14 +238,14 @@ function Operations({ report, seasonName }) {
           <Metric label="Allocated hectares" value={allocations.hectares} />
           <p>{allocations.note}</p>
           {allocations.programmes?.length ? (
-            <table className="finance-table">
+            <div className="table-wrap"><table className="finance-table">
               <thead><tr><th>Programme</th><th className="num">Hectares</th><th className="num">Cost</th></tr></thead>
               <tbody>
                 {allocations.programmes.map((row) => (
                   <tr key={row.programme}><td>{row.programme}</td><td className="num">{money(row.hectares)}</td><td className="num">{money(row.cost)}</td></tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           ) : <p>No programme breakdown is available.</p>}
         </article>
         <article className="ops-card">
@@ -319,7 +280,7 @@ function Statement({ title, rows, total }) {
     <section>
       <h4>{title}</h4>
       {rows.length ? (
-        <table className="finance-table">
+        <div className="table-wrap"><table className="finance-table">
           <thead><tr><th>Account</th><th>Name</th><th className="num">Amount</th></tr></thead>
           <tbody>
             {rows.map((row) => (
@@ -331,7 +292,7 @@ function Statement({ title, rows, total }) {
             ))}
             <tr><td /><td>Total</td><td className="num">{money(total)}</td></tr>
           </tbody>
-        </table>
+        </table></div>
       ) : <div className="form-message">No recognized amounts for this section.</div>}
     </section>
   )
@@ -341,50 +302,88 @@ function namedRows(rows) {
   return (rows || []).map((row) => ({ ...row, code: row.status === 'derived_unverified' ? 'Unverified' : row.status === 'unverified_zero' ? 'Unverified' : '' }))
 }
 
-function RecordTable({ report }) {
-  const rows = Array.isArray(report?.rows) ? report.rows : []
-  if (!rows.length) return <div className="form-message">No records for the selected period.</div>
-  const columns = Object.keys(rows[0]).filter((key) => typeof rows[0][key] !== 'object')
+function SubscriptionReport({ report }) {
   return (
-    <div className="table-scroll">
-      <table className="finance-table">
-        <thead><tr>{columns.map((column) => <th key={column}>{column.replaceAll('_', ' ')}</th>)}</tr></thead>
-        <tbody>
-          {rows.map((row, index) => (
-            <tr key={row.id || row.reference || row.asset_id || index}>
-              {columns.map((column) => <td key={column} className={typeof row[column] === 'string' && /^-?\d+\.\d{2}$/.test(row[column]) ? 'num' : ''}>{String(row[column] ?? '')}</td>)}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <section className="finance-grid">
+      <article className="stat-card"><span>Obligations due</span><strong>{money(report.obligations_due)}</strong></article>
+      <article className="stat-card"><span>Payments received</span><strong>{money(report.payments_received)}</strong></article>
+      <article className="stat-card"><span>Outstanding receivables</span><strong>{money(report.outstanding_receivables)}</strong></article>
+      <article className="stat-card"><span>Paid / Partial / Unpaid</span><strong>{report.paid} / {report.partial} / {report.unpaid}</strong></article>
+      <p className="finance-note">{report.note}</p>
+    </section>
   )
 }
 
-function JournalForm({ accounts, defaultDate, error, onSubmit }) {
+function CashBank({ report }) {
+  const rows = [
+    ['Workbook opening bank', report.workbook_opening_bank],
+    ['Subscription cash receipts', report.cash_receipts],
+    ['Subscription bank receipts', report.bank_receipts],
+    ['Other cash receipts', report.other_cash_receipts],
+    ['Other bank receipts', report.other_bank_receipts],
+    ['Cash expenses', report.cash_expenses],
+    ['Bank expenses', report.bank_expenses],
+    ['Cash transfers', report.cash_transfers],
+    ['Bank transfers', report.bank_transfers],
+    ['Cash movement', report.closing_cash_movement],
+    ['Bank movement', report.closing_bank_movement],
+  ]
   return (
-    <form className="journal-form" onSubmit={onSubmit}>
-      <h4>Post a balanced journal</h4>
-      <p className="finance-note">Debits must equal credits. A posted entry cannot be edited; reverse it if it was wrong.</p>
-      <div className="journal-grid">
-        <label>Date <input name="entry_date" type="date" required defaultValue={defaultDate} /></label>
-        <label>Description <input name="description" required placeholder="What is this entry for?" /></label>
-        <label>Amount <input name="amount" inputMode="decimal" required placeholder="0.00" /></label>
-        <label>Debit account <AccountSelect accounts={accounts} name="debit_account" /></label>
-        <label>Credit account <AccountSelect accounts={accounts} name="credit_account" /></label>
-        <button type="submit">Post journal</button>
-      </div>
-      {error ? <div className="form-message error" role="alert">{error}</div> : null}
-    </form>
+    <section>
+      <div className="table-wrap"><table className="finance-table"><tbody>{rows.map(([label, value]) => <tr key={label}><td>{label}</td><td className="num">{money(value)}</td></tr>)}</tbody></table></div>
+      <p className="finance-note">{report.note}</p>
+    </section>
   )
 }
 
-function AccountSelect({ accounts, name }) {
+function Debtors({ rows }) {
+  if (!rows.length) return <div className="form-message">No recognised outstanding subscription balances for this year.</div>
   return (
-    <select name={name} required defaultValue="">
-      <option value="">Select an account</option>
-      {accounts.map((account) => <option key={account.id} value={account.id}>{account.code} {account.name}</option>)}
-    </select>
+    <div className="table-wrap"><table className="finance-table">
+      <thead><tr><th>Farmer</th><th>Province</th><th>District</th><th className="num">Due</th><th className="num">Paid</th><th className="num">Subscription outstanding</th><th className="num">Input debt</th><th className="num">Total</th><th>Status</th></tr></thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.farmer}>
+            <td>{row.farmer_name}<br /><small>{row.national_id || row.membership_number}</small></td>
+            <td>{row.province_name || '—'}</td>
+            <td>{row.district_name || '—'}</td>
+            <td className="num">{money(row.expected_amount)}</td>
+            <td className="num">{money(row.paid_amount)}</td>
+            <td className="num">{money(row.outstanding_subscription)}</td>
+            <td className="num">{money(row.outstanding_input_debt)}</td>
+            <td className="num">{money(row.total_outstanding)}</td>
+            <td>{row.payment_status}<br /><a href={`/farmers/${row.farmer}`}>Statement</a></td>
+          </tr>
+        ))}
+      </tbody>
+    </table></div>
+  )
+}
+
+function ExpenseSchedule({ schedule, form, setForm, onSubmit }) {
+  const rows = schedule?.results || []
+  const categories = schedule?.categories || []
+  return (
+    <section className="finance-stack">
+      <form className="journal-grid" onSubmit={onSubmit}>
+        <label>Date <input type="date" required value={form.expense_date} onChange={(event) => setForm({ ...form, expense_date: event.target.value })} /></label>
+        <label>Description <input required value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
+        <label>Amount <input required inputMode="decimal" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} /></label>
+        <label>Payment method <select value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value })}><option value="CASH">Cash</option><option value="BANK">Bank</option></select></label>
+        <label>Category <select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>{categories.map((category) => <option key={category.code} value={category.code}>{category.label}</option>)}{categories.length ? null : <option value="OTHER">Other Expenses</option>}</select></label>
+        <label>Reference <input value={form.reference} onChange={(event) => setForm({ ...form, reference: event.target.value })} /></label>
+        <label>Paid now <input type="checkbox" checked={form.paid} onChange={(event) => setForm({ ...form, paid: event.target.checked })} /></label>
+        <label>Notes <input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></label>
+        <button type="submit">Record expense</button>
+      </form>
+      <p className="finance-total">Total {money(schedule?.total || 0)} · Paid {money(schedule?.paid || 0)} · Outstanding {money(schedule?.outstanding || 0)}</p>
+      {rows.length ? (
+        <div className="table-wrap"><table className="finance-table">
+          <thead><tr><th>Date</th><th>Description</th><th>Category</th><th className="num">Amount</th><th>Method</th><th>Status</th><th>Reference</th></tr></thead>
+          <tbody>{rows.map((row) => <tr key={row.id}><td>{row.date}</td><td>{row.description}</td><td>{row.category}</td><td className="num">{money(row.amount)}</td><td>{row.method}</td><td>{row.status}</td><td>{row.reference}</td></tr>)}</tbody>
+        </table></div>
+      ) : <div className="form-message">No expenses for the selected period.</div>}
+    </section>
   )
 }
 

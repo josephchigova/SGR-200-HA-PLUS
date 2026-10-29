@@ -53,6 +53,14 @@ describe('WorkflowPage', () => {
           phone_primary: '0777654321',
           district_name: 'Gweru',
           subscription_status: 'PAID',
+        }, {
+          id: 53,
+          full_name: 'Rudo Dube',
+          membership_number: 'SGR-000053',
+          national_id: '63-7654322-X-11',
+          phone_primary: '0777654322',
+          district_name: 'Gweru',
+          subscription_status: 'PARTIALLY_PAID',
         }], next: null } })
       }
       return Promise.resolve({ data: [] })
@@ -75,6 +83,9 @@ describe('WorkflowPage', () => {
 
     expect(await screen.findByRole('cell', { name: 'Tariro Moyo' })).toBeTruthy()
     expect(screen.getByRole('cell', { name: 'PAID' })).toBeTruthy()
+    expect(screen.getByRole('cell', { name: 'PARTIALLY_PAID' })).toBeTruthy()
+    expect(screen.getByText('2 farmers')).toBeTruthy()
+    expect(document.querySelector('.eligible-farmers-scroll')).toBeTruthy()
     expect(screen.queryByText('Add subscription-eligible farmer')).toBeNull()
     expect(screen.queryByRole('combobox', { name: 'Eligible farmer' })).toBeNull()
     expect(apiClient.get).toHaveBeenCalledWith(expect.stringContaining('/farmers/eligible/?season=8&season_name=2026%2F2027'))

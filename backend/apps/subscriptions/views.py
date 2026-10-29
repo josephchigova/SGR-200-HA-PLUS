@@ -21,9 +21,11 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import SubscriptionWorkflowPermission
 from apps.farmers.models import Farm, Farmer
+from apps.recovery.models import InputDebt
 from apps.production.seasonal_services import SeasonalSubscriptionService
 
-from .models import FarmerSubscription, Subscription
+from .models import FarmerSubscription, Subscription, SubscriptionPayment
+from .payments import receive_subscription_payment
 from .serializers import FarmerSubscriptionSerializer, FarmerSubscriptionStatusSerializer, SubscriptionSerializer
 from .services import SubscriptionPaymentService
 
@@ -193,6 +195,65 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
             unpaid=Count("pk", filter=Q(summary_payment_status="UNPAID")),
         )
         return Response(summary)
+
+    @action(detail=False, methods=["post"], url_path="receive")
+    def receive(self, request):
+        farmer_id = request.data.get("farmer")
+        season = request.data.get("season") or request.data.get("season_name")
+        if not farmer_id or not season:
+            return Response({"farmer": ["Select a farmer and agricultural year."]}, status=status.HTTP_400_BAD_REQUEST)
+        farmers = self.scope_farmers_to_user(Farmer.objects.filter(pk=farmer_id), request.user)
+        farmer = farmers.first()
+        if farmer is None:
+            return Response({"farmer": ["Farmer not found."]}, status=status.HTTP_400_BAD_REQUEST)
+        subscription, _payment, created = receive_subscription_payment(
+            farmer=farmer,
+            season=season,
+            amount=request.data.get("amount"),
+            payment_date=request.data.get("payment_date"),
+            method=request.data.get("method") or SubscriptionPayment.METHOD_CASH,
+            reference=request.data.get("reference") or "",
+            notes=request.data.get("notes") or "",
+            idempotency_key=request.data.get("idempotency_key") or request.headers.get("Idempotency-Key") or "",
+            user=request.user,
+        )
+        payload = FarmerSubscriptionSerializer(subscription).data
+        payload["created"] = created
+        return Response(payload, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="debtors")
+    def debtors(self, request):
+        season = request.query_params.get("season_name") or request.query_params.get("season")
+        if not season:
+            return Response({"season": ["A season is required."]}, status=status.HTTP_400_BAD_REQUEST)
+        subscriptions = FarmerSubscription.objects.select_related("farmer__province", "farmer__district").filter(
+            season__iexact=season,
+            outstanding_amount__gt=0,
+        )
+        farmer_ids = self.scope_farmers_to_user(Farmer.objects.all(), request.user).values("id")
+        subscriptions = subscriptions.filter(farmer_id__in=farmer_ids).order_by("farmer__surname", "farmer__first_name")
+        debt_rows = InputDebt.objects.filter(farmer_id__in=subscriptions.values("farmer_id")).values("farmer_id").annotate(total=Sum("outstanding_monetary_balance"))
+        input_debt = {row["farmer_id"]: row["total"] for row in debt_rows}
+        results = []
+        for subscription in subscriptions:
+            farmer = subscription.farmer
+            input_outstanding = input_debt.get(farmer.pk) or Decimal("0.00")
+            results.append({
+                "farmer": farmer.pk,
+                "farmer_name": farmer.full_name,
+                "national_id": farmer.national_id or "",
+                "membership_number": farmer.membership_number or "",
+                "province_name": farmer.province.name if farmer.province_id else "",
+                "district_name": farmer.district.name if farmer.district_id else "",
+                "expected_amount": subscription.expected_amount,
+                "paid_amount": subscription.paid_amount,
+                "outstanding_subscription": subscription.outstanding_amount,
+                "outstanding_input_debt": input_outstanding,
+                "total_outstanding": subscription.outstanding_amount + input_outstanding,
+                "payment_status": subscription.payment_status,
+                "season": subscription.season,
+            })
+        return Response({"count": len(results), "results": results})
 
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)

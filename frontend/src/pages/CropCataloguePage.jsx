@@ -102,7 +102,7 @@ function CropCataloguePage() {
       return
     }
     const response = await apiClient.get(`/crop-selling-prices/?crop=${cropId}`)
-    setPrices(toList(response.data))
+    setPrices(toList(response.data).filter((row) => /^\d{4}\/\d{4}$/.test(String(row.season_name || ''))))
   }
 
   const loadSeasons = async () => {
@@ -276,7 +276,6 @@ function CropCataloguePage() {
   return (
     <section className="workflow-page">
       <div className="workflow-heading">
-        <div><p className="eyebrow">Golden Path</p><h3>Crop Catalogue</h3></div>
         <button type="button" className="ghost-btn" onClick={refresh}>Refresh</button>
       </div>
       {error ? <div className="form-message error">{error}</div> : null}

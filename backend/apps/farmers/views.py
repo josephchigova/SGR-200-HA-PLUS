@@ -6,7 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from apps.accounts.permissions import FarmerWorkflowPermission, ProgrammePermission
-from apps.arda_requests.models import ARDAFarmerRequest
+from apps.arda_requests.models import ARDAFarmerRequest, ARDARequestBatch
 from apps.inputs.models import InputAllocation
 from apps.production.models import FarmerProduction, GMBDelivery
 from apps.recovery.models import InputDebt
@@ -135,6 +135,12 @@ class FarmerViewSet(viewsets.ModelViewSet):
         arda_requests = filter_by_agricultural_year(arda_requests, season, season_name, relation="request_batch__season")
         if crop_season:
             arda_requests = filter_by_crop_name(arda_requests, crop_season, "request_batch__crop")
+        # Requested hectares come from the request batch. A saved batch with no farmer lines
+        # is still a request. Approved hectares stay on the farmer-level approvals.
+        request_batches = ARDARequestBatch.objects.exclude(status=ARDARequestBatch.STATUS_REJECTED)
+        request_batches = filter_by_agricultural_year(request_batches, season, season_name, relation="season")
+        if crop_season:
+            request_batches = filter_by_crop_name(request_batches, crop_season, "crop")
         allocations = InputAllocation.objects.exclude(status=InputAllocation.STATUS_CANCELLED).filter(farmer_id__in=accessible_farmers)
         allocations = filter_by_agricultural_year(allocations, season, season_name, relation="programme__season")
         if crop_season:
@@ -154,9 +160,7 @@ class FarmerViewSet(viewsets.ModelViewSet):
 
         summary.update(
             {
-                "arda_requested_hectares": arda_requests.exclude(
-                    status=ARDAFarmerRequest.STATUS_CANCELLED
-                ).aggregate(total=Sum("requested_hectares"))["total"] or 0,
+                "arda_requested_hectares": request_batches.aggregate(total=Sum("requested_hectares"))["total"] or 0,
                 "arda_approved_hectares": arda_requests.filter(
                     status=ARDAFarmerRequest.STATUS_APPROVED
                 ).aggregate(total=Sum("approved_hectares"))["total"] or 0,
@@ -169,6 +173,23 @@ class FarmerViewSet(viewsets.ModelViewSet):
         required_recovery = debts.aggregate(total=Sum("required_recovery_tonnes"))["total"] or 0
         recovered = debts.aggregate(total=Sum("recovered_tonnes"))["total"] or 0
         summary["recovery_percentage"] = round(float(recovered / required_recovery * 100), 2) if required_recovery else 0
+        from apps.farmers.dashboard_charts import build_dashboard_charts
+        from apps.programmes.models import Season
+
+        season_record = Season.objects.filter(pk=season).first() if str(season or "").isdigit() else None
+        summary["charts"] = build_dashboard_charts(
+            farmers=queryset,
+            season_name=season_name or getattr(season_record, "name", ""),
+            season_start=getattr(season_record, "start_date", None),
+            season_end=getattr(season_record, "end_date", None),
+            allocations=allocations,
+            productions=productions,
+            deliveries=deliveries,
+            debts=debts,
+            requested=summary["arda_requested_hectares"],
+            approved=summary["arda_approved_hectares"],
+            allocated=summary["input_allocated_hectares"],
+        )
         return Response(summary)
 
     @action(detail=True, methods=["post"], url_path="verify")

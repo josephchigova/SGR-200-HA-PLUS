@@ -888,6 +888,88 @@ class InputAllocationCatalogueFlowTests(TestCase):
 
         self.assertEqual(response.status_code, 201, response.data)
 
+    def test_partly_paid_farmer_can_be_allocated_without_changing_the_balance_or_approved_limit(self):
+        farmer = Farmer.objects.create(
+            first_name="Partial",
+            surname="Allocator",
+            national_id="63-PARTIAL-ALLOC",
+            phone_primary="0774555666",
+            province=self.province,
+            district=self.district,
+            ward=self.ward,
+            verification_status=Farmer.STATUS_VERIFIED,
+        )
+        farm = farmer.farms.create(
+            farm_name="Partial Farm",
+            province=self.province,
+            district=self.district,
+            ward=self.ward,
+            total_hectares="100.00",
+            arable_hectares="100.00",
+            verification_status="VERIFIED",
+        )
+        subscription = FarmerSubscription.objects.create(
+            farmer=farmer,
+            category="UNDER_200HA",
+            expected_amount="500.00",
+            paid_amount="250.00",
+            outstanding_amount="250.00",
+            payment_status="Partly Paid",
+            season=self.season.name,
+        )
+        batch = ARDARequestBatch.objects.create(
+            request_number="PARTIAL-LIMIT",
+            programme=self.programme,
+            season=self.season,
+            crop=self.crop.name,
+            requested_hectares="50.00",
+        )
+        ARDAFarmerRequest.objects.create(
+            request_batch=batch,
+            farmer=farmer,
+            farm=farm,
+            requested_hectares="10.00",
+            approved_hectares="10.00",
+            status=ARDAFarmerRequest.STATUS_APPROVED,
+        )
+
+        eligible = self.client.get(reverse("farmer-eligible"), {"season": self.season.name, "search": "Allocator"})
+        self.assertEqual(eligible.status_code, 200, eligible.data)
+        self.assertIn(farmer.pk, {row["id"] for row in eligible.data["results"]})
+        self.assertEqual(eligible.data["results"][0]["subscription_status"], "PARTIALLY_PAID")
+
+        over_limit = self.client.post(
+            reverse("input-allocation-list"),
+            {
+                "farmer": farmer.pk,
+                "farm": farm.pk,
+                "programme": self.programme.pk,
+                "crop_reference": self.crop.pk,
+                "hectares": "11.00",
+            },
+            format="json",
+        )
+        self.assertEqual(over_limit.status_code, 400)
+        self.assertIn("approved", " ".join(over_limit.data.get("non_field_errors", [])).lower())
+
+        allocated = self.client.post(
+            reverse("input-allocation-list"),
+            {
+                "farmer": farmer.pk,
+                "farm": farm.pk,
+                "programme": self.programme.pk,
+                "crop_reference": self.crop.pk,
+                "hectares": "10.00",
+            },
+            format="json",
+        )
+        self.assertEqual(allocated.status_code, 201, allocated.data)
+
+        subscription.refresh_from_db()
+        self.assertEqual(subscription.payment_status, "Partly Paid")
+        self.assertEqual(subscription.paid_amount, Decimal("250.00"))
+        self.assertEqual(subscription.outstanding_amount, Decimal("250.00"))
+
     def test_unverified_or_unpaid_farmer_is_rejected_for_input_allocation(self):
         for suffix, verification_status, payment_status in [
             ("UNVERIFIED", Farmer.STATUS_DRAFT, "PAID"),

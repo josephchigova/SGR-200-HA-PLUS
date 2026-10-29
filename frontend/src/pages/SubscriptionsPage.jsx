@@ -41,7 +41,10 @@ function SubscriptionsPage({ selectedSeason }) {
   const [farmerId, setFarmerId] = useState('')
   const [farmerStatus, setFarmerStatus] = useState(null)
   const [loadedFarmerStatusKey, setLoadedFarmerStatusKey] = useState('')
-  const [paidAmount, setPaidAmount] = useState('0.00')
+  const [paidAmount, setPaidAmount] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState('CASH')
+  const [paymentReference, setPaymentReference] = useState('')
+  const [paymentNotes, setPaymentNotes] = useState('')
   const [paymentDate, setPaymentDate] = useState(today)
   const [saving, setSaving] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -139,13 +142,8 @@ function SubscriptionsPage({ selectedSeason }) {
         const statusRow = toList(response.data)[0] || null
         setFarmerStatus(statusRow)
         setLoadedFarmerStatusKey(farmerStatusKey)
-        if (statusRow) {
-          setPaidAmount(statusRow.paid_amount || '0.00')
-          setPaymentDate(statusRow.payment_date || today())
-        } else {
-          setPaidAmount('0.00')
-          setPaymentDate(today())
-        }
+        setPaidAmount('')
+        setPaymentDate(today())
       })
       .catch((requestError) => {
         if (active) {
@@ -174,16 +172,21 @@ function SubscriptionsPage({ selectedSeason }) {
 
     setSaving(true)
     try {
-      const response = await apiClient.post('/farmer-subscriptions/', {
+      const response = await apiClient.post('/farmer-subscriptions/receive/', {
         farmer: Number(farmerId),
-        paid_amount: paidAmount,
-        payment_date: Number(paidAmount) > 0 ? paymentDate : null,
+        amount: paidAmount,
+        payment_date: paymentDate,
+        method: paymentMethod,
+        reference: paymentReference,
+        notes: paymentNotes,
         season: seasonName,
+        idempotency_key: `${farmerId}-${seasonName}-${paymentDate}-${paidAmount}-${paymentReference}-${Date.now()}`,
       })
       setFarmerStatus((current) => ({ ...current, ...response.data }))
-      setPaidAmount(response.data.paid_amount || '0.00')
-      setPaymentDate(response.data.payment_date || today())
-      setFeedback(`Payment status saved as ${response.data.payment_status}.`)
+      setPaidAmount('')
+      setPaymentReference('')
+      setPaymentNotes('')
+      setFeedback(`Received ${formatMoney(paidAmount)}. Status is ${response.data.payment_status}. Outstanding ${formatMoney(response.data.outstanding_amount)}.`)
       setReloadKey((current) => current + 1)
     } catch (requestError) {
       setError(errorMessage(requestError))
@@ -228,7 +231,10 @@ function SubscriptionsPage({ selectedSeason }) {
             onChange={(farmer) => {
               setFarmerId(farmer ? String(farmer.id) : '')
               setFarmerStatus(null)
-              setPaidAmount('0.00')
+              setPaidAmount('')
+              setPaymentMethod('CASH')
+              setPaymentReference('')
+              setPaymentNotes('')
               setPaymentDate(today())
               setError('')
               setFeedback('')
@@ -259,11 +265,20 @@ function SubscriptionsPage({ selectedSeason }) {
             />
           </label>
           <label className="form-field">
-            Total paid to date
+            Amount already received
+            <input aria-label="Amount already received" value={currentFarmerStatus ? formatMoney(currentFarmerStatus.paid_amount) : ''} readOnly />
+          </label>
+          <label className="form-field">
+            Outstanding subscription balance
+            <input aria-label="Outstanding subscription balance" value={currentFarmerStatus ? formatMoney(currentFarmerStatus.outstanding_amount) : ''} readOnly />
+          </label>
+          <label className="form-field">
+            Amount received
             <input
+              aria-label="Amount received"
               type="number"
-              min="0"
-              max={currentFarmerStatus?.expected_amount || undefined}
+              min="0.01"
+              max={currentFarmerStatus?.outstanding_amount || undefined}
               step="0.01"
               required
               value={paidAmount}
@@ -272,18 +287,27 @@ function SubscriptionsPage({ selectedSeason }) {
             />
           </label>
           <label className="form-field">
-            Latest payment date
-            <input
-              type="date"
-              required={Number(paidAmount) > 0}
-              value={paymentDate}
-              disabled={!currentFarmerStatus || saving}
-              onChange={(event) => setPaymentDate(event.target.value)}
-            />
+            Payment method
+            <select aria-label="Payment method" value={paymentMethod} disabled={!currentFarmerStatus || saving} onChange={(event) => setPaymentMethod(event.target.value)}>
+              <option value="CASH">Cash</option>
+              <option value="BANK">Bank</option>
+            </select>
+          </label>
+          <label className="form-field">
+            Payment date
+            <input aria-label="Payment date" type="date" required value={paymentDate} disabled={!currentFarmerStatus || saving} onChange={(event) => setPaymentDate(event.target.value)} />
+          </label>
+          <label className="form-field">
+            Receipt reference
+            <input aria-label="Receipt reference" value={paymentReference} disabled={!currentFarmerStatus || saving} onChange={(event) => setPaymentReference(event.target.value)} />
+          </label>
+          <label className="form-field">
+            Notes
+            <input aria-label="Payment notes" value={paymentNotes} disabled={!currentFarmerStatus || saving} onChange={(event) => setPaymentNotes(event.target.value)} />
           </label>
         </div>
         <button className="primary-btn" type="submit" disabled={saving || farmerStatusLoading || !currentFarmerStatus || !seasonName}>
-          {saving ? 'Saving...' : 'Save payment status'}
+          {saving ? 'Saving...' : 'Record payment'}
         </button>
       </form>
 
@@ -344,8 +368,8 @@ function SubscriptionsPage({ selectedSeason }) {
                         onClick={() => {
                           setFarmerId(String(row.farmer))
                           setFarmerStatus(row)
-                          setPaidAmount(row.paid_amount || '0.00')
-                          setPaymentDate(row.payment_date || today())
+                          setPaidAmount('')
+                          setPaymentDate(today())
                           setError('')
                           setFeedback('')
                         }}

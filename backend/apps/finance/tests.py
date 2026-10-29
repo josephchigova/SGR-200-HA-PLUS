@@ -2,6 +2,7 @@ from datetime import date
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.db.models import Sum
 from django.urls import reverse
 from rest_framework.test import APITestCase
 
@@ -249,3 +250,38 @@ class LedgerApiTests(APITestCase):
         self.assertFalse(position["capital_verified"])
         self.assertTrue(position["balanced"])
         self.assertIn("derived", position["equity"][1]["name"].lower())
+
+    def test_paid_expense_reduces_cash_and_unpaid_expense_does_not(self):
+        from .models import JournalLine
+
+        paid = self.client.post(reverse("expense-schedule"), {
+            "expense_date": "2026-10-05", "description": "Fuel", "amount": "40.00",
+            "method": "CASH", "category": "TRANSPORT", "paid": True,
+        }, format="json")
+        self.assertEqual(paid.status_code, 201, paid.data)
+        self.assertEqual(paid.data["status"], "PAID")
+        cash = LedgerAccount.objects.get(code="1000")
+        cash_credit = JournalLine.objects.filter(account=cash, entry__status="POSTED").aggregate(total=Sum("credit"))["total"]
+        self.assertEqual(cash_credit, Decimal("40.00"))
+
+        unpaid = self.client.post(reverse("expense-schedule"), {
+            "expense_date": "2026-10-06", "description": "Rent accrued", "amount": "80.00",
+            "method": "BANK", "category": "RENT", "paid": False,
+        }, format="json")
+        self.assertEqual(unpaid.status_code, 201, unpaid.data)
+        self.assertEqual(unpaid.data["status"], "RECOGNIZED")
+        cash_credit_after = JournalLine.objects.filter(account=cash, entry__status="POSTED").aggregate(total=Sum("credit"))["total"]
+        self.assertEqual(cash_credit_after, Decimal("40.00"))
+        bank = LedgerAccount.objects.get(code="1010")
+        bank_credit = JournalLine.objects.filter(account=bank, entry__status="POSTED").aggregate(total=Sum("credit"))["total"] or Decimal("0.00")
+        self.assertEqual(bank_credit, Decimal("0.00"))
+
+        rejected = self.client.post(reverse("expense-schedule"), {
+            "expense_date": "2026-10-07", "description": "Bad", "amount": "0",
+            "method": "CASH", "category": "OTHER", "paid": True,
+        }, format="json")
+        self.assertEqual(rejected.status_code, 400)
+
+        listing = self.client.get(reverse("expense-schedule"), {"start": "2026-10-01", "end": "2026-10-31"})
+        self.assertEqual(listing.status_code, 200, listing.data)
+        self.assertEqual(listing.data["total"], "120.00")

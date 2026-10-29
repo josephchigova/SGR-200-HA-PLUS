@@ -308,3 +308,11 @@ class ProgrammeAndPriceCrudTests(TestCase):
         self.assertEqual(debt.selling_price_per_tonne, Decimal("300.00"))
         blocked = self.client.delete(reverse("crop-selling-price-detail", args=[created.data["id"]]))
         self.assertEqual(blocked.status_code, 400)
+
+    def test_a_season_label_cannot_be_an_agricultural_year_selling_price(self):
+        winter = Season.objects.create(name="winter", start_date="2026-04-16", end_date="2026-09-30", status=Season.STATUS_ACTIVE)
+        rejected = self.client.post(reverse("crop-selling-price-list"), {
+            "crop": self.maize.pk, "season": winter.pk, "price_per_tonne": "250.00", "currency": "USD",
+        }, format="json")
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn("agricultural year", str(rejected.data).lower())

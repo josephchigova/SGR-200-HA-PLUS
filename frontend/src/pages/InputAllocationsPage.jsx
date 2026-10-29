@@ -197,7 +197,6 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
   return (
     <section className="workflow-page">
       <div className="workflow-heading">
-        <div><p className="eyebrow">Golden Path</p><h3>Input Allocations</h3></div>
         <button type="button" className="ghost-btn" onClick={refresh}>Refresh</button>
       </div>
       {error ? <div className="form-message error">{error}</div> : null}

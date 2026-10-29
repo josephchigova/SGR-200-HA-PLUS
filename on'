@@ -1,0 +1,15 @@
+                                                            List of databases
+          Name           |  Owner   | Encoding | Locale Provider |   Collate   |    Ctype    | Locale | ICU Rules |   Access privileges   
+-------------------------+----------+----------+-----------------+-------------+-------------+--------+-----------+-----------------------
+ blitztech_db            | joseph   | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |        |           | =Tc/joseph           +
+                         |          |          |                 |             |             |        |           | joseph=CTc/joseph
+ express-crud            | postgres | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |        |           | 
+ jovines_rms             | joseph   | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |        |           | 
+ jovines_rms_import_test | joseph   | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |        |           | 
+ postgres                | postgres | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |        |           | 
+ template0               | postgres | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |        |           | =c/postgres          +
+                         |          |          |                 |             |             |        |           | postgres=CTc/postgres
+ template1               | postgres | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |        |           | =c/postgres          +
+                         |          |          |                 |             |             |        |           | postgres=CTc/postgres
+(7 rows)
+

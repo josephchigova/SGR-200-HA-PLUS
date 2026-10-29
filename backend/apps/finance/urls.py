@@ -2,6 +2,8 @@ from django.urls import path
 from rest_framework.routers import DefaultRouter
 
 from .api import (
+    ExpenseScheduleDetailView,
+    ExpenseScheduleView,
     AccountingPeriodViewSet,
     AssetDepreciationView,
     BankStatementViewSet,
@@ -42,5 +44,7 @@ urlpatterns = [
     path("assets/<int:pk>/depreciate/", AssetDepreciationView.as_view(), name="asset-depreciate"),
     path("operational-postings/", OperationalPostingView.as_view(), name="operational-posting"),
     path("finance-reports/<slug:report>/", FinanceReportView.as_view(), name="finance-report"),
+    path("expense-schedule/", ExpenseScheduleView.as_view(), name="expense-schedule"),
+    path("expense-schedule/<int:pk>/", ExpenseScheduleDetailView.as_view(), name="expense-schedule-detail"),
     *router.urls,
 ]

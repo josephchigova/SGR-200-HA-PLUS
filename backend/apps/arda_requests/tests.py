@@ -168,7 +168,7 @@ class ARDARequestTests(TestCase):
         self.assertEqual(line_response.status_code, 201, line_response.data)
         self.assertEqual(line_response.data["status"], "PENDING")
 
-    def test_partial_or_unpaid_farmer_is_rejected_for_arda_request(self):
+    def test_partial_farmer_can_join_an_arda_request_and_unpaid_farmer_cannot(self):
         season = Season.objects.create(name="ARDA Status Season", start_date="2026-10-01", end_date="2027-09-30", status=Season.STATUS_ACTIVE)
         programme = Programme.objects.create(
             name="ARDA Status Programme", code="ARDA-STATUS-PROG", season=season, announced_hectares="1000.00",
@@ -204,7 +204,7 @@ class ARDARequestTests(TestCase):
                 root = reverse("farmer-eligible")
                 eligible_response = self.client.get(root, {"season": season.name, "page_size": 20})
                 self.assertEqual(eligible_response.status_code, 200, eligible_response.data)
-                self.assertNotIn(farmer.pk, {row["id"] for row in eligible_response.data["results"]})
+                eligible_ids = {row["id"] for row in eligible_response.data["results"]}
 
                 line_response = self.client.post(
                     reverse("arda-farmer-request-list"),
@@ -216,8 +216,14 @@ class ARDARequestTests(TestCase):
                     },
                     format="json",
                 )
-                self.assertEqual(line_response.status_code, 400)
-                self.assertIn("ineligible", str(line_response.data).lower())
+                if status == "PARTIAL":
+                    self.assertIn(farmer.pk, eligible_ids)
+                    self.assertEqual(line_response.status_code, 201, line_response.data)
+                    self.assertEqual(farmer.subscriptions.get().outstanding_amount, Decimal("250.00"))
+                else:
+                    self.assertNotIn(farmer.pk, eligible_ids)
+                    self.assertEqual(line_response.status_code, 400)
+                    self.assertIn("ineligible", str(line_response.data).lower())
 
     def test_batch_number_is_generated_and_never_reused_after_delete(self):
         season = Season.objects.create(name="Number Season", start_date="2026-10-01", end_date="2027-09-30", status=Season.STATUS_ACTIVE)
@@ -331,7 +337,7 @@ class ARDARequestTests(TestCase):
             ("Takudzwa", "500.00", season.name),
             ("Tinashe", "250.00", season.name),
             ("Tawanda", "500.00", "Previous Season"),
-            ("Tendai", "500.00", season.name),
+            ("Tendai", "0.00", season.name),
         ]):
             farmer = Farmer.objects.create(
                 first_name=first_name, surname="Search Farmer", national_id=f"63-334455{index}-Z-10",
@@ -346,7 +352,7 @@ class ARDARequestTests(TestCase):
                 farmer=farmer, category="UNDER_200HA", expected_amount="500.00", paid_amount=paid_amount,
                 outstanding_amount=str(Decimal("500.00") - Decimal(paid_amount)),
                 payment_status=(
-                    "PARTIAL" if first_name == "Tendai"
+                    "UNPAID" if first_name == "Tendai"
                     else "PAID" if paid_amount == "500.00"
                     else "PARTIAL"
                 ),
@@ -360,8 +366,8 @@ class ARDARequestTests(TestCase):
         tak_response = self.client.get(root, {"search": "tak", "season": season.name, "page_size": 20})
 
         self.assertEqual(t_response.status_code, 200, t_response.data)
-        self.assertEqual({row["id"] for row in t_response.data["results"]}, {candidates[0].pk, candidates[1].pk})
-        self.assertTrue(all(row["subscription_status"] == "PAID" for row in t_response.data["results"]))
+        self.assertEqual({row["id"] for row in t_response.data["results"]}, {candidates[0].pk, candidates[1].pk, candidates[2].pk})
+        self.assertIn("PARTIALLY_PAID", {row["subscription_status"] for row in t_response.data["results"]})
         self.assertEqual({row["id"] for row in ta_response.data["results"]}, {candidates[0].pk, candidates[1].pk})
         self.assertEqual([row["id"] for row in tak_response.data["results"]], [candidates[1].pk])
         self.assertFalse(FarmerApprovalEligibilityService.evaluate_for_arda(candidates[4], season)["eligible"])

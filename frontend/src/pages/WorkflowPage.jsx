@@ -35,6 +35,15 @@ const getAllPages = async (path) => {
   return records
 }
 
+function eligibleCell(column, row) {
+  if (column.render) return column.render(row)
+  if (column.key !== 'subscription_status') return row[column.key] || '—'
+  const status = row.subscription_status || ''
+  if (!status) return '—'
+  const kind = status === 'PAID' ? 'paid' : status === 'PARTIALLY_PAID' ? 'partial' : 'unpaid'
+  return <span className={`status-pill subscription-status ${kind}`}>{status}</span>
+}
+
 function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, editAction = false, deleteAction = false, summaryEndpoint = '', summaryColumns = [], eligibleEndpoint = '', eligibleTitle = '', eligibleColumns = [], selectedSeason = null, seasonScoped = false, activeSeasonOnly = false, cropSeason = '', periodStatus = 'ready' }) {
   const [rows, setRows] = useState([])
   const [summaryRows, setSummaryRows] = useState([])
@@ -315,7 +324,6 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
   return (
     <section className="workflow-page">
       <div className="workflow-heading">
-        <div><p className="eyebrow">Golden Path</p><h3>{title}</h3></div>
         <button type="button" className="ghost-btn" onClick={refresh}>Refresh</button>
       </div>
       {waitingForPeriod ? <div className="form-message">Loading the selected period...</div> : null}
@@ -407,17 +415,17 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
                 <h4>{eligibleTitle || 'Eligible farmers'}</h4>
                 <span>{eligibleLoading ? 'Loading…' : `${eligibleRows.length} farmers`}</span>
               </div>
-              <div className="table-wrap">
+              <div className="table-wrap eligible-farmers-scroll">
                 <table className="data-table">
                   <thead><tr>{eligibleColumns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead>
                   <tbody>
                     {eligibleRows.map((row) => (
                       <tr key={row.id}>
-                        {eligibleColumns.map((column) => <td key={column.key}>{column.render ? column.render(row) : row[column.key] || '—'}</td>)}
+                        {eligibleColumns.map((column) => <td key={column.key}>{eligibleCell(column, row)}</td>)}
                       </tr>
                     ))}
                     {!eligibleLoading && eligibleRows.length === 0 ? (
-                      <tr><td colSpan={eligibleColumns.length}>No farmers have a paid subscription for this season.</td></tr>
+                      <tr><td colSpan={eligibleColumns.length}>No verified farmers have a paid or partially paid subscription for this season.</td></tr>
                     ) : null}
                   </tbody>
                 </table>

@@ -28,7 +28,7 @@ import { workflowPages } from './pages/workflowConfig'
 
 const navItems = [
   { label: 'Dashboard', to: '/dashboard' },
-  { label: 'Farmers', to: '/farmers' },
+  { label: 'Farmers Register', to: '/farmers' },
   { label: 'Verification', to: '/verification' },
   { label: 'Subscriptions', to: '/subscriptions' },
   { label: 'Crop Catalogue', to: '/crops' },
@@ -67,6 +67,7 @@ export function AppShell() {
   const [currentPeriod, setCurrentPeriod] = useState(null)
   const [periodLoading, setPeriodLoading] = useState(!isLoginPage)
   const [periodError, setPeriodError] = useState('')
+  const [navOpen, setNavOpen] = useState(false)
 
   useEffect(() => {
     const syncAuthentication = () => setAuthenticated(Boolean(localStorage.getItem('sgr_access_token')))
@@ -144,7 +145,8 @@ export function AppShell() {
 
   return (
     <div className={`app-shell${isLoginPage ? ' login-shell' : ''}`}>
-      {!isLoginPage ? <aside className="sidebar golden-nav">
+      {!isLoginPage && navOpen ? <button type="button" className="nav-backdrop" aria-label="Close navigation" onClick={() => setNavOpen(false)} /> : null}
+      {!isLoginPage ? <aside id="primary-navigation" className={`sidebar golden-nav${navOpen ? ' is-open' : ''}`}>
           <div className="brand-block">
             <div className="brand-mark">SGR</div>
             <div>
@@ -161,6 +163,7 @@ export function AppShell() {
                   <NavLink
                     to={item.to}
                     className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
+                    onClick={() => setNavOpen(false)}
                   >
                     {item.label}
                   </NavLink>
@@ -171,8 +174,18 @@ export function AppShell() {
         </aside> : null}
 
         <main className={isLoginPage ? 'login-main' : 'main-panel'}>
-          {!isLoginPage ? <header className="topbar">
-            <div className="period-block">
+          {!isLoginPage ? <header className="app-header">
+            {location.pathname === '/dashboard' ? (
+              <div className="page-heading">
+                <h2>Dashboard</h2>
+                <p>Monitor farmer registration, agricultural production and financial performance.</p>
+              </div>
+            ) : null}
+            <div className="app-toolbar">
+              <div className="toolbar-group" aria-label="Reporting period">
+                <button type="button" className="nav-toggle ghost-btn" aria-expanded={navOpen} aria-controls="primary-navigation" onClick={() => setNavOpen((open) => !open)}>
+                  {navOpen ? 'Close menu' : 'Menu'}
+                </button>
               <div className="period-selectors">
                 <label className="period-field">
                   <span className="eyebrow">Agricultural Year</span>
@@ -222,11 +235,8 @@ export function AppShell() {
                   Current period
                 </button>
               </div>
-              {periodLoading ? <p className="form-message">Loading agricultural year and season...</p> : null}
-              {periodError ? <p className="form-message error" role="alert">{periodError}</p> : null}
-              {historicalMessage ? <p className="form-message period-banner" role="status">{historicalMessage}</p> : null}
-            </div>
-            <div className="topbar-actions">
+              </div>
+            <div className="toolbar-group toolbar-actions">
               <form
                 className="global-search"
                 onSubmit={(event) => {
@@ -260,6 +270,10 @@ export function AppShell() {
                 <NavLink to="/login" className="primary-btn">Sign in</NavLink>
               )}
             </div>
+            </div>
+            {periodLoading ? <p className="form-message">Loading agricultural year and season...</p> : null}
+            {periodError ? <p className="form-message error" role="alert">{periodError}</p> : null}
+            {historicalMessage ? <p className="form-message period-banner" role="status">{historicalMessage}</p> : null}
           </header> : null}
 
           <Routes>

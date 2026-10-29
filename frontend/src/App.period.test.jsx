@@ -62,7 +62,7 @@ describe('agricultural year and season selectors', () => {
     expect(screen.getByRole('option', { name: '2026/2027' })).toBeTruthy()
     expect(screen.getByRole('option', { name: 'Summer' })).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('link', { name: 'Farmers' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Farmers Register' }))
     expect(screen.getByLabelText('Agricultural year').value).toBe('1')
     expect(screen.getByLabelText('Season').value).toBe('WINTER')
   })

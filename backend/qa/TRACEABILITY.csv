@@ -1,0 +1,18 @@
+Requirement,Test ID,Technique,Automated test or command,Expected evidence
+Authentication valid and invalid login,SEC-02/SEC-03,Equivalence partitioning,apps.accounts.tests.AuthenticationSecurityTests,JUnit testcase outcomes
+Unauthenticated and expired credentials,SEC-01/SEC-04,Negative/security,apps.accounts.tests.AuthenticationSecurityTests,401 responses
+Role and district restrictions,SEC-05/SEC-06/SEC-07,Security/decision paths,apps.farmers.tests apps.programmes.tests apps.subscriptions.tests apps.production.tests,403/404/400 expected responses
+Duplicate farmer national ID,FARM-02,Equivalence partitioning,apps.farmers.tests.FarmerVerificationActionTests.test_farmer_registration_rejects_duplicate_national_id,400 field validation response
+Farm hectares valid/invalid,FARM-03,Equivalence partitioning and boundary,apps.farmers.tests.FarmerVerificationActionTests.test_farmer_registration_hectare_equivalence_partitions,valid positive accepted; zero/negative/text rejected
+Province-district and geography selectors,GEO-01,Integration/UI,apps.geography.tests.GeographyDropdownTests and live Farmer form,all seeded districts listed for selected province
+Farmer eligibility,ARDA-01,Decision table,apps.farmers.tests.FarmerDomainServiceTests.test_farmer_eligibility_decision_table,only all-positive rule combination eligible
+Programme capacity 19999/20000/20001 ha,PROG-01,Boundary value analysis,apps.programmes.tests.ProgrammeAllocationTests.test_programme_capacity_boundary_values,valid/valid/rejected
+Subscription unpaid/partial/paid and outstanding,SUB-01,Equivalence partitioning,apps.subscriptions.tests.SubscriptionTests,test responses show derived balances/status
+Approved input hectares,ALLOC-01,Boundary and negative,apps.inputs.tests.InputIssueTests,approved maximum accepted; excess create/update rejected
+Production farm/approved hectares,PROD-01,Boundary/negative,apps.production.tests.FarmerProductionTests,valid production accepted; over-limit rejected
+GMB positive tonnes and required references,DEL-01,Equivalence partitioning,apps.production.tests.FarmerProductionTests,positive delivery accepted; zero rejected
+Recovery zero/full/negative/over-recovery,REC-01,Boundary value analysis,apps.recovery.tests.RecoveryRecordTests,derived outstanding and percent; invalid values rejected
+Golden Path aggregate,SYS-01,System/integration,apps.farmers.test_golden_path.GoldenPathSystemTest.test_golden_path_from_farmer_registration_to_dashboard_recovery,workflow persisted and dashboard values match
+Statement/branch coverage,WB-01,White-box,bash backend/qa/run_checks.sh,coverage table and qa-coverage.json
+Passive web security scan,SEC-08,Dynamic security testing,bash backend/qa/run_zap_baseline.sh,ZAP HTML/JSON report; classify findings in defect log
+Read-only response-time smoke,PERF-01,Performance test,backend/.venv/bin/python backend/qa/performance_smoke.py --requests 30 --workers 5,observed throughput and latency; compare only to pre-agreed threshold

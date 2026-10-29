@@ -1,6 +1,6 @@
 """Double-entry ledger. Posted journals are the only source of financial statements."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 
 from django.db import IntegrityError, transaction
@@ -12,6 +12,7 @@ from apps.accounts.models import User
 
 from .models import (
     AccountingPeriod,
+    CashBookAccount,
     CashMovement,
     DepreciationEntry,
     ExpenseClaim,
@@ -76,6 +77,31 @@ def text_amount(value):
 
 def reject(message):
     raise ValidationError({"detail": message})
+
+
+def ensure_open_period(on_date):
+    period = AccountingPeriod.objects.filter(start_date__lte=on_date, end_date__gte=on_date).order_by("start_date").first()
+    if period:
+        return period
+    start_year = on_date.year if on_date.month >= 10 else on_date.year - 1
+    start = date(start_year, 10, 1)
+    end = date(start_year + 1, 9, 30)
+    period, _created = AccountingPeriod.objects.get_or_create(
+        start_date=start,
+        end_date=end,
+        defaults={"name": f"{start_year}/{start_year + 1}", "status": AccountingPeriod.STATUS_OPEN},
+    )
+    return period
+
+
+def cash_book_for(method):
+    ensure_default_chart()
+    code = "1000" if method == "CASH" else "1010"
+    account = account_by_code(code)
+    book = CashBookAccount.objects.filter(ledger_account=account).first()
+    if book is None:
+        book = CashBookAccount.objects.create(name=account.name, kind="CASH" if method == "CASH" else "BANK", ledger_account=account)
+    return book
 
 
 def ensure_default_chart():
