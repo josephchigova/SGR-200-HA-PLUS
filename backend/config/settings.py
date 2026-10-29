@@ -2,15 +2,21 @@ import os
 from datetime import timedelta
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def env_list(name, default):
+    return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
+
+
 SECRET_KEY = os.getenv("SECRET_KEY", "django-insecure-local-development-only-key-change-me")
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "localhost,127.0.0.1,0.0.0.0").split(",")
+ALLOWED_HOSTS = env_list("ALLOWED_HOSTS", "localhost,127.0.0.1,0.0.0.0")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -39,6 +45,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -104,8 +111,12 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+FRONTEND_DIST = BASE_DIR.parent / "frontend" / "dist"
+STATICFILES_DIRS = [FRONTEND_DIST] if FRONTEND_DIST.is_dir() else []
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+WHITENOISE_MANIFEST_STRICT = False
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
@@ -127,11 +138,29 @@ SIMPLE_JWT = {
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
-CORS_ALLOWED_ORIGINS = os.getenv(
+CORS_ALLOWED_ORIGINS = env_list(
     "CORS_ALLOWED_ORIGINS",
     "http://localhost:5175,http://127.0.0.1:5175",
-).split(",")
+)
 CORS_ALLOW_CREDENTIALS = True
+
+INSECURE_SECRET_KEYS = {
+    "django-insecure-local-development-only-key-change-me",
+    "change-me-in-production",
+    "dev-secret-key-change-this",
+}
+USE_HTTPS = os.getenv("USE_HTTPS", "false").lower() == "true"
+if not DEBUG:
+    if SECRET_KEY in INSECURE_SECRET_KEYS or len(SECRET_KEY) < 32:
+        raise ImproperlyConfigured("Set a unique SECRET_KEY of at least 32 characters before running with DEBUG=False.")
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    USE_X_FORWARDED_HOST = True
+    SESSION_COOKIE_SECURE = USE_HTTPS
+    CSRF_COOKIE_SECURE = USE_HTTPS
+    SECURE_SSL_REDIRECT = USE_HTTPS
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    SECURE_REFERRER_POLICY = "same-origin"
+    CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", "")
 
 SPECTACULAR_SETTINGS = {
     "TITLE": "SGR Management System API",

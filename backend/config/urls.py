@@ -1,10 +1,12 @@
 from django.contrib import admin
-from django.urls import include, path
+from django.urls import include, path, re_path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 from apps.search_views import GlobalSearchView
+from config.views import health, spa_index
 
 urlpatterns = [
+    path("api/health/", health, name="health"),
     path("admin/", admin.site.urls),
     path("api/auth/", include("apps.accounts.urls")),
     path("api/search/", GlobalSearchView.as_view(), name="global-search"),
@@ -22,4 +24,5 @@ urlpatterns = [
     path("api/", include("apps.source_data.urls")),
     path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
     path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+    re_path(r"^(?!api(?:/|$)|admin(?:/|$)|static(?:/|$)|media(?:/|$)).*$", spa_index, name="spa"),
 ]

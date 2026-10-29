@@ -1,0 +1,12 @@
+[Unit]
+Description=SGR 200HA+ Farmer and Input Management System
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/sgr/backend
+EnvironmentFile=/opt/sgr/backend/.env
+ExecStart=/opt/sgr/backend/.venv/bin/gunicorn config.wsgi:application --bind 127.0.0.1:8000 --workers 3 --timeout 60
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

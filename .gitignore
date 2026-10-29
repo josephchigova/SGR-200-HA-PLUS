@@ -1,0 +1,24 @@
+.venv/
+backend/.venv/
+frontend/node_modules/
+frontend/dist/
+backend/staticfiles/
+backend/media/
+backend/.env
+*.sqlite3
+.coverage
+backend/.coverage
+backend/qa-coverage.json
+backend/qa-junit.xml
+frontend/qa-lint.json
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+SGR SOURCE DATABASE.xlsx
+f:
+olve())
+on'
+on, os
+ql -U joseph -d postgres -c SELECT current_user, current_database();
+h -lc 'sudo -u postgres psql -tAc "SELECT version();" && sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname = 'postgres';" && sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname = 'sgr_user';"'
