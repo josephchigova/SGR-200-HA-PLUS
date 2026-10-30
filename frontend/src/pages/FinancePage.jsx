@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
 
 import apiClient from '../api/client'
+import AssetsPanel from './AssetsPanel'
 
 const REPORTS = [
   ['dashboard', 'Dashboard'],
+  ['assets', 'Assets'],
   ['operations', 'Operations'],
   ['subscription-report', 'Subscriptions'],
   ['debtors', 'Debtors'],
@@ -45,6 +47,11 @@ function FinancePage({ selectedSeason }) {
   useEffect(() => {
     const current = ++requestId.current
     const load = async () => {
+      if (reportName === 'assets') {
+        setLoading(false)
+        setReport(null)
+        return
+      }
       if (!start || !end) return
       setLoading(true)
       setError('')
@@ -126,7 +133,8 @@ function FinancePage({ selectedSeason }) {
           <button key={key} type="button" role="tab" aria-selected={reportName === key} className={reportName === key ? 'active' : ''} onClick={() => setReportName(key)}>{label}</button>
         ))}
       </div>
-      <div className="finance-filters">
+      {reportName === 'assets' ? <AssetsPanel /> : null}
+      {reportName !== 'assets' ? <div className="finance-filters">
         <label>From <input type="date" value={start} onChange={(event) => { setManualRange(true); setStart(event.target.value) }} /></label>
         <label>To <input type="date" value={end} onChange={(event) => { setManualRange(true); setEnd(event.target.value) }} /></label>
         <button type="button" className="ghost-btn" onClick={() => download('csv')}>Export CSV</button>
@@ -141,7 +149,7 @@ function FinancePage({ selectedSeason }) {
             setError(typeof detail === 'string' ? detail : 'The chart of accounts could not be loaded.')
           }
         }}>Load default accounts</button>
-      </div>
+      </div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
       {notice ? <div className="form-message" role="status">{notice}</div> : null}
       {loading ? <div className="form-message">Loading financial records...</div> : null}

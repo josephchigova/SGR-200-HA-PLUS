@@ -28,20 +28,202 @@ class Expense(models.Model):
         ordering = ["-expense_date", "-id"]
 
 
+class AssetCategory(models.Model):
+    name = models.CharField(max_length=120, unique=True)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
 class Asset(models.Model):
+    CONDITION_NEW = "NEW"
+    CONDITION_GOOD = "GOOD"
+    CONDITION_FAIR = "FAIR"
+    CONDITION_POOR = "POOR"
+    CONDITION_DAMAGED = "DAMAGED"
+    CONDITION_CHOICES = [
+        (CONDITION_NEW, "New"),
+        (CONDITION_GOOD, "Good"),
+        (CONDITION_FAIR, "Fair"),
+        (CONDITION_POOR, "Poor"),
+        (CONDITION_DAMAGED, "Damaged"),
+    ]
+
+    STATUS_ACTIVE = "ACTIVE"
+    STATUS_MAINTENANCE = "UNDER_MAINTENANCE"
+    STATUS_DISPOSED = "DISPOSED"
+    STATUS_WRITTEN_OFF = "WRITTEN_OFF"
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, "Active"),
+        (STATUS_MAINTENANCE, "Under Maintenance"),
+        (STATUS_DISPOSED, "Disposed"),
+        (STATUS_WRITTEN_OFF, "Written Off"),
+    ]
+
+    METHOD_NONE = "NONE"
+    METHOD_STRAIGHT_LINE = "STRAIGHT_LINE"
+    METHOD_REDUCING = "REDUCING_BALANCE"
+    METHOD_CHOICES = [
+        (METHOD_NONE, "No depreciation"),
+        (METHOD_STRAIGHT_LINE, "Straight line"),
+        (METHOD_REDUCING, "Reducing balance"),
+    ]
+
     asset_id = models.CharField(max_length=80, unique=True)
+    name = models.CharField(max_length=180, blank=True)
     description = models.CharField(max_length=255)
     category = models.CharField(max_length=120, blank=True)
+    category_ref = models.ForeignKey(
+        AssetCategory, null=True, blank=True, on_delete=models.PROTECT, related_name="assets"
+    )
     purchase_date = models.DateField(null=True, blank=True)
-    cost = models.DecimalField(max_digits=14, decimal_places=2, default=0)
-    residual_value = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    supplier = models.CharField(max_length=180, blank=True)
+    cost = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    current_value = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    location = models.CharField(max_length=180, blank=True)
+    department = models.CharField(max_length=180, blank=True)
+    responsible_person = models.CharField(max_length=180, blank=True)
+    condition = models.CharField(max_length=16, choices=CONDITION_CHOICES, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE)
+    warranty_expiry = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    residual_value = models.DecimalField(max_digits=16, decimal_places=2, default=0)
     useful_life_years = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
-    annual_depreciation = models.DecimalField(max_digits=14, decimal_places=2, default=0)
-    accumulated_depreciation = models.DecimalField(max_digits=14, decimal_places=2, default=0)
-    closing_nbv = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    depreciation_method = models.CharField(max_length=20, choices=METHOD_CHOICES, default=METHOD_STRAIGHT_LINE)
+    depreciation_rate = models.DecimalField(max_digits=7, decimal_places=4, default=0)
+    annual_depreciation = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    accumulated_depreciation = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    closing_nbv = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="assets_created"
+    )
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="assets_updated"
+    )
+    created_at = models.DateTimeField(auto_now_add=True, null=True)
+    updated_at = models.DateTimeField(auto_now=True, null=True)
 
     class Meta:
         ordering = ["asset_id"]
+
+    def __str__(self):
+        return f"{self.asset_id} {self.name or self.description}"
+
+    @property
+    def display_name(self):
+        return self.name or self.description
+
+
+class AssetDocument(models.Model):
+    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name="documents")
+    title = models.CharField(max_length=180, blank=True)
+    file = models.FileField(upload_to="finance/assets/")
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="asset_documents_uploaded"
+    )
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-uploaded_at", "-id"]
+
+
+class AssetValuation(models.Model):
+    KIND_ACQUISITION = "ACQUISITION"
+    KIND_REVALUATION = "REVALUATION"
+    KIND_CHOICES = [
+        (KIND_ACQUISITION, "Acquisition cost"),
+        (KIND_REVALUATION, "Estimated value"),
+    ]
+
+    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name="valuations")
+    valued_on = models.DateField()
+    amount = models.DecimalField(max_digits=16, decimal_places=2)
+    kind = models.CharField(max_length=16, choices=KIND_CHOICES)
+    note = models.TextField(blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="asset_valuations_recorded"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-valued_on", "-id"]
+
+
+class AssetMaintenance(models.Model):
+    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name="maintenance_records")
+    activity_date = models.DateField()
+    description = models.CharField(max_length=255)
+    cost = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    supplier = models.CharField(max_length=180, blank=True)
+    notes = models.TextField(blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="asset_maintenance_recorded"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-activity_date", "-id"]
+
+
+class AssetTransfer(models.Model):
+    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name="transfers")
+    transfer_date = models.DateField()
+    from_location = models.CharField(max_length=180, blank=True)
+    to_location = models.CharField(max_length=180, blank=True)
+    from_department = models.CharField(max_length=180, blank=True)
+    to_department = models.CharField(max_length=180, blank=True)
+    from_person = models.CharField(max_length=180, blank=True)
+    to_person = models.CharField(max_length=180, blank=True)
+    notes = models.TextField(blank=True)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="asset_transfers_recorded"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-transfer_date", "-id"]
+
+
+class AssetDisposal(models.Model):
+    KIND_DISPOSED = "DISPOSED"
+    KIND_WRITTEN_OFF = "WRITTEN_OFF"
+    KIND_CHOICES = [
+        (KIND_DISPOSED, "Disposed"),
+        (KIND_WRITTEN_OFF, "Written Off"),
+    ]
+
+    asset = models.OneToOneField(Asset, on_delete=models.PROTECT, related_name="disposal")
+    kind = models.CharField(max_length=16, choices=KIND_CHOICES)
+    disposed_on = models.DateField()
+    reason = models.TextField()
+    proceeds = models.DecimalField(max_digits=16, decimal_places=2, default=0)
+    recorded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="asset_disposals_recorded"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-disposed_on", "-id"]
+
+
+class AssetAuditEvent(models.Model):
+    asset = models.ForeignKey(Asset, on_delete=models.CASCADE, related_name="audit_events")
+    action = models.CharField(max_length=40)
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name="asset_audit_events"
+    )
+    detail = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
 
 
 class PayrollEntry(models.Model):

@@ -25,23 +25,60 @@ import SubscriptionsPage from './pages/SubscriptionsPage'
 import VerificationPage from './pages/VerificationPage'
 import WorkflowPage from './pages/WorkflowPage'
 import { workflowPages } from './pages/workflowConfig'
+import { watchMobileTables } from './components/labelMobileTables'
 
-const navItems = [
-  { label: 'Dashboard', to: '/dashboard' },
-  { label: 'Farmers Register', to: '/farmers' },
-  { label: 'Verification', to: '/verification' },
-  { label: 'Subscriptions', to: '/subscriptions' },
-  { label: 'Crop Catalogue', to: '/crops' },
-  { label: 'Programmes', to: '/programmes' },
-  { label: 'ARDA Requests', to: '/arda-requests' },
-  { label: 'Input Allocations', to: '/input-allocations' },
-  { label: 'Production', to: '/production' },
-  { label: 'Seasonal Planting', to: '/seasonal-planting' },
-  { label: 'GMB Deliveries', to: '/deliveries' },
-  { label: 'Recovery', to: '/recovery' },
-  { label: 'Finance', to: '/finance' },
-  { label: 'Sign in', to: '/login' },
+const navGroups = [
+  { title: 'Overview', items: [{ label: 'Dashboard', to: '/dashboard' }] },
+  {
+    title: 'Farmers',
+    items: [
+      { label: 'Farmers Register', to: '/farmers' },
+      { label: 'Verification', to: '/verification' },
+      { label: 'Subscriptions', to: '/subscriptions' },
+    ],
+  },
+  {
+    title: 'Programmes',
+    items: [
+      { label: 'Crop Catalogue', to: '/crops' },
+      { label: 'Programmes', to: '/programmes' },
+      { label: 'ARDA Requests', to: '/arda-requests' },
+    ],
+  },
+  {
+    title: 'Inputs and production',
+    items: [
+      { label: 'Input Allocations', to: '/input-allocations' },
+      { label: 'Production', to: '/production' },
+      { label: 'Seasonal Planting', to: '/seasonal-planting' },
+      { label: 'GMB Deliveries', to: '/deliveries' },
+      { label: 'Recovery', to: '/recovery' },
+    ],
+  },
+  { title: 'Finance', items: [{ label: 'Finance', to: '/finance' }] },
+  { title: 'Account', items: [{ label: 'Sign in', to: '/login' }] },
 ]
+
+const bottomNav = [
+  { label: 'Dashboard', to: '/dashboard' },
+  { label: 'Farmers', to: '/farmers' },
+  { label: 'Verification', to: '/verification' },
+  { label: 'Finance', to: '/finance' },
+]
+
+const roleLabels = {
+  super_admin: 'Administrator',
+  sgr_executive: 'SGR Executive',
+  verification_officer: 'Verification Officer',
+  finance_officer: 'Finance Officer',
+  programme_officer: 'Programme Officer',
+  recovery_officer: 'Recovery Officer',
+  provincial_coordinator: 'Provincial Coordinator',
+  district_coordinator: 'District Coordinator',
+  lead_farmer: 'Lead Farmer',
+  auditor: 'Auditor',
+  viewer: 'Viewer',
+}
 
 async function fetchAllSeasons() {
   const records = []
@@ -68,6 +105,46 @@ export function AppShell() {
   const [periodLoading, setPeriodLoading] = useState(!isLoginPage)
   const [periodError, setPeriodError] = useState('')
   const [navOpen, setNavOpen] = useState(false)
+  const [mobileNav, setMobileNav] = useState(false)
+  const [profile, setProfile] = useState(null)
+
+  useEffect(() => watchMobileTables(), [location.pathname])
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return undefined
+    const query = window.matchMedia('(max-width: 1023px)')
+    const sync = () => setMobileNav(query.matches)
+    sync()
+    query.addEventListener('change', sync)
+    return () => query.removeEventListener('change', sync)
+  }, [])
+
+  useEffect(() => {
+    if (!navOpen) return undefined
+    const onKey = (event) => {
+      if (event.key === 'Escape') setNavOpen(false)
+    }
+    document.body.classList.add('nav-lock')
+    window.addEventListener('keydown', onKey)
+    return () => {
+      document.body.classList.remove('nav-lock')
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [navOpen])
+
+  useEffect(() => {
+    if (!authenticated || isLoginPage) {
+      setProfile(null)
+      return undefined
+    }
+    let cancelled = false
+    apiClient.get('/auth/me/').then((response) => {
+      if (!cancelled) setProfile(response.data)
+    }).catch(() => {
+      if (!cancelled) setProfile(null)
+    })
+    return () => { cancelled = true }
+  }, [authenticated, isLoginPage])
 
   useEffect(() => {
     const syncAuthentication = () => setAuthenticated(Boolean(localStorage.getItem('sgr_access_token')))
@@ -133,6 +210,26 @@ export function AppShell() {
     writeStoredPeriod(selection)
   }
 
+  const logout = () => {
+    localStorage.removeItem('sgr_access_token')
+    localStorage.removeItem('sgr_refresh_token')
+    setAuthenticated(false)
+    setNavOpen(false)
+    window.location.href = '/login'
+  }
+
+  const profileName = profile
+    ? (`${profile.first_name || ''} ${profile.last_name || ''}`.trim() || profile.username || profile.email)
+    : ''
+  const profileInitials = profileName
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('') || 'SGR'
+  const bottomActive = (to) => (to === '/farmers'
+    ? location.pathname === '/farmers' || location.pathname.startsWith('/farmers/')
+    : location.pathname === to)
+
   const returnToCurrentPeriod = () => {
     const currentYear = currentPeriod?.agricultural_year
     if (!currentYear?.id) return
@@ -146,7 +243,10 @@ export function AppShell() {
   return (
     <div className={`app-shell${isLoginPage ? ' login-shell' : ''}`}>
       {!isLoginPage && navOpen ? <button type="button" className="nav-backdrop" aria-label="Close navigation" onClick={() => setNavOpen(false)} /> : null}
-      {!isLoginPage ? <aside id="primary-navigation" className={`sidebar golden-nav${navOpen ? ' is-open' : ''}`}>
+      {!isLoginPage ? <aside id="primary-navigation" className={`sidebar golden-nav${navOpen ? ' is-open' : ''}`} aria-hidden={mobileNav && !navOpen} inert={mobileNav && !navOpen ? true : undefined}>
+          <div className="drawer-toolbar">
+            <button type="button" className="drawer-close" onClick={() => setNavOpen(false)}>Close</button>
+          </div>
           <div className="brand-block">
             <div className="brand-mark">SGR</div>
             <div>
@@ -154,27 +254,54 @@ export function AppShell() {
               <p>Farmer &amp; Input Management System</p>
             </div>
           </div>
+          {profile ? (
+            <div className="nav-profile">
+              <span className="nav-avatar" aria-hidden="true">{profileInitials}</span>
+              <div>
+                <strong>{profileName}</strong>
+                <small>{roleLabels[profile.role] || profile.role}</small>
+              </div>
+            </div>
+          ) : null}
 
           <nav className="nav-section" aria-label="Primary navigation">
-            <p className="nav-title">Navigation</p>
-            <ul>
-              {navItems.map((item) => (
-                <li key={item.to}>
-                  <NavLink
-                    to={item.to}
-                    className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
-                    onClick={() => setNavOpen(false)}
-                  >
-                    {item.label}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
+            {navGroups.map((group) => (
+              <div key={group.title}>
+                <p className="nav-title">{group.title}</p>
+                <ul>
+                  {group.items.map((item) => (
+                    <li key={item.to}>
+                      <NavLink
+                        to={item.to}
+                        className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
+                        onClick={() => setNavOpen(false)}
+                      >
+                        {item.label}
+                      </NavLink>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
           </nav>
+          {authenticated ? <button type="button" className="ghost-btn nav-logout" onClick={logout}>Logout</button> : null}
         </aside> : null}
 
         <main className={isLoginPage ? 'login-main' : 'main-panel'}>
           {!isLoginPage ? <header className="app-header">
+            <div className="mobile-topbar">
+              <button type="button" className="nav-toggle ghost-btn" aria-expanded={navOpen} aria-controls="primary-navigation" onClick={() => setNavOpen((open) => !open)}>
+                <span className="hamburger" aria-hidden="true"><span /><span /><span /></span>
+                <span>{navOpen ? 'Close' : 'Menu'}</span>
+              </button>
+              <div className="mobile-brand">
+                <span className="brand-mark">SGR</span>
+                <div>
+                  <strong>SGR 200HA+</strong>
+                  <small>Farmer &amp; Input Management</small>
+                </div>
+              </div>
+            </div>
             {location.pathname === '/dashboard' ? (
               <div className="page-heading">
                 <h2>Dashboard</h2>
@@ -183,9 +310,6 @@ export function AppShell() {
             ) : null}
             <div className="app-toolbar">
               <div className="toolbar-group" aria-label="Reporting period">
-                <button type="button" className="nav-toggle ghost-btn" aria-expanded={navOpen} aria-controls="primary-navigation" onClick={() => setNavOpen((open) => !open)}>
-                  {navOpen ? 'Close menu' : 'Menu'}
-                </button>
               <div className="period-selectors">
                 <label className="period-field">
                   <span className="eyebrow">Agricultural Year</span>
@@ -226,12 +350,12 @@ export function AppShell() {
                       cropSeason: event.target.value,
                     })}
                   >
-                    {(selectedSeason?.crop_seasons || []).map((item) => (
+                    {(selectedSeason?.crop_seasons || []).length ? (selectedSeason.crop_seasons || []).map((item) => (
                       <option key={item.code} value={item.code}>{item.label}</option>
-                    ))}
+                    )) : <option value="">{periodLoading ? 'Loading' : 'No season'}</option>}
                   </select>
                 </label>
-                <button type="button" className="ghost-btn" onClick={returnToCurrentPeriod} disabled={!currentPeriod?.agricultural_year?.id}>
+                <button type="button" className="ghost-btn period-reset" onClick={returnToCurrentPeriod} disabled={!currentPeriod?.agricultural_year?.id}>
                   Current period
                 </button>
               </div>
@@ -252,23 +376,14 @@ export function AppShell() {
                 />
                 <button type="submit" className="ghost-btn">Search</button>
               </form>
-              <button type="button" className="ghost-btn">Notifications</button>
-              {authenticated ? (
-                <button
-                  type="button"
-                  className="primary-btn"
-                  onClick={() => {
-                    localStorage.removeItem('sgr_access_token')
-                    localStorage.removeItem('sgr_refresh_token')
-                    setAuthenticated(false)
-                    window.location.href = '/login'
-                  }}
-                >
-                  Logout
-                </button>
-              ) : (
-                <NavLink to="/login" className="primary-btn">Sign in</NavLink>
-              )}
+              <div className="header-actions">
+                <button type="button" className="ghost-btn">Notifications</button>
+                {authenticated ? (
+                  <button type="button" className="primary-btn" onClick={logout}>Logout</button>
+                ) : (
+                  <NavLink to="/login" className="primary-btn">Sign in</NavLink>
+                )}
+              </div>
             </div>
             </div>
             {periodLoading ? <p className="form-message">Loading agricultural year and season...</p> : null}
@@ -299,6 +414,16 @@ export function AppShell() {
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>
         </main>
+        {!isLoginPage ? (
+          <nav className="bottom-nav" aria-label="Frequent sections">
+            {bottomNav.map((item) => (
+              <button key={item.to} type="button" className={bottomActive(item.to) ? 'active' : ''} onClick={() => { setNavOpen(false); navigate(item.to) }}>
+                {item.label}
+              </button>
+            ))}
+            <button type="button" aria-expanded={navOpen} aria-controls="primary-navigation" onClick={() => setNavOpen(true)}>Menu</button>
+          </nav>
+        ) : null}
     </div>
   )
 }

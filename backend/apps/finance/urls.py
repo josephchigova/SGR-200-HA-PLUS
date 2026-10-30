@@ -20,11 +20,12 @@ from .api import (
     TradePayableViewSet,
     TradeReceivableViewSet,
 )
-from .views import AssetViewSet, ExpenseViewSet, PayrollEntryViewSet, ReceiptViewSet
+from .views import AssetCategoryViewSet, AssetViewSet, ExpenseViewSet, PayrollEntryViewSet, ReceiptViewSet
 
 router = DefaultRouter()
 router.register(r"receipts", ReceiptViewSet, basename="receipt")
 router.register(r"expenses", ExpenseViewSet, basename="expense")
+router.register(r"asset-categories", AssetCategoryViewSet, basename="asset-category")
 router.register(r"assets", AssetViewSet, basename="asset")
 router.register(r"payroll", PayrollEntryViewSet, basename="payroll-entry")
 router.register(r"ledger-accounts", LedgerAccountViewSet, basename="ledger-account")

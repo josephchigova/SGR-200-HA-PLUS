@@ -88,6 +88,26 @@ class FinancePermission(RolePermission):
     }
 
 
+class AssetCategoryPermission(permissions.BasePermission):
+    """Administrators configure asset categories. Finance readers may use the list."""
+
+    read_roles = FinancePermission.allowed_roles | {User.ROLE_AUDITOR}
+    write_roles = {
+        User.ROLE_SUPER_ADMIN,
+        User.ROLE_SGR_EXECUTIVE,
+    }
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        if request.method in permissions.SAFE_METHODS:
+            return user.role in self.read_roles
+        return user.role in self.write_roles
+
+
 class FinanceAccessPermission(permissions.BasePermission):
     """Finance officers maintain the ledger. Auditors may read it. Payroll stays in this set."""
 

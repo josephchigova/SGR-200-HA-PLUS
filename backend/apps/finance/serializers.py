@@ -1,9 +1,18 @@
 from rest_framework import serializers
 
+from .assets import register_asset, update_asset
 from .models import (
     AccountingPeriod,
     Asset,
+    AssetAuditEvent,
+    AssetCategory,
+    AssetDisposal,
+    AssetDocument,
+    AssetMaintenance,
+    AssetTransfer,
+    AssetValuation,
     BankStatement,
+    DepreciationEntry,
     BankStatementLine,
     CashBookAccount,
     CashMovement,
@@ -35,10 +44,127 @@ class ExpenseSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class AssetCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssetCategory
+        fields = ["id", "name", "description", "is_active", "created_at", "updated_at"]
+        read_only_fields = ["created_at", "updated_at"]
+
+
+class AssetDocumentSerializer(serializers.ModelSerializer):
+    file_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AssetDocument
+        fields = ["id", "title", "file", "file_url", "uploaded_by", "uploaded_at"]
+        read_only_fields = ["uploaded_by", "uploaded_at", "file_url"]
+
+    def get_file_url(self, obj):
+        if not obj.file:
+            return ""
+        request = self.context.get("request")
+        url = obj.file.url
+        return request.build_absolute_uri(url) if request else url
+
+
+class AssetValuationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssetValuation
+        fields = ["id", "valued_on", "amount", "kind", "note", "recorded_by", "created_at"]
+
+
+class AssetMaintenanceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssetMaintenance
+        fields = ["id", "activity_date", "description", "cost", "supplier", "notes", "recorded_by", "created_at"]
+
+
+class AssetTransferSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssetTransfer
+        fields = [
+            "id", "transfer_date", "from_location", "to_location", "from_department", "to_department",
+            "from_person", "to_person", "notes", "recorded_by", "created_at",
+        ]
+
+
+class AssetDisposalSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AssetDisposal
+        fields = ["id", "kind", "disposed_on", "reason", "proceeds", "recorded_by", "created_at"]
+
+
+class AssetAuditSerializer(serializers.ModelSerializer):
+    actor_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AssetAuditEvent
+        fields = ["id", "action", "actor", "actor_name", "detail", "created_at"]
+
+    def get_actor_name(self, obj):
+        actor = obj.actor
+        if not actor:
+            return ""
+        full_name = f"{actor.first_name} {actor.last_name}".strip()
+        return full_name or actor.username or actor.email
+
+
+class DepreciationEntrySerializer(serializers.ModelSerializer):
+    journal_reference = serializers.CharField(source="journal.reference", read_only=True)
+
+    class Meta:
+        model = DepreciationEntry
+        fields = ["id", "period_start", "period_end", "amount", "journal", "journal_reference", "created_at"]
+
+
 class AssetSerializer(serializers.ModelSerializer):
+    category = serializers.PrimaryKeyRelatedField(
+        source="category_ref", queryset=AssetCategory.objects.all(), allow_null=True, required=False
+    )
+    category_name = serializers.SerializerMethodField()
+    asset_id = serializers.CharField(required=False, allow_blank=True)
+    net_book_value = serializers.DecimalField(source="closing_nbv", max_digits=16, decimal_places=2, read_only=True)
+    display_name = serializers.CharField(read_only=True)
+
     class Meta:
         model = Asset
-        fields = "__all__"
+        fields = [
+            "id", "asset_id", "name", "display_name", "description", "category", "category_name",
+            "purchase_date", "supplier", "cost", "current_value", "location", "department",
+            "responsible_person", "condition", "status", "warranty_expiry", "notes",
+            "depreciation_method", "useful_life_years", "residual_value", "depreciation_rate",
+            "annual_depreciation", "accumulated_depreciation", "closing_nbv", "net_book_value",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = [
+            "display_name", "category_name", "annual_depreciation", "closing_nbv",
+            "net_book_value", "created_at", "updated_at",
+        ]
+
+    def get_category_name(self, obj):
+        if obj.category_ref_id:
+            return obj.category_ref.name
+        return obj.category
+
+    def validate(self, attrs):
+        for field in ("purchase_date", "warranty_expiry", "useful_life_years", "depreciation_rate"):
+            if attrs.get(field) == "":
+                attrs[field] = None
+        category = attrs.get("category_ref")
+        if category and not category.is_active:
+            current_id = getattr(self.instance, "category_ref_id", None)
+            if current_id != category.id:
+                raise serializers.ValidationError({"category": "Choose an active asset category."})
+        return attrs
+
+    def create(self, validated_data):
+        category = validated_data.pop("category_ref", None)
+        return register_asset(self.context["request"].user, category, **validated_data)
+
+    def update(self, instance, validated_data):
+        category = validated_data.pop("category_ref", instance.category_ref)
+        validated_data.pop("asset_id", None)
+        return update_asset(instance, self.context["request"].user, category, **validated_data)
 
 
 class PayrollEntrySerializer(serializers.ModelSerializer):

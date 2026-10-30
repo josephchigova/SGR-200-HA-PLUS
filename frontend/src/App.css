@@ -696,6 +696,60 @@
   }
 }
 
+@media (max-width: 1023px) {
+  .workflow-fields,
+  .detail-grid,
+  .qa-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .workflow-fields,
+  .detail-grid,
+  .qa-grid,
+  .form-grid,
+  .asset-filters,
+  .asset-inline-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .form-field input,
+  .form-field select,
+  .form-field textarea,
+  .workflow-fields input,
+  .workflow-fields select,
+  .login-card input,
+  .asset-filters input,
+  .asset-filters select,
+  .asset-inline-form input,
+  .asset-inline-form select {
+    width: 100%;
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .primary-btn,
+  .ghost-btn,
+  .finance-tabs button,
+  .form-actions button {
+    min-height: 44px;
+  }
+
+  .form-actions,
+  .login-actions,
+  .workflow-form-actions {
+    flex-wrap: wrap;
+  }
+
+  .form-actions .primary-btn,
+  .form-actions .ghost-btn,
+  .workflow-form-actions .primary-btn,
+  .workflow-form-actions .ghost-btn {
+    flex: 1 1 140px;
+  }
+}
+
 @media (max-width: 520px) {
   .workflow-fields,
   .detail-grid,
