@@ -286,9 +286,9 @@ class AgriculturalPeriodApiTests(TestCase):
         self.assertEqual(float(historical.data["input_allocated_hectares"]), 6.0)
         self.assertEqual(float(historical.data["outstanding_recovery_tonnes"]), 4.0)
         self.assertEqual(float(historical.data["arda_requested_hectares"]), 10.0)
-        self.assertEqual(float(historical.data["arda_approved_hectares"]), 8.0)
+        self.assertNotIn("arda_approved_hectares", historical.data)
         self.assertEqual(float(historical.data["charts"]["arda_hectares"]["requested"]), 10.0)
-        self.assertEqual(float(historical.data["charts"]["arda_hectares"]["approved"]), 8.0)
+        self.assertNotIn("approved", historical.data["charts"]["arda_hectares"])
         self.assertEqual(float(historical.data["charts"]["arda_hectares"]["allocated"]), 6.0)
         self.assertEqual(historical.data["charts"]["production_by_crop"][0]["label"], "Maize")
         self.assertEqual(float(historical.data["charts"]["production_by_crop"][0]["tonnes"]), 4.0)
@@ -309,7 +309,8 @@ class AgriculturalPeriodApiTests(TestCase):
         response = self.client.get(reverse("dashboard-summary"), {"season": self.current_season.id, "crop_season": "WINTER"})
         self.assertEqual(response.status_code, 200, response.data)
         self.assertEqual(float(response.data["arda_requested_hectares"]), 17.0)
-        self.assertEqual(float(response.data["arda_approved_hectares"]), 0.0)
+        self.assertEqual(response.data["arda_request_count"], 2)
+        self.assertNotIn("arda_approved_hectares", response.data)
 
     def test_subscription_search_and_pagination_follow_the_agricultural_year(self):
         old = self.client.get(reverse("farmer-subscription-list"), {"season": "2025/2026", "search": "Moyo", "page": 1, "page_size": 25})

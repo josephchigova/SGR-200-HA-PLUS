@@ -52,7 +52,7 @@ describe('DashboardPage period requests', () => {
           subscription_receipts: [{ month: '2026-10', amount: '700.00' }],
           subscription_receipts_undated: '0.00',
           subscription_status: { paid: 2, partial: 1, unpaid: 3 },
-          arda_hectares: { requested: '10.00', approved: '8.00', allocated: '6.00' },
+          arda_hectares: { requested: '10.00', allocated: '6.00' },
           production_by_crop: [],
           deliveries: [],
           receivables: { subscription_outstanding: '300.00', input_debt: '50.00' },
@@ -67,8 +67,9 @@ describe('DashboardPage period requests', () => {
 
     expect((await screen.findAllByText('Oct 26')).length).toBeGreaterThan(0)
     expect(screen.getAllByText('Requested: 10 ha').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Approved: 8 ha').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Allocated: 6 ha').length).toBeGreaterThan(0)
+    expect(screen.queryByText('ARDA Approved')).toBeNull()
+    expect(screen.queryByText(/Approved:/)).toBeNull()
     expect(screen.getAllByText('Paid: 2').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Partially paid: 1').length).toBeGreaterThan(0)
     expect(screen.getAllByText('Unpaid: 3').length).toBeGreaterThan(0)
@@ -78,5 +79,46 @@ describe('DashboardPage period requests', () => {
     expect(screen.getByText('Tariro Moyo')).toBeTruthy()
     expect(screen.getAllByText('No data available for the selected period.').length).toBeGreaterThan(0)
     expect(screen.queryByText('Maize')).toBeNull()
+  })
+
+  it('shows the same saved request total to a second view and after a fresh load', async () => {
+    apiClient.get.mockResolvedValue({
+      data: {
+        arda_requested_hectares: '20000.00',
+        arda_request_count: 1,
+        charts: { arda_hectares: { requested: '20000.00', allocated: '0.00' } },
+      },
+    })
+
+    const first = render(<DashboardPage selectedSeason={season} cropSeason="SUMMER" periodStatus="ready" />)
+    const requested = await screen.findByText('ARDA Requested')
+    await waitFor(() => expect(requested.closest('article').textContent).toContain('20,000'))
+    expect(screen.queryByText('ARDA Approved')).toBeNull()
+    expect(localStorage.getItem('sgr_dashboard_summary')).toBeNull()
+    first.unmount()
+
+    apiClient.get.mockResolvedValue({
+      data: {
+        arda_requested_hectares: '15000.00',
+        arda_request_count: 1,
+        charts: { arda_hectares: { requested: '15000.00', allocated: '0.00' } },
+      },
+    })
+    const reloadedView = render(<DashboardPage selectedSeason={season} cropSeason="SUMMER" periodStatus="ready" />)
+    const reloaded = await screen.findByText('ARDA Requested')
+    await waitFor(() => expect(reloaded.closest('article').textContent).toContain('15,000'))
+    expect(reloaded.closest('article').textContent).not.toContain('20,000')
+    reloadedView.unmount()
+
+    render(
+      <>
+        <DashboardPage selectedSeason={season} cropSeason="SUMMER" periodStatus="ready" />
+        <DashboardPage selectedSeason={season} cropSeason="SUMMER" periodStatus="ready" />
+      </>,
+    )
+    await waitFor(() => expect(screen.getAllByText('ARDA Requested')).toHaveLength(2))
+    screen.getAllByText('ARDA Requested').forEach((card) => {
+      expect(card.closest('article').textContent).toContain('15,000')
+    })
   })
 })

@@ -30,6 +30,7 @@ describe('WorkflowPage', () => {
 
     expect(screen.queryByLabelText('Request number')).toBeNull()
     expect(screen.queryByLabelText('Season')).toBeNull()
+    expect(screen.queryByRole('columnheader', { name: 'Status' })).toBeNull()
     expect(await screen.findByRole('option', { name: 'SGR Programme' })).toBeTruthy()
     fireEvent.change(screen.getByLabelText('Requested hectares'), { target: { value: '125.50' } })
     fireEvent.change(screen.getByLabelText('Programme'), { target: { value: '17' } })

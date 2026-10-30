@@ -55,7 +55,6 @@ export const workflowPages = {
       { key: 'crop', label: 'Crop' }, { key: 'requested_hectares', label: 'Requested HA' },
       { key: 'allocated_hectares', label: 'Allocated HA' }, { key: 'available_hectares', label: 'Available HA' },
       { key: 'total_farmers', label: 'Farmers' },
-      { key: 'status', label: 'Status' },
     ],
     forms: [
       {

@@ -6,7 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from apps.accounts.permissions import FarmerWorkflowPermission, ProgrammePermission
-from apps.arda_requests.models import ARDAFarmerRequest, ARDARequestBatch
+from apps.arda_requests.models import ARDARequestBatch
 from apps.inputs.models import InputAllocation
 from apps.production.models import FarmerProduction, GMBDelivery
 from apps.recovery.models import InputDebt
@@ -131,12 +131,9 @@ class FarmerViewSet(viewsets.ModelViewSet):
             "total_hectares": Farm.objects.filter(farmer_id__in=accessible_farmers).aggregate(total=Sum("total_hectares"))["total"] or 0,
         }
 
-        arda_requests = ARDAFarmerRequest.objects.filter(farmer_id__in=accessible_farmers)
-        arda_requests = filter_by_agricultural_year(arda_requests, season, season_name, relation="request_batch__season")
-        if crop_season:
-            arda_requests = filter_by_crop_name(arda_requests, crop_season, "request_batch__crop")
-        # Requested hectares come from the request batch. A saved batch with no farmer lines
-        # is still a request. Approved hectares stay on the farmer-level approvals.
+        # Requested hectares come from the saved request batch. A batch with no farmer
+        # lines is still a request. Recording a request means ARDA has already approved it,
+        # so the dashboard does not keep a second approval total.
         request_batches = ARDARequestBatch.objects.exclude(status=ARDARequestBatch.STATUS_REJECTED)
         request_batches = filter_by_agricultural_year(request_batches, season, season_name, relation="season")
         if crop_season:
@@ -161,9 +158,7 @@ class FarmerViewSet(viewsets.ModelViewSet):
         summary.update(
             {
                 "arda_requested_hectares": request_batches.aggregate(total=Sum("requested_hectares"))["total"] or 0,
-                "arda_approved_hectares": arda_requests.filter(
-                    status=ARDAFarmerRequest.STATUS_APPROVED
-                ).aggregate(total=Sum("approved_hectares"))["total"] or 0,
+                "arda_request_count": request_batches.count(),
                 "input_allocated_hectares": allocations.aggregate(total=Sum("hectares"))["total"] or 0,
                 "production": productions.aggregate(total=Sum("actual_production"))["total"] or 0,
                 "grain_delivered_tonnes": deliveries.aggregate(total=Sum("tonnes"))["total"] or 0,
@@ -187,7 +182,6 @@ class FarmerViewSet(viewsets.ModelViewSet):
             deliveries=deliveries,
             debts=debts,
             requested=summary["arda_requested_hectares"],
-            approved=summary["arda_approved_hectares"],
             allocated=summary["input_allocated_hectares"],
         )
         return Response(summary)

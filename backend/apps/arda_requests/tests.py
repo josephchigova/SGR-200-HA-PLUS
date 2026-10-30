@@ -540,3 +540,64 @@ class ARDARequestTests(TestCase):
         blocked = self.client.delete(reverse("arda-request-batch-detail", args=[kept.pk]))
         self.assertEqual(blocked.status_code, 400)
         self.assertTrue(ARDARequestBatch.objects.filter(pk=kept.pk).exists())
+
+    def test_saved_request_is_the_same_dashboard_total_for_every_client(self):
+        from apps.programmes.models import Crop
+
+        Crop.objects.create(name="Maize", category=Crop.CATEGORY_SUMMER, active=True)
+        Crop.objects.create(name="Wheat", category=Crop.CATEGORY_WINTER, active=True)
+        season = Season.objects.create(name="2026/2027", start_date="2026-10-01", end_date="2027-09-30", status=Season.STATUS_ACTIVE)
+        programme = Programme.objects.create(
+            name="Persisted Programme", code="PERSIST-PROG", season=season, announced_hectares="20000.00", status=Programme.STATUS_OPEN,
+        )
+        summer = {"season": season.pk, "season_name": season.name, "crop_season": "SUMMER"}
+        winter = {"season": season.pk, "season_name": season.name, "crop_season": "WINTER"}
+
+        created = self.client.post(
+            reverse("arda-request-batch-list"),
+            {"programme": programme.pk, "season": season.pk, "crop": "Maize", "requested_hectares": "20000.00"},
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.data)
+        saved = ARDARequestBatch.objects.get(pk=created.data["id"])
+        self.assertEqual(saved.requested_hectares, Decimal("20000.00"))
+        self.assertEqual(saved.season_id, season.pk)
+
+        desktop = self.client.get(reverse("dashboard-summary"), summer)
+        self.assertEqual(desktop.status_code, 200, desktop.data)
+        self.assertEqual(float(desktop.data["arda_requested_hectares"]), 20000.0)
+        self.assertEqual(desktop.data["arda_request_count"], 1)
+        self.assertNotIn("arda_approved_hectares", desktop.data)
+        self.assertNotIn("approved", desktop.data["charts"]["arda_hectares"])
+
+        viewer = User.objects.create_user(
+            email="viewer-arda@example.com", username="viewer-arda", password="StrongPass123!", role=User.ROLE_VIEWER,
+        )
+        mobile = APIClient()
+        mobile.force_authenticate(user=viewer)
+        mobile_summary = mobile.get(reverse("dashboard-summary"), summer)
+        self.assertEqual(mobile_summary.status_code, 200, mobile_summary.data)
+        self.assertEqual(mobile_summary.data["arda_requested_hectares"], desktop.data["arda_requested_hectares"])
+        self.assertEqual(mobile_summary.data["arda_request_count"], desktop.data["arda_request_count"])
+        listed = mobile.get(reverse("arda-request-batch-list"), summer)
+        self.assertEqual(listed.status_code, 200, listed.data)
+        rows = listed.data["results"] if isinstance(listed.data, dict) else listed.data
+        self.assertEqual([row["id"] for row in rows], [saved.pk])
+        self.assertEqual(Decimal(str(rows[0]["requested_hectares"])), Decimal("20000.00"))
+
+        updated = self.client.patch(
+            reverse("arda-request-batch-detail", kwargs={"pk": saved.pk}),
+            {"requested_hectares": "15000.00"},
+            format="json",
+        )
+        self.assertEqual(updated.status_code, 200, updated.data)
+        self.assertEqual(ARDARequestBatch.objects.filter(programme=programme, season=season, crop__iexact="Maize").count(), 1)
+        saved.refresh_from_db()
+        self.assertEqual(saved.requested_hectares, Decimal("15000.00"))
+
+        refreshed = self.client.get(reverse("dashboard-summary"), summer)
+        self.assertEqual(float(refreshed.data["arda_requested_hectares"]), 15000.0)
+        self.assertEqual(refreshed.data["arda_request_count"], 1)
+        other_season = self.client.get(reverse("dashboard-summary"), winter)
+        self.assertEqual(float(other_season.data["arda_requested_hectares"]), 0.0)
+        self.assertEqual(other_season.data["arda_request_count"], 0)

@@ -17,7 +17,7 @@ def _amount(value):
     return f"{Decimal(str(value or 0)):.2f}"
 
 
-def build_dashboard_charts(*, farmers, season_name, season_start, season_end, allocations, productions, deliveries, debts, requested, approved, allocated):
+def build_dashboard_charts(*, farmers, season_name, season_start, season_end, allocations, productions, deliveries, debts, requested, allocated):
     registrations = farmers
     receipts = SubscriptionPayment.objects.all()
     legacy_receipts = FarmerSubscription.objects.filter(paid_amount__gt=0)
@@ -80,7 +80,7 @@ def build_dashboard_charts(*, farmers, season_name, season_start, season_end, al
         "subscription_receipts": [{"month": month, "amount": _amount(amount)} for month, amount in sorted(receipt_map.items())],
         "subscription_receipts_undated": _amount(undated_receipts),
         "subscription_status": status_counts,
-        "arda_hectares": {"requested": _amount(requested), "approved": _amount(approved), "allocated": _amount(allocated)},
+        "arda_hectares": {"requested": _amount(requested), "allocated": _amount(allocated)},
         "allocations_by_crop": [
             {"label": row["crop"] or "Unspecified", "hectares": _amount(row["hectares"])}
             for row in allocations.values("crop").annotate(hectares=Sum("hectares")).order_by("crop")

@@ -38,10 +38,9 @@ function DashboardCharts({ charts = {} }) {
       <GroupedBarChart
         title="ARDA hectares"
         unit="ha"
-        note="Requested, approved and allocated hectares stay separate."
+        note="Requested and allocated hectares for the selected agricultural year and season."
         series={[
-          { label: 'Requested', value: arda.requested, color: '#64748b' },
-          { label: 'Approved', value: arda.approved, color: '#1f6b45' },
+          { label: 'Requested', value: arda.requested, color: '#1f6b45' },
           { label: 'Allocated', value: arda.allocated, color: '#0f766e' },
         ]}
       />
@@ -90,13 +89,14 @@ function DashboardPage({ selectedSeason = null, cropSeason = '', periodStatus = 
     verified_farmers: 0,
     total_hectares: 0,
     arda_requested_hectares: 0,
-    arda_approved_hectares: 0,
+    arda_request_count: 0,
     input_allocated_hectares: 0,
     production: 0,
     grain_delivered_tonnes: 0,
   })
   const [error, setError] = useState('')
   const [loadedKey, setLoadedKey] = useState('')
+  const [reloadToken, setReloadToken] = useState(0)
   const requestKey = `${periodStatus}:${selectedSeason?.id || ''}:${selectedSeason?.name || ''}:${cropSeason}`
   const signedOut = periodStatus === 'ready' && Boolean(selectedSeason) && !localStorage.getItem('sgr_access_token')
   const periodMessage = periodStatus === 'error'
@@ -107,6 +107,18 @@ function DashboardPage({ selectedSeason = null, cropSeason = '', periodStatus = 
         ? 'Please sign in to view the dashboard.'
         : ''
   const loading = !periodMessage && (periodStatus === 'loading' || loadedKey !== requestKey)
+
+  useEffect(() => {
+    const refresh = () => {
+      if (document.visibilityState === 'visible') setReloadToken((value) => value + 1)
+    }
+    document.addEventListener('visibilitychange', refresh)
+    window.addEventListener('focus', refresh)
+    return () => {
+      document.removeEventListener('visibilitychange', refresh)
+      window.removeEventListener('focus', refresh)
+    }
+  }, [])
 
   useEffect(() => {
     if (periodStatus !== 'ready' || !selectedSeason || !localStorage.getItem('sgr_access_token')) return undefined
@@ -121,7 +133,7 @@ function DashboardPage({ selectedSeason = null, cropSeason = '', periodStatus = 
       try {
         const response = await apiClient.get(`/farmers/dashboard-summary/?${params.toString()}`)
         if (!active) return
-        setSummary((current) => ({ ...current, ...(response.data || {}) }))
+        setSummary(response.data || {})
         setError('')
         setLoadedKey(requestKey)
       } catch {
@@ -133,7 +145,7 @@ function DashboardPage({ selectedSeason = null, cropSeason = '', periodStatus = 
 
     loadSummary()
     return () => { active = false }
-  }, [cropSeason, periodStatus, requestKey, selectedSeason])
+  }, [cropSeason, periodStatus, reloadToken, requestKey, selectedSeason])
 
   const receivables = summary.charts?.receivables || {}
   const outstanding = (Number(receivables.subscription_outstanding) || 0) + (Number(receivables.input_debt) || 0)
@@ -143,8 +155,8 @@ function DashboardPage({ selectedSeason = null, cropSeason = '', periodStatus = 
     ['Total Farmers', count(summary.registered_farmers), ''],
     ['Verified Farmers', count(summary.verified_farmers), ''],
     ['Total Hectares', quantity(summary.total_hectares), 'ha'],
+    ['ARDA Requests', count(summary.arda_request_count), ''],
     ['ARDA Requested', quantity(summary.arda_requested_hectares), 'ha'],
-    ['ARDA Approved', quantity(summary.arda_approved_hectares), 'ha'],
     ['Inputs Allocated', quantity(summary.input_allocated_hectares), 'ha'],
     ['Production', quantity(summary.production), 'tonnes'],
     ['Grain Delivered', quantity(summary.grain_delivered_tonnes), 'tonnes'],
