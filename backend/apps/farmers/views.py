@@ -216,7 +216,7 @@ class FarmerViewSet(viewsets.ModelViewSet):
 
 
 class FarmViewSet(viewsets.ModelViewSet):
-    queryset = Farm.objects.select_related("farmer", "province", "district", "ward", "verified_by").all()
+    queryset = Farm.objects.select_related("farmer", "province", "district", "ward", "cluster", "verified_by").all()
     serializer_class = FarmSerializer
     permission_classes = [permissions.IsAuthenticated, FarmerWorkflowPermission]
 
@@ -234,6 +234,8 @@ class FarmViewSet(viewsets.ModelViewSet):
         farmer_id = self.request.query_params.get("farmer")
         if farmer_id:
             queryset = queryset.filter(farmer_id=farmer_id)
+        if self.request.query_params.get("include_inactive") != "1":
+            queryset = queryset.filter(is_active=True)
         return queryset
 
 

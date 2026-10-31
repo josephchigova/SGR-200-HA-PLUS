@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import apiClient from '../api/client'
+import { formatDisplay } from '../formatNumbers'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
 
 const listData = (data) => (Array.isArray(data) ? data : data?.results || [])
@@ -492,7 +493,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
       {summaryEndpoint ? <>
         <div className="workflow-list-heading"><h4>Request batches and capacity</h4><span>{visibleSummaryRows.length} batches</span></div>
         <div className="table-wrap"><table className="data-table"><thead><tr>{summaryColumns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead><tbody>
-          {visibleSummaryRows.map((row) => <tr key={row.id}>{summaryColumns.map((column) => <td key={column.key}>{column.render ? column.render(row) : row[column.key] ?? '—'}</td>)}</tr>)}
+          {visibleSummaryRows.map((row) => <tr key={row.id}>{summaryColumns.map((column) => <td key={column.key}>{column.render ? column.render(row) : formatDisplay(column.key, row[column.key]) ?? '—'}</td>)}</tr>)}
           {!loading && !visibleSummaryRows.length ? <tr><td colSpan={summaryColumns.length}>No request batches yet.</td></tr> : null}
         </tbody></table></div>
       </> : null}
@@ -531,7 +532,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
           <tbody>
             {visibleRows.map((row) => (
               <tr key={row.id}>
-                {columns.map((column) => <td key={column.key}>{column.render ? column.render(row) : row[column.key] ?? '—'}</td>)}
+                {columns.map((column) => <td key={column.key}>{column.render ? column.render(row) : formatDisplay(column.key, row[column.key]) ?? '—'}</td>)}
                 {showActions ? <td>
                   {approveAction && row.status === 'PENDING' ? <button className="primary-btn small" type="button" onClick={() => approve(row)}>Approve</button> : null}
                   {editAction && !seasonReadOnly ? <button className="ghost-btn small" type="button" onClick={() => startEditing(row)}>{editButtonLabel}</button> : null}

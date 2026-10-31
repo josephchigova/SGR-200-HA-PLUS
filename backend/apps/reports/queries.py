@@ -81,10 +81,19 @@ def apply_common(qs, spec, params):
     qs = scope_queryset(qs, params.user, spec.province_field, spec.district_field, spec.cluster_field)
     if spec.preset:
         qs = qs.filter(**spec.preset)
+    include_blank_dates = getattr(spec, "include_blank_dates", False)
     if params.start and spec.date_field:
-        qs = qs.filter(**{f"{spec.date_field}__gte": params.start})
+        lookup = {f"{spec.date_field}__gte": params.start}
+        if include_blank_dates:
+            qs = qs.filter(Q(**lookup) | Q(**{f"{spec.date_field}__isnull": True}))
+        else:
+            qs = qs.filter(**lookup)
     if params.end and spec.date_field:
-        qs = qs.filter(**{f"{spec.date_field}__lte": params.end})
+        lookup = {f"{spec.date_field}__lte": params.end}
+        if include_blank_dates:
+            qs = qs.filter(Q(**lookup) | Q(**{f"{spec.date_field}__isnull": True}))
+        else:
+            qs = qs.filter(**lookup)
     if params.province_id and spec.province_field:
         qs = qs.filter(**{spec.province_field: params.province_id})
     if params.district_id and spec.district_field:
@@ -161,9 +170,9 @@ def _farmer_queryset(qs):
         ward_name=Coalesce(F("ward__name"), Value("Not recorded")),
         cluster_name=Coalesce(F("cluster__name"), Value("Not recorded")),
         farm_name=Subquery(first_farm.values("farm_name")[:1]),
-        total_hectares=Coalesce(Sum("farms__total_hectares"), Value(ZERO), output_field=MONEY),
-        arable_hectares=Coalesce(Sum("farms__arable_hectares"), Value(ZERO), output_field=MONEY),
-        farm_count=Count("farms", distinct=True),
+        total_hectares=Coalesce(Sum("farms__total_hectares", filter=Q(farms__is_active=True)), Value(ZERO), output_field=MONEY),
+        arable_hectares=Coalesce(Sum("farms__arable_hectares", filter=Q(farms__is_active=True)), Value(ZERO), output_field=MONEY),
+        farm_count=Count("farms", filter=Q(farms__is_active=True), distinct=True),
         officer_name=_officer_label(),
     )
 
@@ -248,17 +257,141 @@ def verification_locations(spec, params):
     ).annotate(farmers=Count("id", distinct=True)).order_by("province_name", "district_name")
 
 
-def subscriptions(spec, params):
-    qs = apply_common(FarmerSubscription.objects.select_related("farmer"), spec, params)
-    return qs.annotate(
+def _subscription_status_expression(paid_field, expected_field):
+    return Case(
+        When(**{f"{paid_field}__lte": 0}, then=Value("UNPAID")),
+        When(**{f"{paid_field}__gte": F(expected_field)}, then=Value("PAID")),
+        default=Value("PARTIAL"),
+        output_field=CharField(),
+    )
+
+
+def _apply_subscription_mode(qs, mode, outstanding_field="outstanding_amount"):
+    if mode == "UNPAID":
+        return qs.filter(report_status="UNPAID")
+    if mode == "PARTIAL":
+        return qs.filter(report_status="PARTIAL")
+    if mode == "PAID":
+        return qs.filter(report_status="PAID")
+    if mode == "OUTSTANDING":
+        return qs.filter(**{f"{outstanding_field}__gt": 0})
+    return qs
+
+
+def _subscription_roster(spec, params, year_name):
+    """Classify every farmer in scope for one agricultural year.
+
+    This follows the subscription screen: the expected amount comes from active
+    arable hectares, and a farmer with no payment record is unpaid. Geography
+    filters are applied to the farmer before that classification.
+    """
+    from apps.production.seasonal_services import SeasonalSubscriptionService
+
+    money = DecimalField(max_digits=14, decimal_places=2)
+    arable = Farm.objects.filter(farmer_id=OuterRef("pk"), is_active=True).values("farmer_id").annotate(
+        total=Sum("arable_hectares")
+    ).values("total")[:1]
+    paid = FarmerSubscription.objects.filter(farmer_id=OuterRef("pk"), season__iexact=year_name).order_by("pk")
+    farmers = scope_queryset(Farmer.objects.all(), params.user, "province_id", "district_id", "cluster_id")
+    if params.province_id:
+        farmers = farmers.filter(province_id=params.province_id)
+    if params.district_id:
+        farmers = farmers.filter(district_id=params.district_id)
+    if params.ward_id:
+        farmers = farmers.filter(ward_id=params.ward_id)
+    if params.cluster_id:
+        farmers = farmers.filter(cluster_id=params.cluster_id)
+    if params.membership:
+        farmers = farmers.filter(membership_number__iexact=params.membership)
+    if params.farmer:
+        farmers = _filter_farmer(farmers, "", params.farmer)
+    farmers = farmers.annotate(
+        paid_amount=Coalesce(Subquery(paid.values("paid_amount")[:1], output_field=money), Value(Decimal("0.00")), output_field=money),
+        payment_date=Subquery(paid.values("payment_date")[:1]),
+        summary_arable=Coalesce(Subquery(arable, output_field=money), Value(Decimal("0.00")), output_field=money),
+    ).annotate(
+        expected_amount=Case(
+            When(summary_arable__gte=SeasonalSubscriptionService.LARGE_FARM_THRESHOLD, then=Value(SeasonalSubscriptionService.LARGE_FARM_SUBSCRIPTION_AMOUNT)),
+            default=Value(SeasonalSubscriptionService.STANDARD_SUBSCRIPTION_AMOUNT),
+            output_field=money,
+        ),
+    ).annotate(
+        outstanding_amount=Case(
+            When(paid_amount__gte=F("expected_amount"), then=Value(Decimal("0.00"))),
+            default=F("expected_amount") - F("paid_amount"),
+            output_field=money,
+        ),
+        report_status=_subscription_status_expression("paid_amount", "expected_amount"),
+    )
+    if params.start or params.end:
+        # A farmer who has never paid has no payment date. Keep that farmer in the
+        # status report instead of treating the missing date as "outside the range".
+        if params.start and params.end:
+            dated = Q(payment_date__isnull=True) | Q(payment_date__gte=params.start, payment_date__lte=params.end)
+        elif params.start:
+            dated = Q(payment_date__isnull=True) | Q(payment_date__gte=params.start)
+        else:
+            dated = Q(payment_date__isnull=True) | Q(payment_date__lte=params.end)
+        farmers = farmers.filter(dated)
+    if params.payment_status:
+        farmers = farmers.filter(report_status=params.payment_status)
+    farmers = _apply_subscription_mode(farmers, spec.mode)
+    return farmers.annotate(
+        farmer_name=F("full_name"),
+        province_name=Coalesce(F("province__name"), Value("Not recorded")),
+        district_name=Coalesce(F("district__name"), Value("Not recorded")),
+        season=Value(year_name),
+        crop_season=Value("Shared by Summer and Winter"),
+        payment_status=F("report_status"),
+    ).values(
+        "id", "farmer_name", "membership_number", "national_id", "phone_primary", "province_name",
+        "district_name", "season", "crop_season", "expected_amount", "paid_amount", "outstanding_amount",
+        "payment_status", "payment_date",
+    ).order_by("farmer_name", "id")
+
+
+def _stored_subscriptions(spec, params):
+    saved_preset = spec.preset
+    saved_status_field = spec.payment_status_field
+    spec.preset = {}
+    spec.payment_status_field = ""
+    try:
+        qs = apply_common(FarmerSubscription.objects.select_related("farmer"), spec, params)
+    finally:
+        spec.preset = saved_preset
+        spec.payment_status_field = saved_status_field
+    qs = qs.annotate(
+        report_status=_subscription_status_expression("paid_amount", "expected_amount"),
+    )
+    if params.payment_status:
+        qs = qs.filter(report_status=params.payment_status)
+    qs = _apply_subscription_mode(qs, spec.mode)
+    query = qs.annotate(
         farmer_name=F("farmer__full_name"),
         membership_number=F("farmer__membership_number"),
+        national_id=F("farmer__national_id"),
+        phone_primary=F("farmer__phone_primary"),
         province_name=Coalesce(F("farmer__province__name"), Value("Not recorded")),
         district_name=Coalesce(F("farmer__district__name"), Value("Not recorded")),
+        crop_season=Value("Shared by Summer and Winter"),
+        status_label=F("report_status"),
     ).values(
-        "id", "farmer_name", "membership_number", "province_name", "district_name", "season",
-        "expected_amount", "paid_amount", "outstanding_amount", "payment_status", "payment_date",
+        "id", "farmer_name", "membership_number", "national_id", "phone_primary", "province_name",
+        "district_name", "season", "crop_season", "expected_amount", "paid_amount", "outstanding_amount",
+        "payment_date", "status_label",
     ).order_by("farmer_name", "season", "id")
+    rows = []
+    for row in query:
+        row["payment_status"] = row.pop("status_label")
+        rows.append(row)
+    return rows
+
+
+def subscriptions(spec, params):
+    year_name = _year_name(params.year_id) if params.year_id else ""
+    if year_name:
+        return _subscription_roster(spec, params, year_name)
+    return _stored_subscriptions(spec, params)
 
 
 def subscription_payments(spec, params):
@@ -362,14 +495,50 @@ def programme_participation(spec, params):
 
 
 def arda_batches(spec, params):
+    """Use the same requested, allocated, available and farmer figures as the ARDA page.
+
+    The page reads batch.requested_hectares and a live allocation snapshot. The stored
+    total_requested_hectares and total_farmers fields are farmer-line rollups and can
+    stay at zero when the formal request has hectares but no farmer lines.
+    """
+    from apps.arda_requests.services import ARDARequestBatchService
+
     qs = apply_common(ARDARequestBatch.objects.select_related("programme", "season"), spec, params)
-    return qs.annotate(
-        programme_name=F("programme__name"),
-        season_name=F("season__name"),
-    ).values(
-        "id", "request_number", "programme_name", "season_name", "crop", "date_created",
-        "total_farmers", "total_requested_hectares", "requested_hectares",
-    ).order_by("-date_created", "-id")
+    if params.province_id:
+        qs = qs.filter(
+            Q(farmer_requests__farmer__province_id=params.province_id)
+            | Q(programme__input_allocations__farmer__province_id=params.province_id, programme__input_allocations__status__in=["PENDING", "COLLECTED"])
+        ).distinct()
+    if params.district_id:
+        qs = qs.filter(
+            Q(farmer_requests__farmer__district_id=params.district_id)
+            | Q(programme__input_allocations__farmer__district_id=params.district_id, programme__input_allocations__status__in=["PENDING", "COLLECTED"])
+        ).distinct()
+    crop_seasons = {name.lower(): category for name, category in Crop.objects.values_list("name", "category")}
+    season_labels = {"SUMMER": "Summer", "WINTER": "Winter"}
+    rows = []
+    for batch in qs.order_by("-date_created", "-id"):
+        snapshot = ARDARequestBatchService.batch_snapshot(batch)
+        farmer_ids = set(ARDARequestBatchService._allocation_queryset_for_scope(
+            programme=batch.programme,
+            season=batch.season,
+            crop_label=ARDARequestBatchService._normalize_crop(batch.crop),
+        ).values_list("farmer_id", flat=True))
+        rows.append({
+            "id": batch.pk,
+            "request_number": batch.request_number,
+            "date_created": batch.date_created,
+            "programme_name": batch.programme.name if batch.programme_id else "",
+            "season_name": batch.season.name if batch.season_id else "",
+            "crop_season": season_labels.get(crop_seasons.get((batch.crop or "").lower(), ""), ""),
+            "crop": batch.crop,
+            "requested_hectares": batch.requested_hectares,
+            "allocated_hectares": snapshot["allocated_hectares"],
+            "available_hectares": snapshot["available_hectares"],
+            "farmer_count": snapshot["unique_farmers"],
+            "_farmer_ids": farmer_ids,
+        })
+    return rows
 
 
 def arda_lines(spec, params):
@@ -408,7 +577,7 @@ def arda_groups(spec, params):
     label = F("crop") if spec.group_field == "crop" else Coalesce(F(spec.group_field), Value("Not recorded"))
     return qs.annotate(label=label).values("label").annotate(
         requests=Count("id"),
-        hectares=Coalesce(Sum("total_requested_hectares"), Value(ZERO), output_field=MONEY),
+        hectares=Coalesce(Sum("requested_hectares"), Value(ZERO), output_field=MONEY),
     ).order_by("label")
 
 

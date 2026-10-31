@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from .catalog import CATEGORIES, FILTER_LABELS, LIMITATIONS, spec_by_code, specs_for
-from .engine import ReportParams, analytics, csv_rows, preview, render_pdf, visible_spec
+from .engine import ReportParams, analytics, csv_rows, export_filename, preview, render_pdf, visible_spec
 from .formatting import csv_safe
 from .models import ReportTemplate
 from .serializers import ReportTemplateSerializer
@@ -100,12 +100,14 @@ class ReportExportView(APIView):
         spec, params = resolved
         export_format = (request.query_params.get("file_format") or "").lower()
         if export_format == "pdf":
-            response = HttpResponse(render_pdf(spec, params), content_type="application/pdf")
-            response["Content-Disposition"] = f'attachment; filename="{spec.code}.pdf"'
+            document = render_pdf(spec, params)
+            response = HttpResponse(document, content_type="application/pdf")
+            response["Content-Disposition"] = f'attachment; filename="{export_filename(spec, params, "pdf")}"'
+            response["Content-Length"] = str(len(document))
             return response
         if export_format == "csv":
             response = StreamingHttpResponse(_csv_stream(spec, params), content_type="text/csv; charset=utf-8")
-            response["Content-Disposition"] = f'attachment; filename="{spec.code}.csv"'
+            response["Content-Disposition"] = f'attachment; filename="{export_filename(spec, params, "csv")}"'
             return response
         return Response({"detail": "Choose file_format=pdf or file_format=csv."}, status=400)
 

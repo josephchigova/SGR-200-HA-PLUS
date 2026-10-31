@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import apiClient from '../api/client'
 import FarmLocationFields from '../components/FarmLocationFields'
 import { coordinateError, googleMapsUrl } from '../coordinates'
+import { formatDisplay } from '../formatNumbers'
 
 function FarmerDetailsPage() {
   const { id } = useParams()
@@ -15,7 +16,7 @@ function FarmerDetailsPage() {
   const [savingFarm, setSavingFarm] = useState(false)
   const [error, setError] = useState('')
 
-  const loadDetails = useCallback(() => Promise.all([apiClient.get(`/farmers/${id}/`), apiClient.get('/farms/', { params: { farmer: id } })])
+  const loadDetails = useCallback(() => Promise.all([apiClient.get(`/farmers/${id}/`), apiClient.get('/farms/', { params: { farmer: id, include_inactive: '1' } })])
       .then(([farmerResponse, farmResponse]) => {
         setFarmer(farmerResponse.data)
         setFarms(farmResponse.data?.results || farmResponse.data || [])
@@ -64,6 +65,12 @@ function FarmerDetailsPage() {
         latitude: String(farmForm.latitude).trim() || null,
         longitude: String(farmForm.longitude).trim() || null,
       }
+      if (!editingFarmId) {
+        payload.province = farmer?.province || null
+        payload.district = farmer?.district || null
+        payload.ward = farmer?.ward || null
+        payload.cluster = farmer?.cluster || null
+      }
       if (editingFarmId) {
         await apiClient.patch(`/farms/${editingFarmId}/`, payload)
       } else {
@@ -76,6 +83,15 @@ function FarmerDetailsPage() {
       setError(data ? Object.values(data).flat().join(' ') : 'Unable to save farm.')
     } finally {
       setSavingFarm(false)
+    }
+  }
+
+  const setFarmActive = async (farm, isActive) => {
+    try {
+      await apiClient.patch(`/farms/${farm.id}/`, { is_active: isActive })
+      await loadDetails()
+    } catch (requestError) {
+      setError(requestError.response?.data ? Object.values(requestError.response.data).flat().join(' ') : 'Unable to update this farm.')
     }
   }
 
@@ -104,6 +120,10 @@ function FarmerDetailsPage() {
         <div><dt>District</dt><dd>{farmer.district_name || '—'}</dd></div>
         <div><dt>Cluster</dt><dd>{farmer.cluster_name || '—'}</dd></div>
         <div><dt>Phone</dt><dd>{farmer.phone_primary || '—'}</dd></div>
+        <div><dt>Farms</dt><dd>{farmer.farm_count ?? farms.length}</dd></div>
+        <div><dt>Total hectares</dt><dd>{formatDisplay('farm_hectares', farmer.farm_hectares) || '0'}</dd></div>
+        <div><dt>Arable hectares</dt><dd>{formatDisplay('arable_hectares', farmer.total_arable_hectares) || '0'}</dd></div>
+        <div><dt>Irrigated hectares</dt><dd>{formatDisplay('irrigated_hectares', farmer.total_irrigated_hectares) || '0'}</dd></div>
       </dl>
       <div className="workflow-list-heading"><h4>Farms</h4><span>{farms.length} records</span><button type="button" className="primary-btn small" onClick={() => { resetFarmForm(); setShowFarmForm(true) }}>Add farm</button></div>
       {showFarmForm ? <form className="workflow-form" onSubmit={saveFarm}>
@@ -117,12 +137,12 @@ function FarmerDetailsPage() {
         </div>
         <div className="workflow-form-actions"><button type="submit" className="primary-btn small" disabled={savingFarm}>{savingFarm ? 'Saving…' : 'Save farm'}</button><button type="button" className="ghost-btn" onClick={resetFarmForm}>Cancel</button></div>
       </form> : null}
-      <div className="table-wrap"><table className="data-table"><thead><tr><th>Farm</th><th>Total ha</th><th>Arable ha</th><th>Irrigated ha</th><th>Farm coordinates</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+      <div className="table-wrap"><table className="data-table"><thead><tr><th>Farm</th><th>Province</th><th>District</th><th>Cluster</th><th>Total ha</th><th>Arable ha</th><th>Irrigated ha</th><th>Farm coordinates</th><th>Status</th><th>Actions</th></tr></thead><tbody>
         {farms.map((farm) => {
           const mapsUrl = googleMapsUrl(farm.latitude, farm.longitude)
-          return <tr key={farm.id}><td>{farm.farm_name}</td><td>{farm.total_hectares}</td><td>{farm.arable_hectares}</td><td>{farm.irrigated_hectares}</td><td>{mapsUrl ? <><span>{farm.latitude}, {farm.longitude}</span> <a href={mapsUrl} target="_blank" rel="noopener noreferrer">View on Google Maps</a></> : '—'}</td><td>{farm.verification_status}</td><td><button type="button" className="ghost-btn small" onClick={() => startFarmEdit(farm)}>Edit</button> <button type="button" className="ghost-btn small" onClick={() => deleteFarm(farm.id)}>Delete</button></td></tr>
+          return <tr key={farm.id}><td>{farm.farm_name}</td><td>{farm.province_name || '—'}</td><td>{farm.district_name || '—'}</td><td>{farm.cluster_name || '—'}</td><td>{formatDisplay('total_hectares', farm.total_hectares)}</td><td>{formatDisplay('arable_hectares', farm.arable_hectares)}</td><td>{formatDisplay('irrigated_hectares', farm.irrigated_hectares)}</td><td>{mapsUrl ? <><span>{farm.latitude}, {farm.longitude}</span> <a href={mapsUrl} target="_blank" rel="noopener noreferrer">View on Google Maps</a></> : '—'}</td><td>{farm.is_active ? farm.verification_status : 'Inactive'}</td><td><button type="button" className="ghost-btn small" onClick={() => startFarmEdit(farm)}>Edit</button> <button type="button" className="ghost-btn small" onClick={() => setFarmActive(farm, !farm.is_active)}>{farm.is_active ? 'Deactivate' : 'Activate'}</button> <button type="button" className="ghost-btn small" onClick={() => deleteFarm(farm.id)}>Delete</button></td></tr>
         })}
-        {!farms.length ? <tr><td colSpan="7">No farm records.</td></tr> : null}
+        {!farms.length ? <tr><td colSpan="10">No farm records.</td></tr> : null}
       </tbody></table></div>
     </section>
   )

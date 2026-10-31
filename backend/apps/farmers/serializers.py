@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from rest_framework import serializers
@@ -62,12 +62,21 @@ class FarmerDocumentSerializer(serializers.ModelSerializer):
 
 
 class FarmSerializer(serializers.ModelSerializer):
+    province_name = serializers.SerializerMethodField()
+    district_name = serializers.SerializerMethodField()
+    ward_name = serializers.SerializerMethodField()
+    cluster_name = serializers.SerializerMethodField()
+
     class Meta:
         model = Farm
         fields = [
             "id",
             "farmer",
             "farm_name",
+            "province_name",
+            "district_name",
+            "ward_name",
+            "cluster_name",
             "province",
             "district",
             "ward",
@@ -77,6 +86,8 @@ class FarmSerializer(serializers.ModelSerializer):
             "total_hectares",
             "arable_hectares",
             "irrigated_hectares",
+            "cluster",
+            "is_active",
             "ownership_type",
             "farm_registration_reference",
             "verification_status",
@@ -84,6 +95,18 @@ class FarmSerializer(serializers.ModelSerializer):
             "verified_by",
             "verification_date",
         ]
+
+    def get_province_name(self, obj):
+        return obj.province.name if obj.province_id else ""
+
+    def get_district_name(self, obj):
+        return obj.district.name if obj.district_id else ""
+
+    def get_ward_name(self, obj):
+        return obj.ward.name if obj.ward_id else ""
+
+    def get_cluster_name(self, obj):
+        return obj.cluster.name if obj.cluster_id else ""
 
     def validate(self, attrs):
         instance = self.instance
@@ -98,18 +121,18 @@ class FarmSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"arable_hectares": ["Arable hectares cannot exceed total hectares."]})
         if irrigated > arable:
             raise serializers.ValidationError({"irrigated_hectares": ["Irrigated hectares cannot exceed arable hectares."]})
-        farmer = attrs.get("farmer", getattr(instance, "farmer", None))
         province = attrs.get("province", getattr(instance, "province", None))
         district = attrs.get("district", getattr(instance, "district", None))
         ward = attrs.get("ward", getattr(instance, "ward", None))
-        if farmer and province and farmer.province_id and farmer.province_id != province.pk:
-            raise serializers.ValidationError({"province": ["Farm province must match the farmer's province."]})
-        if farmer and district and farmer.district_id and farmer.district_id != district.pk:
-            raise serializers.ValidationError({"district": ["Farm district must match the farmer's district."]})
+        cluster = attrs.get("cluster", getattr(instance, "cluster", None))
         if district and province and district.province_id != province.pk:
             raise serializers.ValidationError({"district": ["District does not belong to the selected province."]})
         if ward and district and ward.district_id != district.pk:
             raise serializers.ValidationError({"ward": ["Ward does not belong to the selected district."]})
+        if cluster and district and cluster.district_id != district.pk:
+            raise serializers.ValidationError({"cluster": ["Cluster must belong to the selected district."]})
+        if cluster and province and cluster.province_id != province.pk:
+            raise serializers.ValidationError({"cluster": ["Cluster must belong to the selected province."]})
         if "latitude" in attrs or "longitude" in attrs:
             latitude = attrs["latitude"] if "latitude" in attrs else getattr(instance, "latitude", None)
             longitude = attrs["longitude"] if "longitude" in attrs else getattr(instance, "longitude", None)
@@ -123,7 +146,7 @@ class FarmSerializer(serializers.ModelSerializer):
             self,
             province=province,
             district=district,
-            cluster=getattr(farmer, "cluster", None),
+            cluster=cluster,
         )
         return attrs
 
@@ -131,6 +154,9 @@ class FarmSerializer(serializers.ModelSerializer):
 class FarmerSerializer(serializers.ModelSerializer):
     farm_count = serializers.SerializerMethodField()
     farm_hectares = serializers.SerializerMethodField()
+    total_arable_hectares = serializers.SerializerMethodField()
+    total_irrigated_hectares = serializers.SerializerMethodField()
+    additional_farms = serializers.ListField(child=serializers.DictField(), write_only=True, required=False)
     province_name = serializers.CharField(source="province.name", read_only=True)
     district_name = serializers.CharField(source="district.name", read_only=True)
     cluster_name = serializers.CharField(source="cluster.name", read_only=True)
@@ -180,8 +206,11 @@ class FarmerSerializer(serializers.ModelSerializer):
             "arable_hectares",
             "irrigated_hectares",
             "farm_hectares",
+            "total_arable_hectares",
+            "total_irrigated_hectares",
             "farms",
             "farm_name",
+            "additional_farms",
             "latitude",
             "longitude",
             "registration_date",
@@ -201,6 +230,8 @@ class FarmerSerializer(serializers.ModelSerializer):
             "verification_status",
             "verified_by",
             "farm_hectares",
+            "total_arable_hectares",
+            "total_irrigated_hectares",
             "farms",
         ]
 
@@ -228,6 +259,24 @@ class FarmerSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"arable_hectares": ["Arable hectares cannot exceed total hectares."]})
         if irrigated_hectares > arable_hectares:
             raise serializers.ValidationError({"irrigated_hectares": ["Irrigated hectares cannot exceed arable hectares."]})
+        extra_errors = []
+        for index, farm in enumerate(attrs.get("additional_farms") or []):
+            name = str(farm.get("farm_name") or "").strip()
+            try:
+                total = Decimal(str(farm.get("total_hectares") or "0"))
+                arable = Decimal(str(farm.get("arable_hectares") or "0"))
+                irrigated = Decimal(str(farm.get("irrigated_hectares") or "0"))
+            except (InvalidOperation, ValueError):
+                extra_errors.append(f"Farm {index + 2} has an invalid hectare value.")
+                continue
+            if not name:
+                extra_errors.append(f"Farm {index + 2} needs a farm name.")
+            if total <= 0:
+                extra_errors.append(f"Farm {index + 2} must have total hectares greater than zero.")
+            if arable > total or irrigated > arable or arable < 0 or irrigated < 0:
+                extra_errors.append(f"Farm {index + 2} has hectares that do not fit inside each other.")
+        if extra_errors:
+            raise serializers.ValidationError({"additional_farms": extra_errors})
         if "latitude" in attrs or "longitude" in attrs:
             farm = self.instance.farms.order_by("id").first() if self.instance else None
             latitude = attrs["latitude"] if "latitude" in attrs else getattr(farm, "latitude", None)
@@ -249,6 +298,7 @@ class FarmerSerializer(serializers.ModelSerializer):
         farm_name = validated_data.pop("farm_name", "")
         latitude = validated_data.pop("latitude", None)
         longitude = validated_data.pop("longitude", None)
+        additional_farms = validated_data.pop("additional_farms", [])
         validated_data["verification_status"] = Farmer.STATUS_SUBMITTED
         farmer = Farmer.objects.create(**validated_data)
         Farm.objects.create(
@@ -257,12 +307,25 @@ class FarmerSerializer(serializers.ModelSerializer):
             province=farmer.province,
             district=farmer.district,
             ward=farmer.ward,
+            cluster=farmer.cluster,
             latitude=latitude,
             longitude=longitude,
             total_hectares=hectares,
             arable_hectares=arable_hectares,
             irrigated_hectares=irrigated_hectares,
         )
+        for extra in additional_farms:
+            Farm.objects.create(
+                farmer=farmer,
+                farm_name=str(extra.get("farm_name") or "").strip(),
+                province=farmer.province,
+                district=farmer.district,
+                ward=farmer.ward,
+                cluster=farmer.cluster,
+                total_hectares=extra.get("total_hectares") or "0",
+                arable_hectares=extra.get("arable_hectares") or "0",
+                irrigated_hectares=extra.get("irrigated_hectares") or "0",
+            )
         return farmer
 
     def update(self, instance, validated_data):
@@ -280,11 +343,20 @@ class FarmerSerializer(serializers.ModelSerializer):
                 farm.save(update_fields=["latitude", "longitude", "updated_at"])
         return farmer
 
+    def _active_farms(self, obj):
+        return [farm for farm in obj.farms.all() if farm.is_active]
+
     def get_farm_count(self, obj):
-        return obj.farms.count()
+        return len(self._active_farms(obj))
 
     def get_farm_hectares(self, obj):
-        return sum((farm.total_hectares for farm in obj.farms.all()), Decimal("0.00"))
+        return sum((farm.total_hectares for farm in self._active_farms(obj)), Decimal("0.00"))
+
+    def get_total_arable_hectares(self, obj):
+        return sum((farm.arable_hectares for farm in self._active_farms(obj)), Decimal("0.00"))
+
+    def get_total_irrigated_hectares(self, obj):
+        return sum((farm.irrigated_hectares for farm in self._active_farms(obj)), Decimal("0.00"))
 
 
 class EligibleFarmerSerializer(FarmerSerializer):

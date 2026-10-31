@@ -119,9 +119,11 @@ function ReportsPage({ selectedSeason = null, cropSeason = '' }) {
         responseType: 'blob',
       })
       const url = URL.createObjectURL(response.data)
+      const disposition = response.headers?.['content-disposition'] || ''
+      const named = /filename="([^"]+)"/.exec(disposition)
       const link = document.createElement('a')
       link.href = url
-      link.download = `${selected.code}.${format}`
+      link.download = named?.[1] || `${selected.code}.${format}`
       link.click()
       URL.revokeObjectURL(url)
       setError('')

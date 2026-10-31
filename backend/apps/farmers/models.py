@@ -119,6 +119,14 @@ class Farm(models.Model):
     total_hectares = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     arable_hectares = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     irrigated_hectares = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    cluster = models.ForeignKey(
+        "clusters.Cluster",
+        on_delete=models.SET_NULL,
+        related_name="farms",
+        null=True,
+        blank=True,
+    )
+    is_active = models.BooleanField(default=True)
     ownership_type = models.CharField(max_length=30, choices=OWNERSHIP_CHOICES, default=OWNERSHIP_OWNED)
     farm_registration_reference = models.CharField(max_length=80, blank=True)
     verification_status = models.CharField(max_length=30, default="PENDING")

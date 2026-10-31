@@ -174,18 +174,18 @@ class ReportingCentreTests(TestCase):
         self.assertEqual(winter.data["count"], 0)
         summer = self.client.get(reverse("report-preview", kwargs={"code": "production-records"}), {"season": "SUMMER", "agricultural_year": self.season.pk})
         self.assertEqual(summer.data["count"], 1)
-        self.assertEqual(summer.data["rows"][0]["planted_hectares"], "4.00")
-        self.assertEqual(summer.data["rows"][0]["actual_production"], "20.00")
-        self.assertEqual(summer.data["rows"][0]["yield_per_hectare"], "5.000")
+        self.assertEqual(summer.data["rows"][0]["planted_hectares"], "4")
+        self.assertEqual(summer.data["rows"][0]["actual_production"], "20")
+        self.assertEqual(summer.data["rows"][0]["yield_per_hectare"], "5")
 
         delivery = self.client.get(reverse("report-preview", kwargs={"code": "deliveries-all"}), {"farmer": "SGR-MD-000001"})
         row = delivery.data["rows"][0]
-        self.assertEqual(row["tonnes"], "2.00")
-        self.assertEqual(row["recovery_tonnes"], "1.00")
-        self.assertEqual(row["expected_tonnes"], "5.000")
+        self.assertEqual(row["tonnes"], "2")
+        self.assertEqual(row["recovery_tonnes"], "1")
+        self.assertEqual(row["expected_tonnes"], "5")
         self.assertEqual(row["price"], "400.00")
         expected_total = next(item["value"] for item in delivery.data["summaries"] if item["label"] == "Total Expected tonnes to recover")
-        self.assertEqual(expected_total, "5.000")
+        self.assertEqual(expected_total, "5")
 
         income = self.client.get(reverse("report-preview", kwargs={"code": "finance-income"}))
         income_total = next(item["value"] for item in income.data["summaries"] if item["label"] == "Total Credit")
@@ -211,8 +211,10 @@ class ReportingCentreTests(TestCase):
         pdf_response = self.client.get(reverse("report-export", kwargs={"code": "farmers-register"}), {"file_format": "pdf"})
         self.assertEqual(pdf_response.status_code, 200)
         self.assertTrue(pdf_response.content.startswith(b"%PDF"))
+        self.assertNotIn(b"/Encrypt", pdf_response.content)
         self.assertIn(b"Complete farmer register", pdf_response.content)
         self.assertIn(b"Page 1 of", pdf_response.content)
+        self.assertIn("SGR_Complete_Farmer_Register", pdf_response["Content-Disposition"])
 
         self.client.force_authenticate(user=self.viewer)
         denied = self.client.get(reverse("report-export", kwargs={"code": "finance-transactions"}), {"file_format": "csv"})
@@ -231,4 +233,99 @@ class ReportingCentreTests(TestCase):
         content = build_pdf(title="Pagination", meta_lines=["Generated: 2026-10-31"], headers=["Farmer", "Hectares"], rows=rows, orientation="portrait")
         self.assertIn(b"/Count 2", content)
         self.assertIn(b"Page 2 of 2", content)
+        self.assertNotIn(b"/Encrypt", content)
+        start = content.rindex(b"startxref\n") + len(b"startxref\n")
+        xref = int(content[start:content.index(b"\n", start)])
+        self.assertTrue(content[xref:].startswith(b"xref\n"))
+
+    def test_unpaid_subscription_report_uses_subscription_rules(self):
+        from apps.farmers.models import Farmer
+        from apps.subscriptions.models import FarmerSubscription
+
+        paid = Farmer.objects.create(
+            first_name="Paid", surname="Farmer", national_id="63-3000000-C-00", phone_primary="0773000000",
+            province=self.province, district=self.district, membership_number="SGR-MD-000003",
+        )
+        FarmerSubscription.objects.create(
+            farmer=paid, expected_amount="500.00", paid_amount="500.00", outstanding_amount="0.00",
+            payment_status="", season="2026/2027",
+        )
+        blank = FarmerSubscription.objects.create(
+            farmer=self.other, expected_amount="500.00", paid_amount="0.00", outstanding_amount="500.00",
+            payment_status="", season="2025/2026",
+        )
+        self.assertEqual(blank.payment_status, "")
+
+        unpaid = self.client.get(reverse("report-preview", kwargs={"code": "subscriptions-unpaid"}), {
+            "agricultural_year": self.season.pk,
+        })
+        self.assertEqual(unpaid.status_code, 200, unpaid.data)
+        memberships = {row["membership_number"] for row in unpaid.data["rows"]}
+        self.assertIn("SGR-MN-000002", memberships)
+        self.assertNotIn("SGR-MD-000003", memberships)
+        self.assertNotIn("SGR-MD-000001", memberships)
+        self.assertTrue(all(row["payment_status"] == "UNPAID" for row in unpaid.data["rows"]))
+        self.assertTrue(all(row["national_id"] and row["phone_primary"] for row in unpaid.data["rows"]))
+        self.assertEqual(unpaid.data["rows"][0]["crop_season"], "Shared by Summer and Winter")
+
+        partial = self.client.get(reverse("report-preview", kwargs={"code": "subscriptions-partial"}), {
+            "agricultural_year": self.season.pk,
+        })
+        self.assertEqual({row["membership_number"] for row in partial.data["rows"]}, {"SGR-MD-000001"})
+
+        paid_report = self.client.get(reverse("report-preview", kwargs={"code": "subscriptions-paid"}), {
+            "agricultural_year": self.season.pk, "province": self.province.pk,
+        })
+        self.assertEqual([row["membership_number"] for row in paid_report.data["rows"]], ["SGR-MD-000003"])
+        other_province = self.client.get(reverse("report-preview", kwargs={"code": "subscriptions-unpaid"}), {
+            "agricultural_year": self.season.pk, "province": self.other_province.pk,
+        })
+        self.assertNotIn("SGR-MD-000003", {row["membership_number"] for row in other_province.data["rows"]})
+        self.assertIn("SGR-MN-000002", {row["membership_number"] for row in other_province.data["rows"]})
+
+    def test_arda_report_matches_request_page_totals(self):
+        from apps.arda_requests.models import ARDARequestBatch
+        from apps.inputs.models import InputAllocation
+        from apps.programmes.models import Programme
+
+        programme = Programme.objects.create(
+            name="National Maize", code="MAIZE-BIG", season=self.season, crop="Maize",
+            announced_hectares="30000.00", status="OPEN",
+        )
+        ARDARequestBatch.objects.create(
+            request_number="SGR1000", programme=programme, season=self.season, crop="Maize",
+            requested_hectares="20000.00", total_farmers=0, total_requested_hectares="0.00",
+        )
+        InputAllocation.objects.create(
+            farmer=self.farmer, farm=self.farm, programme=programme, crop="Maize", hectares="100.00",
+            quantity="1.00", unit="bags", allocation_reference="ALLOC-BIG",
+        )
+        report = self.client.get(reverse("report-preview", kwargs={"code": "arda-requests"}), {
+            "programme": programme.pk, "agricultural_year": self.season.pk, "season": "SUMMER",
+        })
+        self.assertEqual(report.status_code, 200, report.data)
+        self.assertEqual(report.data["count"], 1)
+        row = report.data["rows"][0]
+        self.assertEqual(row["request_number"], "SGR1000")
+        self.assertEqual(row["requested_hectares"], "20000")
+        self.assertEqual(row["allocated_hectares"], "100")
+        self.assertEqual(row["available_hectares"], "19900")
+        self.assertEqual(row["farmer_count"], "1")
+        self.assertEqual(row["crop_season"], "Summer")
+        requested = next(item["value"] for item in report.data["summaries"] if item["label"] == "Total Requested hectares")
+        farmers = next(item["value"] for item in report.data["summaries"] if item["label"] == "Total Farmers")
+        self.assertEqual(requested, "20000")
+        self.assertEqual(farmers, "1")
+        export = self.client.get(reverse("report-export", kwargs={"code": "arda-requests"}), {
+            "programme": programme.pk, "agricultural_year": self.season.pk, "season": "SUMMER", "file_format": "pdf",
+        })
+        self.assertIn("SGR_ARDA_Requests_2026-2027_Summer.pdf", export["Content-Disposition"])
+        self.assertNotIn(b"/Encrypt", export.content)
+        self.assertIn(b"20000", export.content)
+        csv_export = self.client.get(reverse("report-export", kwargs={"code": "arda-requests"}), {
+            "programme": programme.pk, "agricultural_year": self.season.pk, "season": "SUMMER", "file_format": "csv",
+        })
+        csv_text = b"".join(csv_export.streaming_content).decode("utf-8-sig")
+        self.assertIn("20000", csv_text)
+        self.assertEqual(csv_text.count("SGR1000"), 1)
 

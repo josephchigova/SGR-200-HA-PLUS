@@ -63,7 +63,7 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
     @staticmethod
     def with_season_payment_status(farmers, season):
         money_field = DecimalField(max_digits=14, decimal_places=2)
-        farm_totals = Farm.objects.filter(farmer_id=OuterRef("pk")).values("farmer_id").annotate(
+        farm_totals = Farm.objects.filter(farmer_id=OuterRef("pk"), is_active=True).values("farmer_id").annotate(
             total=Sum("arable_hectares")
         ).values("total")[:1]
         season_payments = FarmerSubscription.objects.filter(
@@ -119,7 +119,7 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
 
         farmers = Farmer.objects.annotate(
             arable_hectares=Coalesce(
-                Sum("farms__arable_hectares"),
+                Sum("farms__arable_hectares", filter=Q(farms__is_active=True)),
                 Value(Decimal("0.00")),
                 output_field=DecimalField(max_digits=14, decimal_places=2),
             )

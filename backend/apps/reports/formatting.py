@@ -12,11 +12,24 @@ def quantize(value, places):
     return amount.quantize(step, rounding=ROUND_HALF_UP)
 
 
+def plain_number(value, places):
+    amount = quantize(value, places)
+    if amount is None:
+        return ""
+    text = f"{amount:.{places}f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def format_value(value, kind):
     if value is None or value == "":
         return ""
     if kind == "bool":
         return "Yes" if value else "No"
+    if kind == "count":
+        amount = quantize(value, 0)
+        return "" if amount is None else str(int(amount))
     if kind == "month":
         if isinstance(value, datetime):
             return value.strftime("%Y-%m")
@@ -39,20 +52,17 @@ def format_value(value, kind):
         amount = quantize(value, 2)
         return "" if amount is None else f"{amount:.2f}"
     if kind == "qty":
-        amount = quantize(value, 2)
-        return "" if amount is None else f"{amount:.2f}"
+        return plain_number(value, 2)
     if kind == "qty3":
-        amount = quantize(value, 3)
-        return "" if amount is None else f"{amount:.3f}"
+        return plain_number(value, 3)
     if kind == "rate":
-        amount = quantize(value, 4)
-        return "" if amount is None else f"{amount:.4f}"
+        return plain_number(value, 4)
     return str(value)
 
 
 def csv_safe(value, kind):
     text = format_value(value, kind)
-    if kind in {"money", "qty", "qty3", "rate"}:
+    if kind in {"money", "qty", "qty3", "rate", "count"}:
         return text
     if text.startswith(("=", "+", "-", "@", "\t", "\r")):
         return f"'{text}"

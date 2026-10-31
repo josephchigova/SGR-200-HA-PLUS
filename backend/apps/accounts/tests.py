@@ -36,6 +36,20 @@ class AuthenticationSecurityTests(TestCase):
             format="json",
         )
         self.assertEqual(response.status_code, 401)
+        self.assertIn("incorrect", response.data["detail"].lower())
+
+    def test_login_accepts_email_case_and_ignores_an_expired_bearer_token(self):
+        access = RefreshToken.for_user(self.user).access_token
+        access.set_exp(lifetime=timedelta(seconds=-30))
+        response = self.client.post(
+            reverse("token_obtain_pair"),
+            {"email": " Auth@Example.com ", "password": "StrongPass123!"},
+            format="json",
+            HTTP_AUTHORIZATION=f"Bearer {access}",
+        )
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertIn("access", response.data)
+        self.assertIn("refresh", response.data)
 
     def test_unauthenticated_and_expired_tokens_are_rejected(self):
         url = reverse("farmer-list")

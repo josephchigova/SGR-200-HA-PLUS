@@ -5,6 +5,7 @@ import apiClient from '../api/client'
 import FarmLocationFields from '../components/FarmLocationFields'
 import TabSearch from '../components/TabSearch'
 import { coordinateError } from '../coordinates'
+import { formatDisplay } from '../formatNumbers'
 
 const PAGE_SIZE = 25
 
@@ -70,6 +71,7 @@ function FarmersPage() {
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [extraFarms, setExtraFarms] = useState([])
   const [form, setForm] = useState(emptyForm)
   const [search, setSearch] = useState('')
   const [appliedSearch, setAppliedSearch] = useState('')
@@ -258,6 +260,7 @@ function FarmersPage() {
         cluster: locationId(form.cluster),
         latitude: form.latitude.trim() || null,
         longitude: form.longitude.trim() || null,
+        additional_farms: extraFarms,
       }
 
       await apiClient.post('/farmers/', payload, {
@@ -265,6 +268,7 @@ function FarmersPage() {
       })
 
       setForm(emptyForm)
+      setExtraFarms([])
       setShowForm(false)
       setCurrentPage(1)
       await loadFarmers(appliedSearch, 1)
@@ -423,6 +427,19 @@ function FarmersPage() {
               Irrigated arable hectares
               <input type="number" min="0" max={form.arable_hectares || undefined} step="0.01" name="irrigated_hectares" value={form.irrigated_hectares} onChange={handleChange} required />
             </label>
+            <div className="form-field full-width">
+              <span>Additional farms</span>
+              {extraFarms.map((farm, index) => (
+                <div className="workflow-form-actions" key={index}>
+                  <input aria-label={`Additional farm ${index + 1} name`} value={farm.farm_name} placeholder="Farm name" maxLength={180} onChange={(event) => setExtraFarms((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, farm_name: event.target.value } : item))} />
+                  <input aria-label={`Additional farm ${index + 1} hectares`} type="number" min="0.01" step="0.01" value={farm.total_hectares} placeholder="Total ha" onChange={(event) => setExtraFarms((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, total_hectares: event.target.value } : item))} />
+                  <input aria-label={`Additional farm ${index + 1} arable`} type="number" min="0" step="0.01" value={farm.arable_hectares} placeholder="Arable ha" onChange={(event) => setExtraFarms((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, arable_hectares: event.target.value } : item))} />
+                  <input aria-label={`Additional farm ${index + 1} irrigated`} type="number" min="0" step="0.01" value={farm.irrigated_hectares} placeholder="Irrigated ha" onChange={(event) => setExtraFarms((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, irrigated_hectares: event.target.value } : item))} />
+                  <button type="button" className="ghost-btn small" onClick={() => setExtraFarms((current) => current.filter((_, itemIndex) => itemIndex !== index))}>Remove</button>
+                </div>
+              ))}
+              <button type="button" className="ghost-btn small" onClick={() => setExtraFarms((current) => [...current, { farm_name: '', total_hectares: '', arable_hectares: '', irrigated_hectares: '0' }])}>Add another farm</button>
+            </div>
             <label className="form-field full-width">
               Address
               <textarea name="address" value={form.address} onChange={handleChange} rows="3" maxLength={500} />
@@ -474,7 +491,7 @@ function FarmersPage() {
                     <td>{farmer.province_name || '—'}</td>
                     <td>{farmer.district_name || '—'}</td>
                     <td>{farmer.cluster_name || '—'}</td>
-                    <td>{farmer.farm_hectares ?? '—'}</td>
+                    <td>{formatDisplay('farm_hectares', farmer.farm_hectares) ?? '—'}</td>
                     <td>
                       <span className={`status-pill ${farmer.membership_status === 'ACTIVE' ? 'active' : 'review'}`}>
                         {farmer.membership_status || '—'}

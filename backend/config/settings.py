@@ -160,6 +160,17 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 25,
 }
 
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {"class": "logging.StreamHandler"},
+    },
+    "loggers": {
+        "apps.accounts": {"handlers": ["console"], "level": "INFO", "propagate": False},
+    },
+}
+
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=7),

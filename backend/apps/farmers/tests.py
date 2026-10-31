@@ -754,3 +754,55 @@ class FarmCoordinateTests(TestCase):
                 if expected == 201 and not coordinates:
                     self.assertIsNone(Farm.objects.get(farmer_id=response.data["id"]).latitude)
                     self.assertIsNone(Farm.objects.get(farmer_id=response.data["id"]).longitude)
+
+
+class MultipleFarmTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="farms@example.com", username="farms-user", password="StrongPass123!",
+            role=User.ROLE_VERIFICATION_OFFICER,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+        self.province = Province.objects.create(name="Midlands", code="MD-FARM")
+        self.district = District.objects.create(province=self.province, name="Gweru")
+        self.ward = Ward.objects.create(district=self.district, name="Ward 1")
+
+    def test_one_farmer_can_hold_several_farms_and_backfill_does_not_duplicate_them(self):
+        import importlib
+
+        from django.apps import apps
+
+        migration = importlib.import_module("apps.farmers.migrations.0005_farm_cluster_and_active")
+
+        created = self.client.post(reverse("farmer-list"), {
+            "first_name": "Yusufu", "surname": "Banda", "national_id": "63-FARM-1",
+            "phone_primary": "0774111111", "province": self.province.pk, "district": self.district.pk,
+            "ward": self.ward.pk, "farm_name": "Victoria", "total_hectares": "8.00",
+            "arable_hectares": "6.00", "irrigated_hectares": "1.00",
+            "additional_farms": [
+                {"farm_name": "South", "total_hectares": "4.50", "arable_hectares": "3.00", "irrigated_hectares": "0.50"},
+            ],
+        }, format="json")
+        self.assertEqual(created.status_code, 201, created.data)
+        self.assertEqual(created.data["farm_count"], 2)
+        self.assertEqual(Decimal(created.data["farm_hectares"]), Decimal("12.50"))
+        self.assertEqual(Decimal(created.data["total_arable_hectares"]), Decimal("9.00"))
+        self.assertEqual(Decimal(created.data["total_irrigated_hectares"]), Decimal("1.50"))
+        self.assertEqual(Farm.objects.filter(farmer_id=created.data["id"]).count(), 2)
+
+        second = self.client.post(reverse("farm-list"), {
+            "farmer": created.data["id"], "farm_name": "East", "total_hectares": "2.00",
+            "arable_hectares": "2.00", "irrigated_hectares": "0.00",
+            "province": self.province.pk, "district": self.district.pk, "ward": self.ward.pk,
+        }, format="json")
+        self.assertEqual(second.status_code, 201, second.data)
+        deactivated = self.client.patch(reverse("farm-detail", args=[second.data["id"]]), {"is_active": False}, format="json")
+        self.assertEqual(deactivated.status_code, 200, deactivated.data)
+        refreshed = self.client.get(reverse("farmer-detail", args=[created.data["id"]]))
+        self.assertEqual(refreshed.data["farm_count"], 2)
+        self.assertEqual(Decimal(refreshed.data["farm_hectares"]), Decimal("12.50"))
+
+        before = Farm.objects.filter(farmer_id=created.data["id"]).count()
+        migration.copy_farm_geography(apps, None)
+        self.assertEqual(Farm.objects.filter(farmer_id=created.data["id"]).count(), before)

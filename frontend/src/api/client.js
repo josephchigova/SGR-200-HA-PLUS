@@ -6,8 +6,10 @@ const apiClient = axios.create({
 })
 
 apiClient.interceptors.request.use((config) => {
+  const url = config.url || ''
+  const isCredentialRequest = url.includes('/auth/login') || url.includes('/auth/register')
   const token = localStorage.getItem('sgr_access_token')
-  if (token) {
+  if (token && !isCredentialRequest) {
     config.headers.Authorization = `Bearer ${token}`
   }
   return config

@@ -35,8 +35,8 @@ class ReportParams:
         labels = {
             "start_date": self.start.isoformat() if self.start else "",
             "end_date": self.end.isoformat() if self.end else "",
-            "agricultural_year": str(self.year_id or ""),
-            "season": self.crop_season,
+            "agricultural_year": _year_label(self.year_id),
+            "season": {"SUMMER": "Summer", "WINTER": "Winter"}.get(self.crop_season, self.crop_season),
             "province": str(self.province_id or ""),
             "district": str(self.district_id or ""),
             "ward": str(self.ward_id or ""),
@@ -50,6 +50,34 @@ class ReportParams:
             "officer": self.officer,
         }
         return [f"{FILTER_LABELS[key]}: {value}" for key, value in labels.items() if value]
+
+
+def _year_label(year_id):
+    if not year_id:
+        return ""
+    from .queries import _year_name
+
+    return _year_name(year_id) or str(year_id)
+
+
+def export_filename(spec, params, extension):
+    import re
+
+    acronyms = {"ARDA", "GMB", "SGR", "CSV", "PDF"}
+
+    def token(word):
+        if word.upper() in acronyms:
+            return word.upper()
+        return word[:1].upper() + word[1:].lower()
+
+    words = re.sub(r"[^A-Za-z0-9]+", " ", spec.title).split()
+    parts = ["SGR", "_".join(token(word) for word in words)]
+    year = _year_label(params.year_id).replace("/", "-")
+    if year:
+        parts.append(year)
+    if params.crop_season in {"SUMMER", "WINTER"}:
+        parts.append(params.crop_season.title())
+    return "_".join(part for part in parts if part) + f".{extension}"
 
 
 def _date_value(raw):
@@ -115,7 +143,12 @@ def _summaries(spec, rows, params):
     for column in spec.columns:
         if not column.total:
             continue
-        if column.key == "expected_tonnes" and not _is_sequence(rows):
+        if spec.builder == "arda_batches" and column.key == "farmer_count" and _is_sequence(rows):
+            farmer_ids = set()
+            for row in rows:
+                farmer_ids.update(row.get("_farmer_ids") or [])
+            amount = len(farmer_ids)
+        elif column.key == "expected_tonnes" and not _is_sequence(rows):
             amount = expected_total(rows)
         elif spec.builder == "payment_methods" and column.key == "amount":
             amount = payment_method_total(params)
@@ -168,7 +201,7 @@ def preview(spec, params):
         "page_size": params.page_size,
         "pages": pages,
         "columns": [{"key": column.key, "label": column.label, "kind": column.kind} for column in spec.columns],
-        "summaries": _summaries(spec, rows, params),
+        "summaries": _report_summaries(spec, rows, params),
         "chart": _chart(spec, _slice(rows, start, start + params.page_size) if not _is_sequence(rows) else rows[:30]),
         "rows": page_rows,
     }
@@ -206,7 +239,7 @@ def render_pdf(spec, params):
     ]
     if spec.gap:
         meta.append(spec.gap)
-    summaries = _summaries(spec, build(spec, params), params)
+    summaries = _report_summaries(spec, build(spec, params), params)
     meta.extend(f"{item['label']}: {item['value']}" for item in summaries)
     table = []
     for row in export_rows(spec, params):
@@ -218,6 +251,30 @@ def render_pdf(spec, params):
         rows=table,
         orientation=spec.orientation,
     )
+
+
+def _report_summaries(spec, rows, params):
+    summaries = _summaries(spec, rows, params)
+    if spec.builder != "subscriptions" or spec.mode:
+        return summaries
+    counts = {"UNPAID": 0, "PARTIAL": 0, "PAID": 0}
+    if _is_sequence(rows):
+        for row in rows:
+            status = row.get("payment_status")
+            if status in counts:
+                counts[status] += 1
+    else:
+        from django.db.models import Count
+
+        for row in rows.order_by().values("payment_status").annotate(total=Count("id")):
+            if row["payment_status"] in counts:
+                counts[row["payment_status"]] = row["total"]
+    summaries.extend([
+        {"label": "Unpaid farmers", "value": str(counts["UNPAID"])},
+        {"label": "Partially paid farmers", "value": str(counts["PARTIAL"])},
+        {"label": "Fully paid farmers", "value": str(counts["PAID"])},
+    ])
+    return summaries
 
 
 def _filter_spec(**kwargs):
@@ -255,7 +312,7 @@ def analytics(user, params):
         allocations = apply_common(InputAllocation.objects.all(), _filter_spec(**linked, season_field="programme__season_id", crop_field="crop"), params)
         cards.append({"label": "Input costs allocated", "value": format_value(allocations.aggregate(total=Sum("total_input_cost"))["total"] or 0, "money")})
         requests = apply_common(ARDARequestBatch.objects.all(), _filter_spec(season_field="season_id", crop_field="crop"), params)
-        cards.append({"label": "ARDA hectares requested", "value": format_value(requests.aggregate(total=Sum("total_requested_hectares"))["total"] or 0, "qty")})
+        cards.append({"label": "ARDA hectares requested", "value": format_value(requests.aggregate(total=Sum("requested_hectares"))["total"] or 0, "qty")})
         deliveries = apply_common(GMBDelivery.objects.all(), _filter_spec(**linked, season_field="season_id", crop_field="crop", date_field="delivery_date"), params)
         cards.append({"label": "Tonnes delivered to GMB", "value": format_value(deliveries.aggregate(total=Sum("tonnes"))["total"] or 0, "qty")})
         debts = apply_common(InputDebt.objects.all(), _filter_spec(**linked, season_field="programme__season_id", crop_field="crop"), params)
@@ -274,12 +331,12 @@ def analytics(user, params):
                 } for row in query],
             })
 
-        chart("Farmers by province", farmers.values("province__name").annotate(total=Count("id")).order_by("-total")[:12], "province__name", "qty")
+        chart("Farmers by province", farmers.values("province__name").annotate(total=Count("id")).order_by("-total")[:12], "province__name", "count")
         chart("Production by crop", production.values("crop").annotate(total=Sum("actual_production")).order_by("-total")[:12], "crop", "qty")
         chart("Planting progress by district", production.values("farmer__district__name").annotate(total=Sum("planted_hectares")).order_by("-total")[:12], "farmer__district__name", "qty")
         chart("Input allocation by crop", allocations.values("crop").annotate(total=Sum("total_input_cost")).order_by("-total")[:12], "crop", "money")
         chart("GMB deliveries over time", deliveries.annotate(month=TruncMonth("delivery_date")).values("month").annotate(total=Sum("tonnes")).order_by("month")[:18], "month", "qty")
-        chart("Recovery performance", debts.values("status").annotate(total=Count("id")).order_by("status"), "status", "qty")
+        chart("Recovery performance", debts.values("status").annotate(total=Count("id")).order_by("status"), "status", "count")
         chart("Subscription collection performance", subscriptions.values("payment_status").annotate(total=Sum("paid_amount")).order_by("payment_status"), "payment_status", "money")
     if "finance" in allowed:
         assets = Asset.objects.all()

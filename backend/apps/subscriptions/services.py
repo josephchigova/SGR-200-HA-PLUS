@@ -15,7 +15,7 @@ class SubscriptionPaymentService:
 
     @classmethod
     def farmer_subscription_details(cls, farmer):
-        hectares = farmer.farms.aggregate(total=Sum("arable_hectares"))["total"] or Decimal("0.00")
+        hectares = farmer.farms.filter(is_active=True).aggregate(total=Sum("arable_hectares"))["total"] or Decimal("0.00")
         return cls.subscription_details(hectares)
 
     @staticmethod
