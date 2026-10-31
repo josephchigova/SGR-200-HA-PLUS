@@ -20,6 +20,7 @@ import InputAllocationsPage from './pages/InputAllocationsPage'
 import InputDebtPage from './pages/InputDebtPage'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
+import ReportsPage from './pages/ReportsPage'
 import SearchPage from './pages/SearchPage'
 import SubscriptionsPage from './pages/SubscriptionsPage'
 import VerificationPage from './pages/VerificationPage'
@@ -56,6 +57,7 @@ const navGroups = [
     ],
   },
   { title: 'Finance', items: [{ label: 'Finance', to: '/finance' }] },
+  { title: 'Reports', items: [{ label: 'Reports', to: '/reports' }] },
   { title: 'Account', items: [{ label: 'Sign in', to: '/login' }] },
 ]
 
@@ -407,6 +409,7 @@ export function AppShell() {
             <Route path="/deliveries" element={<WorkflowPage {...workflowPages.deliveries} selectedSeason={selectedSeason} cropSeason={cropSeason} periodStatus={periodStatus} />} />
             <Route path="/recovery" element={<InputDebtPage selectedSeason={selectedSeason} cropSeason={cropSeason} periodStatus={periodStatus} />} />
             <Route path="/finance" element={<FinancePage selectedSeason={selectedSeason} />} />
+            <Route path="/reports" element={<ReportsPage selectedSeason={selectedSeason} cropSeason={cropSeason} />} />
             <Route path="/inputs" element={<Navigate to="/input-allocations" replace />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/register" element={<RegisterPage />} />

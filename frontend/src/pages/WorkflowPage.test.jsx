@@ -154,6 +154,7 @@ describe('WorkflowPage', () => {
       return Promise.resolve({ data: [] })
     })
 
+    apiClient.post.mockClear()
     const user = userEvent.setup()
     render(<WorkflowPage title="GMB Deliveries" endpoint="/deliveries/" columns={[]} forms={workflowPages.deliveries.forms} selectedSeason={{ id: 1, name: '2026/2027' }} cropSeason="" />)
 
@@ -181,12 +182,13 @@ describe('WorkflowPage', () => {
     await user.selectOptions(screen.getByLabelText('Crop'), 'Wheat')
     expect((await screen.findByRole('alert')).textContent).toMatch(/no configured price per tonne/i)
     expect(screen.getByLabelText('Price per tonne').value).toBe('')
-    await user.click(screen.getByRole('button', { name: 'Save' }))
+    fireEvent.submit(screen.getByRole('button', { name: 'Save' }).closest('form'))
     expect(apiClient.post).not.toHaveBeenCalled()
 
     await user.selectOptions(screen.getByLabelText('Crop'), 'Maize')
     expect((await screen.findByLabelText('Outstanding input debt')).value).toBe('2000.00')
-    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await user.selectOptions(screen.getByLabelText('Farm'), '3')
+    fireEvent.submit(screen.getByRole('button', { name: 'Save' }).closest('form'))
     await waitFor(() => expect(apiClient.post).toHaveBeenCalled())
     const payload = apiClient.post.mock.calls.at(-1)[1]
     expect(payload.price).toBeUndefined()
