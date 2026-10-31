@@ -59,6 +59,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
   const [message, setMessage] = useState('')
   const [editingId, setEditingId] = useState(null)
   const [pendingDelete, setPendingDelete] = useState(null)
+  const [deliveryPreview, setDeliveryPreview] = useState({ key: '', data: null, error: '' })
   const farmerOptionRequests = useRef({})
 
   const waitingForPeriod = seasonScoped && periodStatus === 'loading'
@@ -77,6 +78,11 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
   const loading = waitingForPeriod || (!periodUnavailable && !missingSeason && !rowsReady)
   const optionRequestKey = JSON.stringify([scopedEndpoint, cropSeason, selectedSeason?.id])
   const optionsReady = optionsKey === optionRequestKey
+  const deliveryForm = forms.find((form) => form.recoveryPreview)
+  const deliveryFarmer = deliveryForm ? values[deliveryForm.key]?.farmer || '' : ''
+  const deliveryFarm = deliveryForm ? values[deliveryForm.key]?.farm || '' : ''
+  const deliveryCrop = deliveryForm ? values[deliveryForm.key]?.crop || '' : ''
+  const deliveryPreviewKey = JSON.stringify([selectedSeason?.id || '', deliveryFarmer, deliveryFarm, deliveryCrop])
 
   const refresh = async () => {
     try {
@@ -184,6 +190,34 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
     return () => { mounted = false }
   }, [eligibleEndpoint, eligibleRequestKey, selectedSeason])
 
+  useEffect(() => {
+    if (!deliveryForm) return undefined
+    if (!deliveryFarmer || !deliveryCrop || !selectedSeason?.id) {
+      setDeliveryPreview({ key: deliveryPreviewKey, data: null, error: '' })
+      return undefined
+    }
+    let mounted = true
+    const params = new URLSearchParams({
+      farmer: deliveryFarmer,
+      season: String(selectedSeason.id),
+      crop: deliveryCrop,
+    })
+    if (deliveryFarm) params.set('farm', deliveryFarm)
+    apiClient.get(`/deliveries/recovery-preview/?${params.toString()}`)
+      .then((response) => {
+        if (mounted) setDeliveryPreview({ key: deliveryPreviewKey, data: response.data, error: '' })
+      })
+      .catch((requestError) => {
+        if (!mounted) return
+        const data = requestError.response?.data
+        const message = data
+          ? Object.values(data).flat().join(' ')
+          : 'Unable to calculate the expected recovery for this delivery.'
+        setDeliveryPreview({ key: deliveryPreviewKey, data: null, error: message })
+      })
+    return () => { mounted = false }
+  }, [deliveryCrop, deliveryFarm, deliveryFarmer, deliveryForm, deliveryPreviewKey, selectedSeason])
+
   const changeValue = (formKey, name, value) => {
     const form = forms.find((candidate) => candidate.key === formKey)
     const dependentFields = form?.fields.filter((field) => field.dependsOn === name) || []
@@ -264,10 +298,25 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
       setError('Select a global season before creating this record.')
       return
     }
+    const previewReady = !form.recoveryPreview || deliveryPreview.key === deliveryPreviewKey
+    if (form.recoveryPreview && deliveryCrop && !previewReady) {
+      setError('The delivery price is still being loaded from the Crop Catalogue.')
+      return
+    }
+    if (form.recoveryPreview && previewReady && deliveryPreview.error) {
+      setError(deliveryPreview.error)
+      return
+    }
+    if (form.recoveryPreview && deliveryCrop && !deliveryPreview.data?.price_per_tonne) {
+      setError('This crop has no configured price per tonne. Configure it in the Crop Catalogue before recording the delivery.')
+      return
+    }
     setSaving(true)
     setError('')
     setMessage('')
-    const payload = Object.fromEntries(Object.entries(formValues).filter(([, value]) => value !== '' && value !== undefined))
+    const omitted = new Set(form.fields.filter((field) => field.omitFromPayload).map((field) => field.name))
+    const payload = Object.fromEntries(Object.entries(formValues).filter(([name, value]) => !omitted.has(name) && value !== '' && value !== undefined))
+    if (form.recoveryPreview && payload.recovery_tonnes === undefined) payload.recovery_tonnes = '0'
     if (form.globalSeasonField) payload[form.globalSeasonField] = selectedSeason.id
     try {
       const requestUrl = editingId && form.editable ? `${endpoint}${editingId}/` : form.endpoint || endpoint
@@ -345,6 +394,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
       {missingSeason ? <div className="form-message">Choose an agricultural year and season to view records.</div> : null}
       {seasonReadOnly ? <div className="form-message">This season is read-only. Switch to the active season to create or edit requests.</div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
+      {deliveryPreview.error ? <div className="form-message error" role="alert">{deliveryPreview.error}</div> : null}
       {message ? <div className="form-message" role="status">{message}</div> : null}
 
       {forms.map((form) => (
@@ -352,6 +402,19 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
           <h4>{form.title}</h4>
           <div className="workflow-fields">
             {form.fields.map((field) => {
+              if (field.readOnly) {
+                const previewValue = field.previewKey && deliveryPreview.key === deliveryPreviewKey
+                  ? deliveryPreview.data?.[field.previewKey]
+                  : ''
+                const shown = field.fromSeason ? (selectedSeason?.name || '') : (previewValue || '')
+                return (
+                  <label className="form-field" key={field.name}>
+                    {field.label}
+                    <input aria-label={field.label} value={shown} readOnly />
+                  </label>
+                )
+              }
+
               if (field.type === 'farmer') {
                 return (
                   <FarmerAutocomplete

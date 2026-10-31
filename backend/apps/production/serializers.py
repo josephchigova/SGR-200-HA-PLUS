@@ -79,6 +79,7 @@ class GMBDeliverySerializer(serializers.ModelSerializer):
             from apps.programmes.services import CropPricingService
 
             season = attrs.get("season")
+            farmer = attrs.get("farmer")
             crop_name = str(attrs.get("crop") or "").strip()
             catalogue_crop = Crop.objects.filter(name__iexact=crop_name, active=True).first() if crop_name else None
             if catalogue_crop is None or season is None:
@@ -89,13 +90,27 @@ class GMBDeliverySerializer(serializers.ModelSerializer):
                 catalogue_price = CropPricingService.resolve_price_per_tonne(crop=catalogue_crop, season=season)
             except ValueError as error:
                 raise serializers.ValidationError({"price": [str(error)]}) from error
-            if price and abs(Decimal(str(price)) - catalogue_price) > Decimal("0.01"):
+            if catalogue_price <= 0:
                 raise serializers.ValidationError({
-                    "price": [f"Use the {season.name} selling price of {catalogue_price} per tonne for {catalogue_crop.name}."],
+                    "price": [
+                        f"{catalogue_crop.name} has no configured price per tonne for {season.name}. "
+                        "Configure the price in the Crop Catalogue before recording this delivery."
+                    ],
                 })
             price = catalogue_price
             attrs["price"] = catalogue_price
             attrs["crop"] = catalogue_crop.name
+            reference = reference.strip()
+            ticket = ticket.strip()
+            duplicate_filters = {"farmer": farmer, "season": season}
+            if ticket and GMBDelivery.objects.filter(**duplicate_filters, ticket_number__iexact=ticket).exists():
+                raise serializers.ValidationError({
+                    "ticket_number": ["A delivery with this ticket number is already recorded for this farmer and season."],
+                })
+            if reference and GMBDelivery.objects.filter(**duplicate_filters, delivery_reference__iexact=reference).exists():
+                raise serializers.ValidationError({
+                    "delivery_reference": ["A delivery with this reference is already recorded for this farmer and season."],
+                })
         else:
             price = self.instance.price
             attrs["price"] = price

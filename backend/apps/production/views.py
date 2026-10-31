@@ -1,6 +1,8 @@
 from django.db import transaction
 from rest_framework import permissions, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.response import Response
 
 from apps.accounts.permissions import ProgrammeWorkflowPermission, RecoveryWorkflowPermission
 from apps.programmes.models import Crop, CropInputRequirement, CropSellingPrice
@@ -82,6 +84,38 @@ class GMBDeliveryViewSet(viewsets.ModelViewSet):
                 RecoveryCalculationService.apply_delivery(delivery)
         except ValueError as error:
             raise ValidationError({"recovery_tonnes": [str(error)]}) from error
+
+    @action(detail=False, methods=["get"], url_path="recovery-preview")
+    def recovery_preview(self, request):
+        from apps.farmers.models import Farmer, Farm
+        from apps.programmes.models import Season
+
+        farmer_id = request.query_params.get("farmer")
+        season_id = request.query_params.get("season")
+        crop_name = (request.query_params.get("crop") or "").strip()
+        farm_id = request.query_params.get("farm")
+        if not farmer_id or not season_id or not crop_name:
+            return Response(
+                {"detail": "Select a farmer, agricultural year and crop before calculating recovery."},
+                status=400,
+            )
+        farmer = Farmer.objects.filter(pk=farmer_id).first()
+        season = Season.objects.filter(pk=season_id).first()
+        farm = Farm.objects.filter(pk=farm_id, farmer=farmer).first() if farm_id and farmer else None
+        if farmer is None or season is None:
+            return Response({"detail": "Select a farmer and agricultural year before calculating recovery."}, status=400)
+        if farm_id and farm is None:
+            return Response({"farm": ["Select a farm that belongs to this farmer."]}, status=400)
+        try:
+            preview = RecoveryCalculationService.preview_delivery_recovery(
+                farmer=farmer,
+                farm=farm,
+                season=season,
+                crop_name=crop_name,
+            )
+        except ValueError as error:
+            return Response({"price": [str(error)]}, status=400)
+        return Response(preview)
 
 
 class CropViewSet(viewsets.ModelViewSet):

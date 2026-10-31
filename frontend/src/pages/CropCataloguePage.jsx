@@ -21,6 +21,13 @@ const getAllPages = async (path) => {
   return records
 }
 
+export function formatCatalogueMoney(value) {
+  if (value === null || value === undefined || value === '') return ''
+  const amount = Number(value)
+  if (!Number.isFinite(amount)) return ''
+  return amount.toFixed(2)
+}
+
 const dedupeCrops = (records) => {
   const byName = new Map()
   records.forEach((crop) => {
@@ -251,7 +258,7 @@ function CropCataloguePage() {
       item_name: row.item_name || '',
       rate_per_hectare: row.rate_per_hectare || '',
       unit: row.unit || '',
-      cost_per_unit: row.cost_per_unit ?? '',
+      cost_per_unit: formatCatalogueMoney(row.cost_per_unit),
       cost_per_hectare: row.cost_per_hectare || '',
       cost_type: row.cost_type || 'AGRICULTURAL_INPUT',
       include_in_input_cost: row.include_in_input_cost,
@@ -318,7 +325,7 @@ function CropCataloguePage() {
             {crops.map((crop) => (
               <tr key={crop.id}>
                 <td>{crop.name}</td>
-                <td>{Number(crop.input_cost_per_hectare || 0).toFixed(2)}</td>
+                <td>{formatCatalogueMoney(crop.input_cost_per_hectare || 0)}</td>
                 <td>{crop.inputs_count ?? 0}</td>
                 <td>{crop.active ? 'Active' : 'Inactive'}</td>
                 <td><button type="button" className="ghost-btn small" onClick={() => setSelectedCropId(String(crop.id))}>View / Edit</button></td>
@@ -345,10 +352,10 @@ function CropCataloguePage() {
             <input value={requirementForm.unit} onChange={(event) => setRequirementForm((current) => ({ ...current, unit: event.target.value }))} />
           </label>
           <label className="form-field">Cost / Unit
-            <input type="number" min="0" step="0.0001" value={requirementForm.cost_per_unit} onChange={(event) => setRequirementForm((current) => ({ ...current, cost_per_unit: event.target.value }))} />
+            <input type="number" min="0" step="0.01" value={requirementForm.cost_per_unit} onChange={(event) => setRequirementForm((current) => ({ ...current, cost_per_unit: event.target.value }))} />
           </label>
           <label className="form-field">Cost / Ha
-            <input type="number" min="0" step="0.0001" value={calculatedCostPerHa} readOnly />
+            <input type="text" value={formatCatalogueMoney(calculatedCostPerHa)} readOnly />
           </label>
           <label className="form-field">Type
             <select value={requirementForm.cost_type} onChange={(event) => setRequirementForm((current) => ({ ...current, cost_type: event.target.value }))}>
@@ -384,8 +391,8 @@ function CropCataloguePage() {
                 <td>{row.item_name}</td>
                 <td>{row.rate_per_hectare}</td>
                 <td>{row.unit || '—'}</td>
-                <td>{row.cost_per_unit ?? '—'}</td>
-                <td>{row.cost_per_hectare}</td>
+                <td>{row.cost_per_unit == null || row.cost_per_unit === '' ? '—' : formatCatalogueMoney(row.cost_per_unit)}</td>
+                <td>{formatCatalogueMoney(row.cost_per_hectare)}</td>
                 <td>{row.active ? 'Active' : 'Inactive'}</td>
                 <td>
                   <button type="button" className="ghost-btn small" onClick={() => editRequirement(row)}>Edit</button>
@@ -399,7 +406,7 @@ function CropCataloguePage() {
           </tbody>
         </table>
       </div>
-      <div className="form-message">TOTAL INPUT COST / HA: {totalCostPerHa}</div>
+      <div className="form-message">TOTAL INPUT COST / HA: {formatCatalogueMoney(totalCostPerHa)}</div>
 
       <form className="workflow-form" onSubmit={submitPrice}>
         <h4>{selectedCrop ? `${selectedCrop.name} — Selling Price per Tonne — Agricultural Year ${seasons.find((season) => String(season.id) === String(priceForm.season))?.name || ''}`.trim() : 'Selling Price per Tonne'}</h4>
@@ -440,11 +447,11 @@ function CropCataloguePage() {
             {prices.map((row) => (
               <tr key={row.id}>
                 <td>{row.season_name || 'Year not set'}</td>
-                <td>{row.price_per_tonne}</td>
+                <td>{formatCatalogueMoney(row.price_per_tonne)}</td>
                 <td>{row.currency}</td>
                 <td>{row.active ? 'Active' : 'Inactive'}</td>
                 <td>
-                  <button type="button" className="ghost-btn small" onClick={() => { setEditingPriceId(row.id); setPriceForm({ season: row.season ? String(row.season) : '', price_per_tonne: row.price_per_tonne, currency: row.currency || 'USD', active: row.active }) }}>Edit</button>
+                  <button type="button" className="ghost-btn small" onClick={() => { setEditingPriceId(row.id); setPriceForm({ season: row.season ? String(row.season) : '', price_per_tonne: formatCatalogueMoney(row.price_per_tonne), currency: row.currency || 'USD', active: row.active }) }}>Edit</button>
                   <button type="button" className="ghost-btn small" onClick={async () => { try { await apiClient.patch(`/crop-selling-prices/${row.id}/`, { active: !row.active }); await loadPrices(selectedCropId) } catch { setError('Unable to update the selling price.') } }}>{row.active ? 'Deactivate' : 'Activate'}</button>
                   <button type="button" className="ghost-btn small" onClick={() => setPendingDelete({ kind: 'price', url: `/crop-selling-prices/${row.id}/`, label: `${row.crop_name || selectedCrop?.name || 'Crop'} ${row.season_name || ''} price` })}>Delete</button>
                 </td>

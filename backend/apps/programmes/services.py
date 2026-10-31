@@ -53,6 +53,7 @@ class CropPricingService:
         ).order_by("-effective_from", "-id").first()
         if season_price is None:
             raise ValueError(
-                f"No selling price is configured for {crop.name} in agricultural year {season.name}."
+                f"{crop.name} has no configured price per tonne for {season.name}. "
+                "Configure the price in the Crop Catalogue before recording this delivery."
             )
         return season_price.price_per_tonne
