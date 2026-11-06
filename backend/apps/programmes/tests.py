@@ -152,7 +152,6 @@ class ReferenceDataLoadTests(TestCase):
             rate_per_hectare="2.5000",
             unit="kg",
             cost_per_unit="4.0000",
-            include_in_input_cost=True,
             active=True,
         )
         original_cost = requirement.cost_per_hectare
@@ -225,7 +224,6 @@ class CropCatalogueSeedTests(TestCase):
             item_name="A",
             rate_per_hectare="1.00",
             cost_per_hectare="10.00",
-            include_in_input_cost=True,
             active=True,
         )
         CropInputRequirement.objects.create(
@@ -234,7 +232,6 @@ class CropCatalogueSeedTests(TestCase):
             item_name="B",
             rate_per_hectare="1.00",
             cost_per_hectare="15.00",
-            include_in_input_cost=True,
             active=False,
         )
         self.assertEqual(crop.total_input_cost_per_hectare, 10)
@@ -252,7 +249,6 @@ class CropCatalogueSeedTests(TestCase):
             unit="kg",
             cost_per_unit="23.0000",
             cost_per_hectare="0.0000",
-            include_in_input_cost=True,
             active=True,
         )
         row.refresh_from_db()
@@ -322,7 +318,6 @@ class ProgrammeAndPriceCrudTests(TestCase):
             "unit": "kg",
             "cost_per_unit": "23.0000",
             "cost_type": "AGRICULTURAL_INPUT",
-            "include_in_input_cost": True,
             "active": True,
         }, format="json")
         self.assertEqual(created.status_code, 201, created.data)

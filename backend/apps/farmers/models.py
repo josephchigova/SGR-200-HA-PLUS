@@ -119,6 +119,23 @@ class Farm(models.Model):
     total_hectares = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     arable_hectares = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     irrigated_hectares = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    IRRIGATION_NONE = "NONE"
+    IRRIGATION_RAINFED = "RAINFED"
+    IRRIGATION_CENTRE_PIVOT = "CENTRE_PIVOT"
+    IRRIGATION_DRIP = "DRIP"
+    IRRIGATION_SPRINKLER = "SPRINKLER"
+    IRRIGATION_FLOOD = "FLOOD"
+    IRRIGATION_OTHER = "OTHER"
+    IRRIGATION_CHOICES = [
+        (IRRIGATION_NONE, "Not recorded"),
+        (IRRIGATION_RAINFED, "Rainfed"),
+        (IRRIGATION_CENTRE_PIVOT, "Centre pivot"),
+        (IRRIGATION_DRIP, "Drip"),
+        (IRRIGATION_SPRINKLER, "Sprinkler"),
+        (IRRIGATION_FLOOD, "Flood"),
+        (IRRIGATION_OTHER, "Other"),
+    ]
+    irrigation_type = models.CharField(max_length=30, choices=IRRIGATION_CHOICES, default=IRRIGATION_NONE)
     cluster = models.ForeignKey(
         "clusters.Cluster",
         on_delete=models.SET_NULL,

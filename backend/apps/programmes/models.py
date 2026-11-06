@@ -69,31 +69,40 @@ class Crop(models.Model):
 
     @property
     def total_input_cost_per_hectare(self):
-        return self.input_requirements.filter(
-            active=True,
-            include_in_input_cost=True,
-        ).aggregate(total=Sum("cost_per_hectare"))["total"] or Decimal("0.00")
+        return self.input_requirements.filter(active=True).aggregate(
+            total=Sum("cost_per_hectare")
+        )["total"] or Decimal("0.00")
 
     @property
     def active_input_count(self):
-        return self.input_requirements.filter(active=True, include_in_input_cost=True).count()
+        return self.input_requirements.filter(active=True).count()
 
     def __str__(self):
         return f"{self.name} ({self.get_category_display()})"
 
 
 class CropInputRequirement(models.Model):
-    COST_TYPE_INPUT = "AGRICULTURAL_INPUT"
-    COST_TYPE_MACHINERY = "MACHINERY_HIRING"
-    COST_TYPE_LABOUR = "LABOUR"
-    COST_TYPE_OPERATIONAL = "OTHER_OPERATIONAL"
+    COST_TYPE_CROP_INPUT = "CROP_INPUT"
+    COST_TYPE_FARM_EQUIPMENT = "FARM_EQUIPMENT"
+    # Older code and imports used these names. They now store the two supported types.
+    COST_TYPE_INPUT = COST_TYPE_CROP_INPUT
+    COST_TYPE_MACHINERY = COST_TYPE_FARM_EQUIPMENT
+    COST_TYPE_LABOUR = COST_TYPE_CROP_INPUT
+    COST_TYPE_OPERATIONAL = COST_TYPE_CROP_INPUT
 
     COST_TYPE_CHOICES: ClassVar[list[tuple[str, str]]] = [
-        (COST_TYPE_INPUT, "Agricultural input"),
-        (COST_TYPE_MACHINERY, "Machinery / hiring"),
-        (COST_TYPE_LABOUR, "Labour"),
-        (COST_TYPE_OPERATIONAL, "Other operational"),
+        (COST_TYPE_CROP_INPUT, "Crop Input"),
+        (COST_TYPE_FARM_EQUIPMENT, "Farm Equipment"),
     ]
+
+    LEGACY_COST_TYPES: ClassVar[dict[str, str]] = {
+        "AGRICULTURAL_INPUT": COST_TYPE_CROP_INPUT,
+        "MACHINERY_HIRING": COST_TYPE_FARM_EQUIPMENT,
+        "LABOUR": COST_TYPE_CROP_INPUT,
+        "OTHER_OPERATIONAL": COST_TYPE_CROP_INPUT,
+        COST_TYPE_CROP_INPUT: COST_TYPE_CROP_INPUT,
+        COST_TYPE_FARM_EQUIPMENT: COST_TYPE_FARM_EQUIPMENT,
+    }
 
     crop = models.ForeignKey(Crop, on_delete=models.CASCADE, related_name="input_requirements")
     group_name = models.CharField(max_length=140)
@@ -102,8 +111,7 @@ class CropInputRequirement(models.Model):
     unit = models.CharField(max_length=40, blank=True, default="")
     cost_per_unit = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
     cost_per_hectare = models.DecimalField(max_digits=14, decimal_places=4, default=Decimal("0.0000"))
-    cost_type = models.CharField(max_length=30, choices=COST_TYPE_CHOICES, default=COST_TYPE_INPUT)
-    include_in_input_cost = models.BooleanField(default=True)
+    cost_type = models.CharField(max_length=30, choices=COST_TYPE_CHOICES, default=COST_TYPE_CROP_INPUT)
     active = models.BooleanField(default=True)
     notes = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -128,9 +136,7 @@ class CropInputRequirement(models.Model):
         elif self.cost_per_unit is None and rate > 0 and cost_per_hectare > 0:
             self.cost_per_unit = (cost_per_hectare / rate).quantize(Decimal("0.0001"))
 
-        if self.cost_type != self.COST_TYPE_INPUT:
-            self.include_in_input_cost = False
-
+        self.cost_type = self.LEGACY_COST_TYPES.get(self.cost_type, self.COST_TYPE_CROP_INPUT)
         super().save(*args, **kwargs)
 
     def __str__(self):

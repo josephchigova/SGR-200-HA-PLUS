@@ -36,7 +36,7 @@ CATEGORIES = [
     ("subscriptions", "Subscriptions"),
     ("crops", "Crop catalogue"),
     ("programmes", "Programmes"),
-    ("arda", "ARDA requests"),
+    ("arda", "Input requests"),
     ("allocations", "Input allocations"),
     ("production", "Production"),
     ("planting", "Seasonal planting"),
@@ -69,7 +69,7 @@ LIMITATIONS = [
     "Farmer registration is not stored against an agricultural season. The seasonal farmer report uses production records and subscription participation.",
     "Subscription rows store the agricultural year in a text field. Summer and Winter filtering applies to crop-linked records, not to subscription rows.",
     "Expected recovery tonnes are the current outstanding input debt divided by that delivery's stored price. The same position is not added again for every ticket.",
-    "ARDA reports list recorded requests and allocated hectares. They do not calculate a separate approval total.",
+    "Input request reports list recorded requests and allocated hectares. They do not calculate a separate approval total.",
     "Income and expenditure come from posted journal lines. Asset-register purchases and disposals are reported separately and are not added to operational expenditure.",
     "There is no system-wide audit log. Activity reports use finance audit events, asset audit events, and modules that store the user who created the record.",
     "PDF uses a standard Latin font, so characters outside that set are replaced. CSV keeps the original text.",
@@ -175,6 +175,12 @@ def _reports():
         _spec("farmers-by-district", "farmers", "Farmers by district", "Farmer counts and registered hectares grouped by district.", OPERATIONS, "portrait", FARMER_FILTERS, GROUP_COLUMNS, "farmer_groups", group_field="district__name", chart_label="label", chart_value="farmers", **FARMER_GEO),
         _spec("farmers-by-ward", "farmers", "Farmers by ward", "Farmer counts and registered hectares grouped by ward.", OPERATIONS, "portrait", FARMER_FILTERS, GROUP_COLUMNS, "farmer_groups", group_field="ward__name", chart_label="label", chart_value="farmers", **FARMER_GEO),
         _spec("farmers-by-cluster", "farmers", "Farmers by cluster", "Farmer counts and registered hectares grouped by cluster.", OPERATIONS, "portrait", FARMER_FILTERS, GROUP_COLUMNS, "farmer_groups", group_field="cluster__name", chart_label="label", chart_value="farmers", **FARMER_GEO),
+        _spec("farmers-without-cluster", "farmers", "Farmers without a cluster", "Registered farmers who have not been assigned to a cluster.", OPERATIONS, "landscape", FARMER_FILTERS, FARMER_COLUMNS, "farmers", preset={"cluster__isnull": True}, **FARMER_GEO),
+        _spec("clusters-register", "farmers", "Lead farmers and cluster membership", "Each cluster, its lead farmer from the farmer register, member count, and registered hectares.", OPERATIONS, "landscape", ("province", "district", "cluster", "status"), [
+            C("name", "Cluster"), C("province_name", "Province"), C("district_name", "District"),
+            C("lead_farmer_name", "Lead farmer"), C("members", "Members", "count", True),
+            C("hectares", "Registered hectares", "qty", True), C("active", "Active", "bool"),
+        ], "cluster_register", province_field="province_id", district_field="district_id", cluster_field="id", status_field="active", status_options=[["true", "Active"], ["false", "Inactive"]]),
         _spec("farmers-verified", "farmers", "Verified farmers", "Farmers whose verification status is verified or approved.", OPERATIONS, "landscape", FARMER_FILTERS, FARMER_COLUMNS, "farmers", preset={"verification_status__in": ["VERIFIED", "APPROVED"]}, **FARMER_GEO),
         _spec("farmers-unverified", "farmers", "Unverified farmers", "Farmers who are not verified or approved.", OPERATIONS, "landscape", FARMER_FILTERS, FARMER_COLUMNS, "farmers", mode="unverified", **FARMER_GEO),
         _spec("farmers-active", "farmers", "Active farmers", "Farmers with an active membership.", OPERATIONS, "landscape", FARMER_FILTERS, FARMER_COLUMNS, "farmers", preset={"membership_status": "ACTIVE", "is_active": True}, **FARMER_GEO),
@@ -244,7 +250,7 @@ def _reports():
         _spec("crop-inputs", "crops", "Crop input requirements", "Input groups, items, rates, and costs configured for each crop.", OPERATIONS, "landscape", ("season", "crop", "status"), [
             C("crop_name", "Crop"), C("crop_category", "Season"), C("group_name", "Input group"), C("item_name", "Item"),
             C("rate_per_hectare", "Rate per hectare", "rate"), C("unit", "Unit"), C("cost_per_unit", "Cost per unit", "money"),
-            C("cost_per_hectare", "Cost per hectare", "money", True), C("include_in_input_cost", "Included in input cost", "bool"), C("active", "Active", "bool"),
+            C("cost_per_hectare", "Cost per hectare", "money", True), C("cost_type", "Type"), C("active", "Active", "bool"),
         ], "crop_requirements", crop_field="crop__name", crop_category_field="crop__category", status_field="active", status_options=[["true", "Active"], ["false", "Inactive"]]),
         _spec("crop-costs", "crops", "Total configured input cost by crop", "Active input requirements that are included in the input cost, totalled per crop.", OPERATIONS, "portrait", ("season",), [
             C("name", "Crop"), C("category", "Season"), C("active", "Active", "bool"), C("inputs", "Inputs", "count", True),
@@ -275,7 +281,7 @@ def _reports():
     ]
     arda_filters = ("start_date", "end_date", "agricultural_year", "season", "crop", "programme", "province", "district", "farmer", "membership")
     reports += [
-        _spec("arda-requests", "arda", "ARDA requests", "Recorded ARDA request batches. Requested, allocated, available hectares and farmer counts use the same definitions as the ARDA Requests page.", OPERATIONS, "landscape", ("start_date", "end_date", "agricultural_year", "season", "crop", "programme", "province", "district"), [
+        _spec("arda-requests", "arda", "Input requests", "Recorded input request batches. Requested, allocated, available hectares and farmer counts use the same definitions as the Input Requests page.", OPERATIONS, "landscape", ("start_date", "end_date", "agricultural_year", "season", "crop", "programme", "province", "district"), [
             C("request_number", "Request number"), C("date_created", "Created", "datetime"), C("programme_name", "Programme"),
             C("season_name", "Agricultural year"), C("crop_season", "Season"), C("crop", "Crop"),
             C("requested_hectares", "Requested hectares", "qty", True),
@@ -283,17 +289,17 @@ def _reports():
             C("available_hectares", "Available hectares", "qty", True),
             C("farmer_count", "Farmers", "count", True),
         ], "arda_batches", date_field="date_created", season_field="season_id", crop_field="crop", programme_field="programme_id"),
-        _spec("arda-farmers", "arda", "Farmers included in ARDA requests", "Farmer-level requested and allocated hectares for each recorded request.", OPERATIONS, "landscape", arda_filters, [
+        _spec("arda-farmers", "arda", "Farmers included in input requests", "Farmer-level requested and allocated hectares for each recorded request.", OPERATIONS, "landscape", arda_filters, [
             C("request_number", "Request number"), C("created_at", "Created", "datetime"), C("programme_name", "Programme"),
             C("season_name", "Agricultural year"), C("crop_name", "Crop"), C("farmer_name", "Farmer"),
             C("membership_number", "Membership number"), C("province_name", "Province"), C("district_name", "District"),
             C("farm_name", "Farm"), C("requested_hectares", "Requested hectares", "qty", True),
             C("allocated_hectares", "Allocated hectares", "qty", True),
         ], "arda_lines", date_field="created_at", season_field="request_batch__season_id", crop_field="request_batch__crop", programme_field="request_batch__programme_id", **LINKED),
-        _spec("arda-by-crop", "arda", "ARDA requests by crop", "Requested hectares grouped by the crop stored on the request.", OPERATIONS, "portrait", ("agricultural_year", "season", "programme"), [
+        _spec("arda-by-crop", "arda", "Input requests by crop", "Requested hectares grouped by the crop stored on the request.", OPERATIONS, "portrait", ("agricultural_year", "season", "programme"), [
             C("label", "Crop"), C("requests", "Requests", "count", True), C("hectares", "Requested hectares", "qty", True),
         ], "arda_groups", group_field="crop", season_field="season_id", programme_field="programme_id", chart_label="label", chart_value="hectares"),
-        _spec("arda-by-location", "arda", "ARDA requests by province and district", "Farmer lines in recorded requests, grouped by the farmer's province and district.", OPERATIONS, "landscape", arda_filters, [
+        _spec("arda-by-location", "arda", "Input requests by province and district", "Farmer lines in recorded requests, grouped by the farmer's province and district.", OPERATIONS, "landscape", arda_filters, [
             C("province_name", "Province"), C("district_name", "District"), C("requests", "Farmer lines", "count", True),
             C("hectares", "Requested hectares", "qty", True),
         ], "arda_locations", chart_label="district_name", chart_value="hectares", date_field="created_at", season_field="request_batch__season_id", crop_field="request_batch__crop", programme_field="request_batch__programme_id", **LINKED),

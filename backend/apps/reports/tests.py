@@ -95,7 +95,7 @@ class ReportingCentreTests(TestCase):
         Crop.objects.create(name="Wheat", category="WINTER", active=True)
         CropInputRequirement.objects.create(
             crop=crop, group_name="Chemicals", item_name="Glyphosate", rate_per_hectare="2.0000",
-            unit="L", cost_per_unit="7.70", cost_per_hectare="15.4000", active=True, include_in_input_cost=True,
+            unit="L", cost_per_unit="7.70", cost_per_hectare="15.4000", active=True,
         )
         programme = Programme.objects.create(
             name="Maize Programme", code="MAIZE-26", season=self.season, crop="Maize",
@@ -319,7 +319,7 @@ class ReportingCentreTests(TestCase):
         export = self.client.get(reverse("report-export", kwargs={"code": "arda-requests"}), {
             "programme": programme.pk, "agricultural_year": self.season.pk, "season": "SUMMER", "file_format": "pdf",
         })
-        self.assertIn("SGR_ARDA_Requests_2026-2027_Summer.pdf", export["Content-Disposition"])
+        self.assertIn("SGR_Input_Requests_2026-2027_Summer.pdf", export["Content-Disposition"])
         self.assertNotIn(b"/Encrypt", export.content)
         self.assertIn(b"20000", export.content)
         csv_export = self.client.get(reverse("report-export", kwargs={"code": "arda-requests"}), {

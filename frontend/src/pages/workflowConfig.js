@@ -39,7 +39,7 @@ export const workflowPages = {
     ] }],
   },
   arda: {
-    title: 'ARDA Requests', endpoint: '/arda-request-batches/', editAction: true, deleteAction: true,
+    title: 'Input Requests', endpoint: '/arda-request-batches/', editAction: true, deleteAction: true,
     seasonScoped: true,
     activeSeasonOnly: true,
     eligibleEndpoint: '/farmers/eligible/',
@@ -67,7 +67,7 @@ export const workflowPages = {
         editButtonLabel: 'Edit',
         preventDuplicateBy: ['programme', 'crop'],
         duplicateStatuses: ['PENDING', 'SUBMITTED', 'APPROVED'],
-        duplicateMessage: 'An ARDA request for this programme and crop already exists for the selected season. Please edit the existing request instead.',
+        duplicateMessage: 'An input request for this programme and crop already exists for the selected season. Please edit the existing request instead.',
         fields: [
         select('programme', 'Programme', '/programmes/'),
         { name: 'crop', label: 'Crop', optionsPath: '/crops/', optionLabel: 'name', optionValue: 'name', categoryFromSeason: true, activeOnly: true, required: false },

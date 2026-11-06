@@ -142,7 +142,6 @@ class GoldenPathSystemTest(TestCase):
             unit="bags",
             cost_per_unit="10.00",
             cost_per_hectare="20.00",
-            include_in_input_cost=True,
             active=True,
         )
         CropSellingPrice.objects.create(crop=crop, season_id=season_id, price_per_tonne="200.00", active=True)

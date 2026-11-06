@@ -4,9 +4,23 @@ import apiClient from '../api/client'
 import { addDecimal, multiplyDecimal } from '../decimal'
 
 const costTypeChoices = [
-  ['AGRICULTURAL_INPUT', 'Agricultural input'],
-  ['OTHER_OPERATIONAL', 'Other agricultural inputs (not debt)'],
+  ['CROP_INPUT', 'Crop Input'],
+  ['FARM_EQUIPMENT', 'Farm Equipment'],
 ]
+
+const normaliseCostType = (value) => (value === 'FARM_EQUIPMENT' || value === 'MACHINERY_HIRING' ? 'FARM_EQUIPMENT' : 'CROP_INPUT')
+
+const emptyRequirement = {
+  group_name: '',
+  item_name: '',
+  rate_per_hectare: '',
+  unit: '',
+  cost_per_unit: '',
+  cost_per_hectare: '',
+  cost_type: 'CROP_INPUT',
+  active: true,
+  notes: '',
+}
 
 const toList = (data) => (Array.isArray(data) ? data : Array.isArray(data?.results) ? data.results : [])
 
@@ -55,18 +69,7 @@ function CropCataloguePage() {
   const [editingPriceId, setEditingPriceId] = useState(null)
   const [pendingDelete, setPendingDelete] = useState(null)
 
-  const [requirementForm, setRequirementForm] = useState({
-    group_name: '',
-    item_name: '',
-    rate_per_hectare: '',
-    unit: '',
-    cost_per_unit: '',
-    cost_per_hectare: '',
-    cost_type: 'AGRICULTURAL_INPUT',
-    include_in_input_cost: true,
-    active: true,
-    notes: '',
-  })
+  const [requirementForm, setRequirementForm] = useState(emptyRequirement)
 
   const [priceForm, setPriceForm] = useState({
     season: '',
@@ -88,7 +91,7 @@ function CropCataloguePage() {
   const totalCostPerHa = useMemo(
     () => addDecimal(
       requirements
-        .filter((requirement) => requirement.active && requirement.include_in_input_cost)
+        .filter((requirement) => requirement.active)
         .map((requirement) => requirement.cost_per_hectare || '0'),
       4,
     ),
@@ -179,10 +182,16 @@ function CropCataloguePage() {
     setError('')
     setMessage('')
     const payload = {
-      ...requirementForm,
       crop: Number(selectedCropId),
+      group_name: requirementForm.group_name,
+      item_name: requirementForm.item_name,
+      rate_per_hectare: requirementForm.rate_per_hectare,
+      unit: requirementForm.unit,
       cost_per_unit: requirementForm.cost_per_unit === '' ? null : requirementForm.cost_per_unit,
       cost_per_hectare: calculatedCostPerHa || null,
+      cost_type: normaliseCostType(requirementForm.cost_type),
+      active: requirementForm.active,
+      notes: requirementForm.notes,
     }
     try {
       if (editingRequirementId) {
@@ -193,18 +202,7 @@ function CropCataloguePage() {
         setMessage('Input requirement added.')
       }
       setEditingRequirementId(null)
-      setRequirementForm({
-        group_name: '',
-        item_name: '',
-        rate_per_hectare: '',
-        unit: '',
-        cost_per_unit: '',
-        cost_per_hectare: '',
-        cost_type: 'AGRICULTURAL_INPUT',
-        include_in_input_cost: true,
-        active: true,
-        notes: '',
-      })
+      setRequirementForm(emptyRequirement)
       await Promise.all([loadRequirements(selectedCropId), loadCrops(selectedCropId)])
     } catch (requestError) {
       const data = requestError.response?.data
@@ -260,8 +258,7 @@ function CropCataloguePage() {
       unit: row.unit || '',
       cost_per_unit: formatCatalogueMoney(row.cost_per_unit),
       cost_per_hectare: row.cost_per_hectare || '',
-      cost_type: row.cost_type || 'AGRICULTURAL_INPUT',
-      include_in_input_cost: row.include_in_input_cost,
+      cost_type: normaliseCostType(row.cost_type),
       active: row.active,
       notes: row.notes || '',
     })
@@ -358,14 +355,8 @@ function CropCataloguePage() {
             <input type="text" value={formatCatalogueMoney(calculatedCostPerHa)} readOnly />
           </label>
           <label className="form-field">Type
-            <select value={requirementForm.cost_type} onChange={(event) => setRequirementForm((current) => ({ ...current, cost_type: event.target.value }))}>
+            <select value={normaliseCostType(requirementForm.cost_type)} onChange={(event) => setRequirementForm((current) => ({ ...current, cost_type: event.target.value }))}>
               {costTypeChoices.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-            </select>
-          </label>
-          <label className="form-field">Include in input debt
-            <select value={requirementForm.include_in_input_cost ? 'yes' : 'no'} onChange={(event) => setRequirementForm((current) => ({ ...current, include_in_input_cost: event.target.value === 'yes' }))}>
-              <option value="yes">Yes</option>
-              <option value="no">No</option>
             </select>
           </label>
           <label className="form-field">Status
@@ -375,20 +366,22 @@ function CropCataloguePage() {
             </select>
           </label>
         </div>
+        <p className="finance-note">Every active input is included in farmer input debt when it is allocated. A missing unit cost blocks that calculation.</p>
         <div className="workflow-form-actions">
           <button className="primary-btn small" type="submit" disabled={saving || !selectedCropId}>{saving ? 'Saving…' : editingRequirementId ? 'Update input' : 'Add input'}</button>
-          {editingRequirementId ? <button type="button" className="ghost-btn" onClick={() => { setEditingRequirementId(null); setRequirementForm({ group_name: '', item_name: '', rate_per_hectare: '', unit: '', cost_per_unit: '', cost_per_hectare: '', cost_type: 'AGRICULTURAL_INPUT', include_in_input_cost: true, active: true, notes: '' }) }}>Cancel</button> : null}
+          {editingRequirementId ? <button type="button" className="ghost-btn" onClick={() => { setEditingRequirementId(null); setRequirementForm(emptyRequirement) }}>Cancel</button> : null}
         </div>
       </form>
 
       <div className="table-wrap">
         <table className="data-table">
-          <thead><tr><th>Group</th><th>Item</th><th>Rate/Ha</th><th>Unit</th><th>Cost/Unit</th><th>Cost/Ha</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Group</th><th>Item</th><th>Type</th><th>Rate/Ha</th><th>Unit</th><th>Cost/Unit</th><th>Cost/Ha</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>
             {requirements.map((row) => (
               <tr key={row.id}>
                 <td>{row.group_name}</td>
                 <td>{row.item_name}</td>
+                <td>{normaliseCostType(row.cost_type) === 'FARM_EQUIPMENT' ? 'Farm Equipment' : 'Crop Input'}</td>
                 <td>{row.rate_per_hectare}</td>
                 <td>{row.unit || '—'}</td>
                 <td>{row.cost_per_unit == null || row.cost_per_unit === '' ? '—' : formatCatalogueMoney(row.cost_per_unit)}</td>
@@ -401,8 +394,8 @@ function CropCataloguePage() {
                 </td>
               </tr>
             ))}
-            {selectedCropId && !requirements.length ? <tr><td colSpan={8}>No input requirements are configured for {selectedCrop?.name || 'this crop'}. Add the rate and cost for this crop. Other crops are not changed.</td></tr> : null}
-            {!selectedCropId ? <tr><td colSpan={8}>Select a crop to view input requirements.</td></tr> : null}
+            {selectedCropId && !requirements.length ? <tr><td colSpan={9}>No input requirements are configured for {selectedCrop?.name || 'this crop'}. Add the rate and cost for this crop. Other crops are not changed.</td></tr> : null}
+            {!selectedCropId ? <tr><td colSpan={9}>Select a crop to view input requirements.</td></tr> : null}
           </tbody>
         </table>
       </div>

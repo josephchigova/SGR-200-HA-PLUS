@@ -36,7 +36,7 @@ function DashboardCharts({ charts = {} }) {
         ]}
       />
       <GroupedBarChart
-        title="ARDA hectares"
+        title="Input request hectares"
         unit="ha"
         note="Requested and allocated hectares for the selected agricultural year and season."
         series={[
@@ -155,8 +155,8 @@ function DashboardPage({ selectedSeason = null, cropSeason = '', periodStatus = 
     ['Total Farmers', count(summary.registered_farmers), ''],
     ['Verified Farmers', count(summary.verified_farmers), ''],
     ['Total Hectares', quantity(summary.total_hectares), 'ha'],
-    ['ARDA Requests', count(summary.arda_request_count), ''],
-    ['ARDA Requested', quantity(summary.arda_requested_hectares), 'ha'],
+    ['Input Requests', count(summary.arda_request_count), ''],
+    ['Input Requested', quantity(summary.arda_requested_hectares), 'ha'],
     ['Inputs Allocated', quantity(summary.input_allocated_hectares), 'ha'],
     ['Production', quantity(summary.production), 'tonnes'],
     ['Grain Delivered', quantity(summary.grain_delivered_tonnes), 'tonnes'],

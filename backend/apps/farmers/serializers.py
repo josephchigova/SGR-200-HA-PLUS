@@ -86,6 +86,7 @@ class FarmSerializer(serializers.ModelSerializer):
             "total_hectares",
             "arable_hectares",
             "irrigated_hectares",
+            "irrigation_type",
             "cluster",
             "is_active",
             "ownership_type",
@@ -129,10 +130,10 @@ class FarmSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"district": ["District does not belong to the selected province."]})
         if ward and district and ward.district_id != district.pk:
             raise serializers.ValidationError({"ward": ["Ward does not belong to the selected district."]})
-        if cluster and district and cluster.district_id != district.pk:
-            raise serializers.ValidationError({"cluster": ["Cluster must belong to the selected district."]})
         if cluster and province and cluster.province_id != province.pk:
             raise serializers.ValidationError({"cluster": ["Cluster must belong to the selected province."]})
+        if cluster and cluster.district_id and district and cluster.district_id != district.pk:
+            raise serializers.ValidationError({"cluster": ["Cluster must belong to the selected district."]})
         if "latitude" in attrs or "longitude" in attrs:
             latitude = attrs["latitude"] if "latitude" in attrs else getattr(instance, "latitude", None)
             longitude = attrs["longitude"] if "longitude" in attrs else getattr(instance, "longitude", None)
@@ -169,6 +170,7 @@ class FarmerSerializer(serializers.ModelSerializer):
     irrigated_hectares = serializers.DecimalField(
         max_digits=12, decimal_places=2, min_value=Decimal("0.00"), write_only=True, required=False
     )
+    irrigation_type = serializers.ChoiceField(choices=Farm.IRRIGATION_CHOICES, write_only=True, required=False)
     farm_name = serializers.CharField(
         write_only=True,
         required=False,
@@ -205,6 +207,7 @@ class FarmerSerializer(serializers.ModelSerializer):
             "total_hectares",
             "arable_hectares",
             "irrigated_hectares",
+            "irrigation_type",
             "farm_hectares",
             "total_arable_hectares",
             "total_irrigated_hectares",
@@ -250,8 +253,10 @@ class FarmerSerializer(serializers.ModelSerializer):
         province = attrs.get("province", getattr(self.instance, "province", None))
         if district and province and district.province_id != province.pk:
             raise serializers.ValidationError({"district": ["District does not belong to the selected province."]})
-        if cluster and (cluster.district_id != getattr(district, "pk", None) or cluster.province_id != getattr(province, "pk", None)):
-            raise serializers.ValidationError({"cluster": ["Cluster must belong to the selected province and district."]})
+        if cluster and province and cluster.province_id != province.pk:
+            raise serializers.ValidationError({"cluster": ["Cluster must belong to the selected province."]})
+        if cluster and cluster.district_id and getattr(district, "pk", None) != cluster.district_id:
+            raise serializers.ValidationError({"cluster": ["Cluster must belong to the selected district."]})
         total_hectares = attrs.get("total_hectares", Decimal("0.00"))
         arable_hectares = attrs.get("arable_hectares", total_hectares)
         irrigated_hectares = attrs.get("irrigated_hectares", Decimal("0.00"))
@@ -295,6 +300,7 @@ class FarmerSerializer(serializers.ModelSerializer):
         hectares = validated_data.pop("total_hectares")
         arable_hectares = validated_data.pop("arable_hectares", hectares)
         irrigated_hectares = validated_data.pop("irrigated_hectares", Decimal("0.00"))
+        irrigation_type = validated_data.pop("irrigation_type", Farm.IRRIGATION_NONE)
         farm_name = validated_data.pop("farm_name", "")
         latitude = validated_data.pop("latitude", None)
         longitude = validated_data.pop("longitude", None)
@@ -313,24 +319,30 @@ class FarmerSerializer(serializers.ModelSerializer):
             total_hectares=hectares,
             arable_hectares=arable_hectares,
             irrigated_hectares=irrigated_hectares,
+            irrigation_type=irrigation_type,
         )
         for extra in additional_farms:
             Farm.objects.create(
                 farmer=farmer,
                 farm_name=str(extra.get("farm_name") or "").strip(),
-                province=farmer.province,
-                district=farmer.district,
-                ward=farmer.ward,
+                province_id=extra.get("province") or farmer.province_id,
+                district_id=extra.get("district") or farmer.district_id,
+                ward_id=extra.get("ward") or farmer.ward_id,
                 cluster=farmer.cluster,
                 total_hectares=extra.get("total_hectares") or "0",
                 arable_hectares=extra.get("arable_hectares") or "0",
                 irrigated_hectares=extra.get("irrigated_hectares") or "0",
+                irrigation_type=extra.get("irrigation_type") or Farm.IRRIGATION_NONE,
             )
         return farmer
 
     def update(self, instance, validated_data):
         validated_data.pop("total_hectares", None)
+        validated_data.pop("arable_hectares", None)
+        validated_data.pop("irrigated_hectares", None)
+        validated_data.pop("irrigation_type", None)
         validated_data.pop("farm_name", None)
+        validated_data.pop("additional_farms", None)
         coordinates_sent = "latitude" in validated_data or "longitude" in validated_data
         latitude = validated_data.pop("latitude", None)
         longitude = validated_data.pop("longitude", None)

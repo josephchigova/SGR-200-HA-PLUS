@@ -14,6 +14,7 @@ import {
 import DashboardPage from './pages/DashboardPage'
 import FinancePage from './pages/FinancePage'
 import CropCataloguePage from './pages/CropCataloguePage'
+import ClustersPage from './pages/ClustersPage'
 import FarmerDetailsPage from './pages/FarmerDetailsPage'
 import FarmersPage from './pages/FarmersPage'
 import InputAllocationsPage from './pages/InputAllocationsPage'
@@ -34,6 +35,7 @@ const navGroups = [
     title: 'Farmers',
     items: [
       { label: 'Farmers Register', to: '/farmers' },
+      { label: 'Clusters', to: '/clusters' },
       { label: 'Verification', to: '/verification' },
       { label: 'Subscriptions', to: '/subscriptions' },
     ],
@@ -43,7 +45,7 @@ const navGroups = [
     items: [
       { label: 'Crop Catalogue', to: '/crops' },
       { label: 'Programmes', to: '/programmes' },
-      { label: 'ARDA Requests', to: '/arda-requests' },
+      { label: 'Input Requests', to: '/arda-requests' },
     ],
   },
   {
@@ -203,7 +205,7 @@ export function AppShell() {
   const historicalMessage = !selectedSeason || !historical
     ? ''
     : selectedSeason.status !== 'ACTIVE'
-      ? `${selectedSeason.name} is not the active season. Records stay available to view. ARDA requests can only be created or edited for an active season.`
+      ? `${selectedSeason.name} is not the active season. Records stay available to view. Input requests can only be created or edited for an active season.`
       : `Historical period. Viewing ${selectedSeason.name}${selectedCropLabel ? ` · ${selectedCropLabel}` : ''}. Selecting this period does not change saved records.`
 
   const applySelection = (selection) => {
@@ -398,6 +400,7 @@ export function AppShell() {
             <Route path="/dashboard" element={<DashboardPage selectedSeason={selectedSeason} cropSeason={cropSeason} periodStatus={periodStatus} />} />
             <Route path="/farmers" element={<FarmersPage />} />
             <Route path="/farmers/:id" element={<FarmerDetailsPage />} />
+            <Route path="/clusters" element={<ClustersPage />} />
             <Route path="/verification" element={<VerificationPage />} />
             <Route path="/subscriptions" element={<SubscriptionsPage selectedSeason={selectedSeason} />} />
             <Route path="/crops" element={<CropCataloguePage />} />

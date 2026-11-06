@@ -15,31 +15,31 @@ class Command(BaseCommand):
             "Sorghum": {
                 "category": Crop.CATEGORY_SUMMER,
                 "requirements": [
-                    {"group_name": "Seed", "item_name": "SCXH102/NS-5511", "rate_per_hectare": "10.00", "unit": "Kg", "cost_per_unit": "40.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Seed", "item_name": "Seed Safener - Benoxacor", "rate_per_hectare": "0.06", "unit": "Kg", "cost_per_unit": "10.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Fertilisers", "item_name": "Basal fertiliser", "rate_per_hectare": "200.00", "unit": "kg", "cost_per_unit": "128.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Fertilisers", "item_name": "Top Dressing", "rate_per_hectare": "200.00", "unit": "kg", "cost_per_unit": "140.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals - Pre-emergence Herbicide", "item_name": "Glyphosate (granules)", "rate_per_hectare": "2.00", "unit": "Kg", "cost_per_unit": "12.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals - Pre-emergence Herbicide", "item_name": "S-Metolachlor", "rate_per_hectare": "1.20", "unit": "L", "cost_per_unit": "12.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals - Pre-emergence Herbicide", "item_name": "Atrazine", "rate_per_hectare": "2.00", "unit": "L", "cost_per_unit": "8.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals - Post-emergence Herbicide", "item_name": "Atrazine", "rate_per_hectare": "3.00", "unit": "L", "cost_per_unit": "12.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals - Post-emergence Herbicide", "item_name": "CP Wetter", "rate_per_hectare": "0.30", "unit": "L", "cost_per_unit": "3.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals - Insecticides / Fungicides", "item_name": "Elegant Star", "rate_per_hectare": "0.15", "unit": "L", "cost_per_unit": "8.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals - Insecticides / Fungicides", "item_name": "Dimethoate", "rate_per_hectare": "0.56", "unit": "L", "cost_per_unit": "5.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals - Insecticides / Fungicides", "item_name": "Tebuconazole", "rate_per_hectare": "0.25", "unit": "L", "cost_per_unit": "5.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
+                    {"group_name": "Seed", "item_name": "SCXH102/NS-5511", "rate_per_hectare": "10.00", "unit": "Kg", "cost_per_unit": "40.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Seed", "item_name": "Seed Safener - Benoxacor", "rate_per_hectare": "0.06", "unit": "Kg", "cost_per_unit": "10.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Fertilisers", "item_name": "Basal fertiliser", "rate_per_hectare": "200.00", "unit": "kg", "cost_per_unit": "128.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Fertilisers", "item_name": "Top Dressing", "rate_per_hectare": "200.00", "unit": "kg", "cost_per_unit": "140.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals - Pre-emergence Herbicide", "item_name": "Glyphosate (granules)", "rate_per_hectare": "2.00", "unit": "Kg", "cost_per_unit": "12.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals - Pre-emergence Herbicide", "item_name": "S-Metolachlor", "rate_per_hectare": "1.20", "unit": "L", "cost_per_unit": "12.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals - Pre-emergence Herbicide", "item_name": "Atrazine", "rate_per_hectare": "2.00", "unit": "L", "cost_per_unit": "8.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals - Post-emergence Herbicide", "item_name": "Atrazine", "rate_per_hectare": "3.00", "unit": "L", "cost_per_unit": "12.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals - Post-emergence Herbicide", "item_name": "CP Wetter", "rate_per_hectare": "0.30", "unit": "L", "cost_per_unit": "3.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals - Insecticides / Fungicides", "item_name": "Elegant Star", "rate_per_hectare": "0.15", "unit": "L", "cost_per_unit": "8.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals - Insecticides / Fungicides", "item_name": "Dimethoate", "rate_per_hectare": "0.56", "unit": "L", "cost_per_unit": "5.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals - Insecticides / Fungicides", "item_name": "Tebuconazole", "rate_per_hectare": "0.25", "unit": "L", "cost_per_unit": "5.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
                 ],
             },
             "Maize": {
                 "category": Crop.CATEGORY_SUMMER,
                 "requirements": [
-                    {"group_name": "Seed & Fertilisers", "item_name": "SEED (SC659)", "rate_per_hectare": "25.00", "unit": "kg", "cost_per_unit": "4.50", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Seed & Fertilisers", "item_name": "COMP D", "rate_per_hectare": "6.00", "unit": "kg", "cost_per_unit": "31.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Seed & Fertilisers", "item_name": "AN", "rate_per_hectare": "6.00", "unit": "kg", "cost_per_unit": "36.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals", "item_name": "GLYPHOSATE (GRANULES)", "rate_per_hectare": "3.00", "unit": "kg", "cost_per_unit": "8.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals", "item_name": "ATRAZINE", "rate_per_hectare": "3.00", "unit": "kg", "cost_per_unit": "5.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals", "item_name": "METOLACHLOR", "rate_per_hectare": "2.00", "unit": "kg", "cost_per_unit": "12.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals", "item_name": "MUTSVAIRO/NATO", "rate_per_hectare": "2.00", "unit": "kg", "cost_per_unit": "12.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
-                    {"group_name": "Chemicals", "item_name": "EMAMECTIN BENZOATE", "rate_per_hectare": "0.50", "unit": "kg", "cost_per_unit": "50.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT, "include_in_input_cost": True},
+                    {"group_name": "Seed & Fertilisers", "item_name": "SEED (SC659)", "rate_per_hectare": "25.00", "unit": "kg", "cost_per_unit": "4.50", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Seed & Fertilisers", "item_name": "COMP D", "rate_per_hectare": "6.00", "unit": "kg", "cost_per_unit": "31.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Seed & Fertilisers", "item_name": "AN", "rate_per_hectare": "6.00", "unit": "kg", "cost_per_unit": "36.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals", "item_name": "GLYPHOSATE (GRANULES)", "rate_per_hectare": "3.00", "unit": "kg", "cost_per_unit": "8.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals", "item_name": "ATRAZINE", "rate_per_hectare": "3.00", "unit": "kg", "cost_per_unit": "5.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals", "item_name": "METOLACHLOR", "rate_per_hectare": "2.00", "unit": "kg", "cost_per_unit": "12.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals", "item_name": "MUTSVAIRO/NATO", "rate_per_hectare": "2.00", "unit": "kg", "cost_per_unit": "12.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
+                    {"group_name": "Chemicals", "item_name": "EMAMECTIN BENZOATE", "rate_per_hectare": "0.50", "unit": "kg", "cost_per_unit": "50.00", "cost_type": CropInputRequirement.COST_TYPE_INPUT},
                 ],
             },
             "Wheat": {
@@ -96,38 +96,28 @@ class Command(BaseCommand):
                 else:
                     cost_per_hectare = Decimal(str(row.get("cost_per_hectare", "0.00")))
 
-                requirement, row_created = CropInputRequirement.objects.update_or_create(
+                existing = CropInputRequirement.objects.filter(
                     crop=crop,
                     group_name=row["group_name"],
                     item_name=row["item_name"],
-                    cost_type=row.get("cost_type", CropInputRequirement.COST_TYPE_INPUT),
-                    defaults={
-                        "rate_per_hectare": rate,
-                        "unit": row.get("unit", ""),
-                        "cost_per_unit": cost_per_unit,
-                        "cost_per_hectare": cost_per_hectare,
-                        "include_in_input_cost": row.get("include_in_input_cost", True),
-                        "active": True,
-                    },
-                )
-                if row_created:
-                    created_requirements += 1
-                    self.stdout.write(self.style.SUCCESS(f"Created input: {requirement.item_name}"))
-                else:
+                ).first()
+                if existing is not None:
                     updated_requirements += 1
-                    self.stdout.write(f"Updated input: {requirement.item_name}")
-
-            if crop.name == "Sorghum":
-                CropInputRequirement.objects.filter(
+                    self.stdout.write(f"Kept configured input: {existing.item_name}")
+                    continue
+                requirement = CropInputRequirement.objects.create(
                     crop=crop,
-                    item_name__in=[
-                        "Discing",
-                        "Planting",
-                        "Spraying and fertilisation (7 times)",
-                        "Packaging",
-                        "Transport",
-                    ],
-                ).delete()
+                    group_name=row["group_name"],
+                    item_name=row["item_name"],
+                    cost_type=row.get("cost_type", CropInputRequirement.COST_TYPE_CROP_INPUT),
+                    rate_per_hectare=rate,
+                    unit=row.get("unit", ""),
+                    cost_per_unit=cost_per_unit,
+                    cost_per_hectare=cost_per_hectare,
+                    active=True,
+                )
+                created_requirements += 1
+                self.stdout.write(self.style.SUCCESS(f"Created input: {requirement.item_name}"))
 
         self.stdout.write(
             self.style.SUCCESS(

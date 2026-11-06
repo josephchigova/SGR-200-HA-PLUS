@@ -271,7 +271,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
   const submit = async (event, form) => {
     event.preventDefault()
     if (seasonReadOnly) {
-      setError('This season is read-only. ARDA requests can only be created or edited for the active season.')
+      setError('This season is read-only. Input requests can only be created or edited for the active season.')
       return
     }
     const formValues = values[form.key] || {}
@@ -342,7 +342,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
     setError('')
     try {
       await apiClient.post(`${endpoint}${row.id}/approve/`, { approved_hectares: row.requested_hectares })
-      setMessage('ARDA request approved.')
+      setMessage('Input request approved.')
       await refresh()
     } catch (requestError) {
       setError(requestError.response?.data ? Object.values(requestError.response.data).flat().join(' ') : 'Unable to approve this request.')
@@ -351,7 +351,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
 
   const startEditing = (row) => {
     if (seasonReadOnly) {
-      setError('This season is read-only. ARDA requests can only be created or edited for the active season.')
+      setError('This season is read-only. Input requests can only be created or edited for the active season.')
       return
     }
     const form = forms.find((candidate) => candidate.editable)

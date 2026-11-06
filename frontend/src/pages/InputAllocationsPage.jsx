@@ -263,7 +263,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
             </table>
           </div>
           <div className="form-message">
-            ARDA Requested: {preview.arda_requested_hectares} ha | Already Allocated: {preview.arda_allocated_hectares} ha | Available: {preview.arda_available_hectares} ha
+            Requested: {preview.arda_requested_hectares} ha | Already Allocated: {preview.arda_allocated_hectares} ha | Available: {preview.arda_available_hectares} ha
           </div>
           <div className="form-message">
             Input Cost / Ha: ${preview.calculated_input_cost_per_hectare} | Total Farmer Input Cost: ${preview.total_input_cost} | Selling Price/Tonne: ${preview.selling_price_per_tonne} | Required Recovery: {preview.required_recovery_tonnes} tonnes

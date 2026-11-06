@@ -91,7 +91,7 @@ describe('DashboardPage period requests', () => {
     })
 
     const first = render(<DashboardPage selectedSeason={season} cropSeason="SUMMER" periodStatus="ready" />)
-    const requested = await screen.findByText('ARDA Requested')
+    const requested = await screen.findByText('Input Requested')
     await waitFor(() => expect(requested.closest('article').textContent).toContain('20,000'))
     expect(screen.queryByText('ARDA Approved')).toBeNull()
     expect(localStorage.getItem('sgr_dashboard_summary')).toBeNull()
@@ -105,7 +105,7 @@ describe('DashboardPage period requests', () => {
       },
     })
     const reloadedView = render(<DashboardPage selectedSeason={season} cropSeason="SUMMER" periodStatus="ready" />)
-    const reloaded = await screen.findByText('ARDA Requested')
+    const reloaded = await screen.findByText('Input Requested')
     await waitFor(() => expect(reloaded.closest('article').textContent).toContain('15,000'))
     expect(reloaded.closest('article').textContent).not.toContain('20,000')
     reloadedView.unmount()
@@ -116,8 +116,8 @@ describe('DashboardPage period requests', () => {
         <DashboardPage selectedSeason={season} cropSeason="SUMMER" periodStatus="ready" />
       </>,
     )
-    await waitFor(() => expect(screen.getAllByText('ARDA Requested')).toHaveLength(2))
-    screen.getAllByText('ARDA Requested').forEach((card) => {
+    await waitFor(() => expect(screen.getAllByText('Input Requested')).toHaveLength(2))
+    screen.getAllByText('Input Requested').forEach((card) => {
       expect(card.closest('article').textContent).toContain('15,000')
     })
   })

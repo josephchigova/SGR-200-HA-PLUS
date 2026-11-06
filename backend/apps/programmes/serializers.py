@@ -166,12 +166,20 @@ class CropInputRequirementSerializer(serializers.ModelSerializer):
             "cost_per_unit",
             "cost_per_hectare",
             "cost_type",
-            "include_in_input_cost",
             "active",
             "notes",
             "created_at",
             "updated_at",
         ]
+
+    def to_internal_value(self, data):
+        incoming = data.copy() if hasattr(data, "copy") else dict(data)
+        cost_type = incoming.get("cost_type")
+        if cost_type in CropInputRequirement.LEGACY_COST_TYPES:
+            incoming["cost_type"] = CropInputRequirement.LEGACY_COST_TYPES[cost_type]
+        if hasattr(incoming, "pop"):
+            incoming.pop("include_in_input_cost", None)
+        return super().to_internal_value(incoming)
 
     def validate(self, attrs):
         instance = self.instance
@@ -195,16 +203,16 @@ class CropInputRequirementSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"cost_per_hectare": ["Cost per hectare cannot be negative."]})
             attrs["cost_per_unit"] = (cph / rate).quantize(Decimal("0.0001"))
 
-        cost_type = attrs.get("cost_type", getattr(instance, "cost_type", CropInputRequirement.COST_TYPE_INPUT))
-        include_in_input_cost = attrs.get("include_in_input_cost", getattr(instance, "include_in_input_cost", True))
-        if cost_type != CropInputRequirement.COST_TYPE_INPUT and include_in_input_cost:
-            attrs["include_in_input_cost"] = False
-
-        group_name = str(attrs.get("group_name", getattr(instance, "group_name", ""))).lower()
-        item_name = str(attrs.get("item_name", getattr(instance, "item_name", ""))).lower()
-        blocked = {"transport", "labour", "combine"}
-        if any(term in group_name or term in item_name for term in blocked):
-            attrs["include_in_input_cost"] = False
+        cost_type = attrs.get("cost_type", getattr(instance, "cost_type", CropInputRequirement.COST_TYPE_CROP_INPUT))
+        mapped_type = CropInputRequirement.LEGACY_COST_TYPES.get(cost_type)
+        if mapped_type is None:
+            raise serializers.ValidationError({"cost_type": ["Type must be Crop Input or Farm Equipment."]})
+        attrs["cost_type"] = mapped_type
+        unit_cost = attrs.get("cost_per_unit")
+        if unit_cost is None or Decimal(str(unit_cost)) <= 0:
+            raise serializers.ValidationError({
+                "cost_per_unit": ["Enter a unit cost greater than zero. Financial calculations are blocked until this price is configured."],
+            })
 
         return attrs
 

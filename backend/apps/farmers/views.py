@@ -23,7 +23,7 @@ class FarmerSearchPagination(PageNumberPagination):
 
 
 class FarmerViewSet(viewsets.ModelViewSet):
-    queryset = Farmer.objects.select_related("province", "district", "ward", "verified_by").prefetch_related("farms").all()
+    queryset = Farmer.objects.select_related("province", "district", "ward", "cluster", "verified_by").prefetch_related("farms").all()
     serializer_class = FarmerSerializer
     pagination_class = FarmerSearchPagination
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -59,6 +59,8 @@ class FarmerViewSet(viewsets.ModelViewSet):
         province_id = self.request.query_params.get("province")
         district_id = self.request.query_params.get("district")
         ward_id = self.request.query_params.get("ward")
+        cluster_id = self.request.query_params.get("cluster")
+        unassigned = self.request.query_params.get("unassigned")
         verification_statuses = []
         for raw_value in self.request.query_params.getlist("verification_status"):
             verification_statuses.extend(
@@ -71,6 +73,10 @@ class FarmerViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(district_id=district_id)
         if ward_id:
             queryset = queryset.filter(ward_id=ward_id)
+        if cluster_id:
+            queryset = queryset.filter(cluster_id=cluster_id)
+        if unassigned in {"1", "true", "yes"}:
+            queryset = queryset.filter(cluster__isnull=True)
         if verification_statuses:
             queryset = queryset.filter(verification_status__in=verification_statuses)
         if membership_status:

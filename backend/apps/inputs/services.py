@@ -182,9 +182,19 @@ class InputAllocationService:
 
     @staticmethod
     def _calculate_lines(*, crop, hectares):
-        requirements = CropInputRequirement.objects.filter(crop=crop, active=True).order_by("group_name", "item_name", "id")
-        if not requirements.exists():
+        requirements = list(CropInputRequirement.objects.filter(crop=crop, active=True).order_by("group_name", "item_name", "id"))
+        if not requirements:
             raise ValueError(f"No active crop input requirements are configured for {crop.name}.")
+        missing_prices = [
+            requirement.item_name
+            for requirement in requirements
+            if requirement.cost_per_unit is None or Decimal(requirement.cost_per_unit) <= 0
+        ]
+        if missing_prices:
+            names = ", ".join(missing_prices)
+            raise ValueError(
+                f"Input configuration for {crop.name} is incomplete. Set a unit cost greater than zero for: {names}."
+            )
 
         lines = []
         total_input_cost = Decimal("0.00")
@@ -193,22 +203,9 @@ class InputAllocationService:
 
         for requirement in requirements:
             required_quantity = (hectares_decimal * requirement.rate_per_hectare).quantize(Decimal("0.0001"))
-            if requirement.cost_per_unit is not None:
-                calculated_cost = (required_quantity * requirement.cost_per_unit).quantize(Decimal("0.01"))
-            else:
-                calculated_cost = (hectares_decimal * requirement.cost_per_hectare).quantize(Decimal("0.01"))
-
-            group_name = (requirement.group_name or "").lower()
-            item_name = (requirement.item_name or "").lower()
-            blocked = any(term in group_name or term in item_name for term in ("transport", "labour", "combine"))
-            included = (
-                requirement.include_in_input_cost
-                and requirement.cost_type == CropInputRequirement.COST_TYPE_INPUT
-                and not blocked
-            )
-            if included:
-                total_input_cost += calculated_cost
-                total_input_cost_per_hectare += requirement.cost_per_hectare
+            calculated_cost = (required_quantity * requirement.cost_per_unit).quantize(Decimal("0.01"))
+            total_input_cost += calculated_cost
+            total_input_cost_per_hectare += requirement.cost_per_hectare
 
             lines.append({
                 "source_requirement": requirement,
@@ -220,7 +217,7 @@ class InputAllocationService:
                 "cost_per_hectare": requirement.cost_per_hectare,
                 "required_quantity": required_quantity,
                 "calculated_cost": calculated_cost,
-                "included_in_total": included,
+                "included_in_total": True,
             })
 
         return {

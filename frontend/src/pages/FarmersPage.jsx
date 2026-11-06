@@ -28,10 +28,20 @@ const emptyForm = {
   total_hectares: '',
   arable_hectares: '',
   irrigated_hectares: '0',
+  irrigation_type: 'NONE',
   latitude: '',
   longitude: '',
 }
 
+const irrigationChoices = [
+  ['NONE', 'Not recorded'],
+  ['RAINFED', 'Rainfed'],
+  ['CENTRE_PIVOT', 'Centre pivot'],
+  ['DRIP', 'Drip'],
+  ['SPRINKLER', 'Sprinkler'],
+  ['FLOOD', 'Flood'],
+  ['OTHER', 'Other'],
+]
 const namePattern = "[A-Za-zÀ-ÖØ-öø-ÿ]+([ '-][A-Za-zÀ-ÖØ-öø-ÿ]+)*"
 const nationalIdPattern = "[A-Za-z0-9/-]{5,30}"
 const today = new Date()
@@ -164,8 +174,18 @@ function FarmersPage() {
         if (active) setDistrictsLoading(false)
       })
 
+    const clusterParams = { province: provinceId }
+    if (form.district) clusterParams.district = form.district
+    getAllPages('/clusters/', clusterParams)
+      .then((records) => {
+        if (active) setClusters(records)
+      })
+      .catch(() => {
+        if (active) setGeographyError('Unable to load clusters for this province.')
+      })
+
     return () => { active = false }
-  }, [form.province])
+  }, [form.province, form.district])
 
   useEffect(() => {
     const districtId = form.district
@@ -174,15 +194,13 @@ function FarmersPage() {
     let active = true
     Promise.all([
       getAllPages('/wards/', { district: districtId }),
-      getAllPages('/clusters/', { district: districtId }),
     ])
-      .then(([wardRecords, clusterRecords]) => {
+      .then(([wardRecords]) => {
         if (!active) return
         setWards(wardRecords)
-        setClusters(clusterRecords)
       })
       .catch(() => {
-        if (active) setGeographyError('Unable to load wards or clusters for this district.')
+        if (active) setGeographyError('Unable to load wards for this district.')
       })
       .finally(() => {
         if (active) setLocationsLoading(false)
@@ -395,21 +413,15 @@ function FarmersPage() {
             </label>
             <label className="form-field">
               Cluster
-              <select name="cluster" value={form.cluster} onChange={handleChange} disabled={!form.district || locationsLoading}>
+              <select name="cluster" value={form.cluster} onChange={handleChange} disabled={!form.province}>
                 <option value="">
-                  {locationsLoading ? 'Loading clusters...' : clusters.length ? 'Select cluster' : form.district ? 'No clusters configured for this district' : 'Select a district first'}
+                  {!form.province ? 'Select a province first' : clusters.length ? 'Not assigned to a cluster' : 'No clusters configured for this province'}
                 </option>
                 {clusters.map((cluster) => (
-                  <option key={cluster.id} value={cluster.id}>{cluster.name}</option>
+                  <option key={cluster.id} value={cluster.id}>{cluster.name}{cluster.district_name ? ` · ${cluster.district_name}` : ''}</option>
                 ))}
               </select>
-              {form.district && !locationsLoading && clusters.length === 0 && !geographyError ? <small>Clusters follow SGR operations and are not generated automatically. An authorized officer can add one for this district.</small> : null}
-              {form.district ? (
-                <span className="workflow-form-actions">
-                  <input value={newClusterName} onChange={(event) => setNewClusterName(event.target.value)} placeholder="Cluster name" maxLength={180} />
-                  <button type="button" className="ghost-btn small" disabled={savingLocation || !newClusterName.trim()} onClick={() => saveLocation('cluster')}>Add cluster</button>
-                </span>
-              ) : null}
+              {form.province && clusters.length === 0 && !geographyError ? <small>Clusters are created in Cluster Management. A farmer can be registered before a cluster is assigned.</small> : null}
             </label>
             <label className="form-field">
               Farm name
@@ -426,6 +438,12 @@ function FarmersPage() {
             <label className="form-field">
               Irrigated arable hectares
               <input type="number" min="0" max={form.arable_hectares || undefined} step="0.01" name="irrigated_hectares" value={form.irrigated_hectares} onChange={handleChange} required />
+            </label>
+            <label className="form-field">
+              Irrigation type
+              <select name="irrigation_type" value={form.irrigation_type} onChange={handleChange}>
+                {irrigationChoices.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
             </label>
             <div className="form-field full-width">
               <span>Additional farms</span>

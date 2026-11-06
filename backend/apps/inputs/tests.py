@@ -131,7 +131,6 @@ class InputAllocationCatalogueFlowTests(TestCase):
             unit="kg",
             cost_per_unit="23.00",
             cost_per_hectare="138.00",
-            include_in_input_cost=True,
             active=True,
         )
         CropInputRequirement.objects.create(
@@ -142,7 +141,6 @@ class InputAllocationCatalogueFlowTests(TestCase):
             unit="kg",
             cost_per_unit="12.00",
             cost_per_hectare="48.00",
-            include_in_input_cost=True,
             active=True,
         )
         CropInputRequirement.objects.create(
@@ -154,7 +152,6 @@ class InputAllocationCatalogueFlowTests(TestCase):
             cost_per_unit="100.00",
             cost_per_hectare="100.00",
             cost_type=CropInputRequirement.COST_TYPE_MACHINERY,
-            include_in_input_cost=False,
             active=True,
         )
         CropSellingPrice.objects.create(crop=self.crop, season=self.season, price_per_tonne="300.00", active=True)
@@ -199,8 +196,8 @@ class InputAllocationCatalogueFlowTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["total_input_cost"], "37200.00")
-        self.assertEqual(response.data["required_recovery_tonnes"], "124.00")
+        self.assertEqual(response.data["total_input_cost"], "57200.00")
+        self.assertEqual(response.data["required_recovery_tonnes"], "190.67")
         self.assertEqual(len(response.data["lines"]), 3)
         metolachlor = [line for line in response.data["lines"] if line["item_name"] == "Metolachlor"][0]
         atrazine = [line for line in response.data["lines"] if line["item_name"] == "Atrazine"][0]
@@ -209,7 +206,8 @@ class InputAllocationCatalogueFlowTests(TestCase):
         self.assertEqual(metolachlor["calculated_cost"], "27600.00")
         self.assertEqual(atrazine["required_quantity"], "800.0000")
         self.assertEqual(atrazine["calculated_cost"], "9600.00")
-        self.assertFalse(discing["included_in_total"])
+        self.assertTrue(discing["included_in_total"])
+        self.assertEqual(discing["calculated_cost"], "20000.00")
 
     def test_allocation_creates_snapshot_lines_and_debt(self):
         response = self.client.post(
@@ -225,12 +223,12 @@ class InputAllocationCatalogueFlowTests(TestCase):
         )
         self.assertEqual(response.status_code, 201, response.data)
         allocation = InputAllocation.objects.get(pk=response.data["id"])
-        self.assertEqual(allocation.total_input_cost, 37200)
+        self.assertEqual(allocation.total_input_cost, 57200)
         self.assertEqual(allocation.calculation_lines.count(), 3)
 
         debt = InputDebt.objects.get(input_allocation=allocation)
-        self.assertEqual(debt.input_value, 37200)
-        self.assertEqual(debt.required_recovery_tonnes, 124)
+        self.assertEqual(debt.input_value, 57200)
+        self.assertEqual(debt.required_recovery_tonnes, Decimal("190.67"))
         self.assertEqual(debt.status, InputDebt.STATUS_NOT_RECOVERED)
 
     def test_historical_debt_snapshot_does_not_change_after_catalogue_update(self):
@@ -317,7 +315,6 @@ class InputAllocationCatalogueFlowTests(TestCase):
             unit="bag",
             cost_per_unit="10.00",
             cost_per_hectare="10.00",
-            include_in_input_cost=True,
             active=True,
         )
         CropSellingPrice.objects.create(crop=maize, season=self.season, price_per_tonne="300.00", active=True)
@@ -459,7 +456,6 @@ class InputAllocationCatalogueFlowTests(TestCase):
             unit="bag",
             cost_per_unit="10.00",
             cost_per_hectare="10.00",
-            include_in_input_cost=True,
             active=True,
         )
         CropSellingPrice.objects.create(crop=maize, season=self.season, price_per_tonne="300.00", active=True)
@@ -736,7 +732,6 @@ class InputAllocationCatalogueFlowTests(TestCase):
             unit="bag",
             cost_per_unit="10.00",
             cost_per_hectare="10.00",
-            include_in_input_cost=True,
             active=True,
         )
         CropSellingPrice.objects.create(crop=maize, season=self.season, price_per_tonne="300.00", active=True)

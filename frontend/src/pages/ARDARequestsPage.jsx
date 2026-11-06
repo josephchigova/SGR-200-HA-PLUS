@@ -15,7 +15,7 @@ function ARDARequestsPage() {
       const token = localStorage.getItem('sgr_access_token')
       if (!token) {
         setLoading(false)
-        setError('Please sign in to review ARDA requests.')
+        setError('Please sign in to review input requests.')
         return
       }
 
@@ -27,7 +27,7 @@ function ARDARequestsPage() {
         setRequests(response.data?.results || response.data || [])
         setError('')
       } catch {
-        setError('Unable to load ARDA requests.')
+        setError('Unable to load input requests.')
       } finally {
         setLoading(false)
       }
@@ -39,15 +39,15 @@ function ARDARequestsPage() {
   return (
     <div className="page-card">
       <div className="section-head">
-        <h3>ARDA Requests</h3>
+        <h3>Input Requests</h3>
         <TabSearch value={search} onChange={setSearch} placeholder="Filter requests..." />
       </div>
 
       {error ? <div className="form-message error">{error}</div> : null}
-      {loading ? <div className="form-message">Loading ARDA requests...</div> : null}
+      {loading ? <div className="form-message">Loading input requests...</div> : null}
 
       {!loading && requests.length === 0 ? (
-        <div className="form-message">No ARDA requests have been raised yet.</div>
+        <div className="form-message">No input requests have been raised yet.</div>
       ) : null}
 
       {!loading && filteredRequests.length > 0 ? (

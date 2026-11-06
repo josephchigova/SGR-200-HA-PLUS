@@ -16,8 +16,10 @@ from django.db.models import (
 )
 from django.db.models.functions import Coalesce, Concat, TruncMonth
 
+from apps.clusters.models import Cluster
 from apps.accounts.models import User
 from apps.arda_requests.models import ARDAFarmerRequest, ARDARequestBatch
+from apps.clusters.models import Cluster
 from apps.farmers.models import Farm, Farmer
 from apps.finance.models import (
     Asset,
@@ -432,17 +434,36 @@ def crop_requirements(spec, params):
     qs = apply_common(CropInputRequirement.objects.select_related("crop"), spec, params)
     return qs.annotate(crop_name=F("crop__name"), crop_category=F("crop__category")).values(
         "id", "crop_name", "crop_category", "group_name", "item_name", "rate_per_hectare", "unit",
-        "cost_per_unit", "cost_per_hectare", "active", "include_in_input_cost",
+        "cost_per_unit", "cost_per_hectare", "cost_type", "active",
     ).order_by("crop_name", "group_name", "item_name", "id")
 
 
 def crop_costs(spec, params):
-    included = Q(input_requirements__active=True, input_requirements__include_in_input_cost=True)
+    included = Q(input_requirements__active=True)
     qs = apply_common(Crop.objects.all(), spec, params)
     return qs.annotate(
         inputs=Count("input_requirements", filter=included, distinct=True),
         total_cost_per_hectare=Coalesce(Sum("input_requirements__cost_per_hectare", filter=included), Value(ZERO), output_field=QTY),
     ).values("id", "name", "category", "active", "inputs", "total_cost_per_hectare").order_by("category", "name")
+
+
+def cluster_register(spec, params):
+    qs = apply_common(Cluster.objects.select_related("province", "district", "lead_member"), spec, params)
+    lead_name = Concat(
+        F("lead_member__first_name"),
+        Value(" "),
+        F("lead_member__surname"),
+        output_field=CharField(),
+    )
+    return qs.annotate(
+        province_name=F("province__name"),
+        district_name=Coalesce(F("district__name"), Value("All districts in province")),
+        lead_farmer_name=Coalesce(lead_name, Value("Not assigned")),
+        members=Count("farmers", distinct=True),
+        hectares=Coalesce(Sum("farmers__farms__total_hectares"), Value(ZERO), output_field=MONEY),
+    ).values(
+        "id", "name", "province_name", "district_name", "lead_farmer_name", "members", "hectares", "active",
+    ).order_by("province_name", "name", "id")
 
 
 def programmes(spec, params):
@@ -985,6 +1006,7 @@ BUILDERS = {
     "crops": crops,
     "crop_requirements": crop_requirements,
     "crop_costs": crop_costs,
+    "cluster_register": cluster_register,
     "programmes": programmes,
     "programme_groups": programme_groups,
     "programme_allocations": programme_allocations,
