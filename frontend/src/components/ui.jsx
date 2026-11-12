@@ -53,12 +53,17 @@ export function Pill({ tone = '', children }) {
 
 export function Modal({ title, subtitle, wide = false, onClose, children, footer }) {
   const box = useRef(null)
+  const onCloseRef = useRef(onClose)
+
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
 
   useEffect(() => {
     const previous = document.activeElement
     box.current?.focus()
     const onKey = (event) => {
-      if (event.key === 'Escape') onClose()
+      if (event.key === 'Escape') onCloseRef.current()
     }
     document.addEventListener('keydown', onKey)
     document.body.style.overflow = 'hidden'
@@ -69,7 +74,7 @@ export function Modal({ title, subtitle, wide = false, onClose, children, footer
       document.body.classList.remove('has-modal')
       if (previous && typeof previous.focus === 'function') previous.focus()
     }
-  }, [onClose])
+  }, [])
 
   // Rendered on the body so the dialog sits above the app and prints on its own.
   return createPortal(
