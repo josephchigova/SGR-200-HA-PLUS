@@ -3,16 +3,26 @@ from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from apps.clusters.models import Cluster
+
 from .models import AuditLog
 from .roles import capabilities
 
 User = get_user_model()
 
 SCOPED_ROLE_FIELDS = {
-    User.ROLE_LEAD_FARMER: ("assigned_cluster", "Choose the cluster this lead farmer manages."),
     User.ROLE_DISTRICT_COORDINATOR: ("district", "Choose the district this coordinator manages."),
     User.ROLE_PROVINCIAL_COORDINATOR: ("province", "Choose the province this coordinator manages."),
 }
+
+
+def registered_province_ids(farmer):
+    """Provinces where this farmer is registered, on the profile or on a farm."""
+    ids = set()
+    if farmer.province_id:
+        ids.add(farmer.province_id)
+    ids.update(farmer.farms.exclude(province_id=None).values_list("province_id", flat=True))
+    return ids
 
 
 def check_password_strength(password, user=None):
@@ -95,6 +105,7 @@ class ManagedUserSerializer(serializers.ModelSerializer):
     cluster_name = serializers.CharField(source="assigned_cluster.name", read_only=True, default="")
     district_name = serializers.CharField(source="district.name", read_only=True, default="")
     province_name = serializers.CharField(source="province.name", read_only=True, default="")
+    farmer_name = serializers.CharField(source="farmer.full_name", read_only=True, default="")
     password = serializers.CharField(write_only=True, required=False, allow_blank=False, min_length=8)
 
     class Meta:
@@ -115,6 +126,8 @@ class ManagedUserSerializer(serializers.ModelSerializer):
             "district_name",
             "assigned_cluster",
             "cluster_name",
+            "farmer",
+            "farmer_name",
             "must_change_password",
             "last_login",
             "date_joined",
@@ -129,12 +142,19 @@ class ManagedUserSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         instance = self.instance
         role = attrs.get("role", getattr(instance, "role", User.ROLE_VIEWER))
-        scoped = SCOPED_ROLE_FIELDS.get(role)
-        if scoped:
-            field, message = scoped
-            value = attrs.get(field, getattr(instance, field, None) if instance else None)
-            if value is None:
-                raise serializers.ValidationError({field: [message]})
+        if role == User.ROLE_LEAD_FARMER:
+            self._validate_lead_farmer(attrs, instance)
+        else:
+            scoped = SCOPED_ROLE_FIELDS.get(role)
+            if scoped:
+                field, message = scoped
+                value = attrs.get(field, getattr(instance, field, None) if instance else None)
+                if value is None:
+                    raise serializers.ValidationError({field: [message]})
+            attrs["farmer"] = None
+            if instance and instance.role == User.ROLE_LEAD_FARMER:
+                attrs["assigned_cluster"] = None
+                attrs["province"] = None
         request = self.context.get("request")
         if instance and request and instance.pk == request.user.pk:
             if attrs.get("is_active") is False:
@@ -145,6 +165,53 @@ class ManagedUserSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"password": ["Set a starting password for the new account."]})
         return attrs
 
+    def _validate_lead_farmer(self, attrs, instance):
+        # Switching a lead farmer on or off does not re-check the register.
+        # Choosing the person or the cluster does.
+        if instance is not None and not any(key in attrs for key in ("farmer", "assigned_cluster", "role")):
+            return
+        farmer = attrs["farmer"] if "farmer" in attrs else getattr(instance, "farmer", None)
+        cluster = attrs["assigned_cluster"] if "assigned_cluster" in attrs else getattr(instance, "assigned_cluster", None)
+        errors = {}
+        if farmer is None:
+            errors["farmer"] = ["Choose a registered farmer. A lead farmer account is only for someone already on the register."]
+        if cluster is None:
+            errors["assigned_cluster"] = ["Choose the cluster this lead farmer manages."]
+        if farmer is not None and cluster is not None:
+            province_ids = registered_province_ids(farmer)
+            if not province_ids:
+                errors["farmer"] = ["This farmer has no province on the register, so they cannot lead a cluster."]
+            elif cluster.province_id not in province_ids:
+                errors["assigned_cluster"] = ["A lead farmer cannot lead a cluster that is outside their province."]
+            else:
+                already = User.objects.filter(farmer=farmer)
+                if instance is not None:
+                    already = already.exclude(pk=instance.pk)
+                if already.exists():
+                    errors["farmer"] = ["This farmer already has an account."]
+                leaders = User.objects.filter(role=User.ROLE_LEAD_FARMER, assigned_cluster=cluster)
+                if instance is not None:
+                    leaders = leaders.exclude(pk=instance.pk)
+                if leaders.exists() or (cluster.lead_farmer_id and (instance is None or cluster.lead_farmer_id != instance.pk)):
+                    errors["assigned_cluster"] = ["This cluster already has a lead farmer account."]
+        if errors:
+            raise serializers.ValidationError(errors)
+        attrs["first_name"] = farmer.first_name
+        attrs["last_name"] = farmer.surname
+        current_phone = attrs["phone_number"] if "phone_number" in attrs else getattr(instance, "phone_number", "")
+        if not str(current_phone or "").strip():
+            attrs["phone_number"] = farmer.phone_primary or ""
+        attrs["province"] = cluster.province
+
+    def _sync_cluster_lead(self, user, previous_cluster_id):
+        if previous_cluster_id and previous_cluster_id != user.assigned_cluster_id:
+            Cluster.objects.filter(pk=previous_cluster_id, lead_farmer_id=user.pk).update(lead_farmer=None)
+        if user.role == User.ROLE_LEAD_FARMER and user.assigned_cluster_id and user.farmer_id:
+            Cluster.objects.filter(lead_farmer_id=user.pk).exclude(pk=user.assigned_cluster_id).update(lead_farmer=None)
+            Cluster.objects.filter(pk=user.assigned_cluster_id).update(lead_farmer=user)
+        else:
+            Cluster.objects.filter(lead_farmer_id=user.pk).update(lead_farmer=None)
+
     def create(self, validated_data):
         password = validated_data.pop("password")
         if not validated_data.get("username"):
@@ -153,9 +220,11 @@ class ManagedUserSerializer(serializers.ModelSerializer):
         user.set_password(password)
         user.must_change_password = True
         user.save()
+        self._sync_cluster_lead(user, None)
         return user
 
     def update(self, instance, validated_data):
+        previous_cluster_id = instance.assigned_cluster_id
         password = validated_data.pop("password", None)
         for name, value in validated_data.items():
             setattr(instance, name, value)
@@ -163,6 +232,7 @@ class ManagedUserSerializer(serializers.ModelSerializer):
             instance.set_password(password)
             instance.must_change_password = True
         instance.save()
+        self._sync_cluster_lead(instance, previous_cluster_id)
         return instance
 
 

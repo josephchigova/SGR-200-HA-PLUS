@@ -159,6 +159,7 @@ class FarmerSerializer(serializers.ModelSerializer):
     total_irrigated_hectares = serializers.SerializerMethodField()
     additional_farms = serializers.ListField(child=serializers.DictField(), write_only=True, required=False)
     province_name = serializers.CharField(source="province.name", read_only=True)
+    registered_province_ids = serializers.SerializerMethodField()
     district_name = serializers.CharField(source="district.name", read_only=True)
     cluster_name = serializers.CharField(source="cluster.name", read_only=True)
     total_hectares = serializers.DecimalField(
@@ -199,6 +200,7 @@ class FarmerSerializer(serializers.ModelSerializer):
             "address",
             "province",
             "province_name",
+            "registered_province_ids",
             "district",
             "district_name",
             "ward",
@@ -357,6 +359,11 @@ class FarmerSerializer(serializers.ModelSerializer):
 
     def _active_farms(self, obj):
         return [farm for farm in obj.farms.all() if farm.is_active]
+
+    def get_registered_province_ids(self, obj):
+        ids = {obj.province_id} if obj.province_id else set()
+        ids.update(farm.province_id for farm in obj.farms.all() if farm.province_id)
+        return sorted(ids)
 
     def get_farm_count(self, obj):
         return len(self._active_farms(obj))

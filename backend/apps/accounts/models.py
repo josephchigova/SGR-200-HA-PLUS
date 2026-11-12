@@ -43,6 +43,7 @@ class User(AbstractUser):
     province = models.ForeignKey("geography.Province", on_delete=models.SET_NULL, null=True, blank=True, related_name="assigned_users")
     district = models.ForeignKey("geography.District", on_delete=models.SET_NULL, null=True, blank=True, related_name="assigned_users")
     assigned_cluster = models.ForeignKey("clusters.Cluster", on_delete=models.SET_NULL, null=True, blank=True, related_name="assigned_users")
+    farmer = models.OneToOneField("farmers.Farmer", on_delete=models.SET_NULL, null=True, blank=True, related_name="user_account")
     must_change_password = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -176,7 +176,7 @@ class UserViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Creat
     pagination_class = StandardPagination
 
     def get_queryset(self):
-        queryset = User.objects.select_related("province", "district", "assigned_cluster").order_by("first_name", "last_name", "email")
+        queryset = User.objects.select_related("province", "district", "assigned_cluster", "farmer").order_by("first_name", "last_name", "email")
         params = self.request.query_params
         search = (params.get("search") or "").strip()
         if search:
