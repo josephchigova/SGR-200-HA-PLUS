@@ -62,6 +62,10 @@ function InputDebtPage({ selectedSeason = null, cropSeason = '', periodStatus = 
   return (
     <section className="workflow-page">
       <div className="workflow-heading">
+        <div>
+          <h3>Grain recovery</h3>
+          <p>Input debt and the grain delivered against each farmer’s recovery account.</p>
+        </div>
         <button type="button" className="ghost-btn" onClick={refresh}>Refresh</button>
       </div>
       {error ? <div className="form-message error">{error}</div> : null}

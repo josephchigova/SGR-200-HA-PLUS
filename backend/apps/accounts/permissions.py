@@ -43,6 +43,9 @@ class ProgrammeWorkflowPermission(permissions.BasePermission):
         User.ROLE_LEAD_FARMER,
         User.ROLE_AUDITOR,
         User.ROLE_VIEWER,
+        User.ROLE_MEMBERSHIP_OFFICER,
+        User.ROLE_PROCUREMENT_OFFICER,
+        User.ROLE_STORES_OFFICER,
     }
     write_roles = ProgrammePermission.allowed_roles
 
@@ -52,9 +55,12 @@ class ProgrammeWorkflowPermission(permissions.BasePermission):
             return False
         if user.is_superuser:
             return True
+        if user.role in getattr(view, "denied_roles", ()):
+            return False
         if request.method in permissions.SAFE_METHODS:
             return user.role in self.read_roles
-        return user.role in self.write_roles
+        # A view may name extra writers, for example stores officers on input issues.
+        return user.role in self.write_roles or user.role in getattr(view, "extra_write_roles", ())
 
 
 class RecoveryPermission(RolePermission):
@@ -143,6 +149,7 @@ class SubscriptionWorkflowPermission(permissions.BasePermission):
         User.ROLE_LEAD_FARMER,
         User.ROLE_AUDITOR,
         User.ROLE_VIEWER,
+        User.ROLE_MEMBERSHIP_OFFICER,
     }
     write_roles = {
         User.ROLE_SUPER_ADMIN,
@@ -182,12 +189,21 @@ class FarmerWorkflowPermission(permissions.BasePermission):
         User.ROLE_LEAD_FARMER,
         User.ROLE_AUDITOR,
         User.ROLE_VIEWER,
+        User.ROLE_MEMBERSHIP_OFFICER,
+        User.ROLE_STORES_OFFICER,
     }
     write_roles = {
         User.ROLE_SUPER_ADMIN,
         User.ROLE_SGR_EXECUTIVE,
         User.ROLE_VERIFICATION_OFFICER,
+        User.ROLE_MEMBERSHIP_OFFICER,
         User.ROLE_DISTRICT_COORDINATOR,
+        User.ROLE_LEAD_FARMER,
+    }
+    # Farmer records carry financial history, so removal stays with administrators.
+    delete_roles = {
+        User.ROLE_SUPER_ADMIN,
+        User.ROLE_SGR_EXECUTIVE,
     }
 
     def has_permission(self, request, view):
@@ -200,6 +216,13 @@ class FarmerWorkflowPermission(permissions.BasePermission):
             return user.role in self.read_roles
         if getattr(view, "action", None) == "verify":
             return user.role in VerificationPermission.allowed_roles
+        if request.method == "DELETE":
+            if user.role in self.delete_roles:
+                return True
+            # Farms and documents may be removed by the officers who maintain them.
+            # The farmer record itself, and anything a lead farmer sees, may not.
+            if getattr(view, "restrict_delete", False) or user.role == User.ROLE_LEAD_FARMER:
+                return False
         return user.role in self.write_roles
 
     def has_object_permission(self, request, view, obj):
@@ -225,6 +248,7 @@ class LocationReferencePermission(permissions.BasePermission):
         User.ROLE_SGR_EXECUTIVE,
         User.ROLE_PROGRAMME_OFFICER,
         User.ROLE_VERIFICATION_OFFICER,
+        User.ROLE_MEMBERSHIP_OFFICER,
         User.ROLE_PROVINCIAL_COORDINATOR,
         User.ROLE_DISTRICT_COORDINATOR,
     }
@@ -281,3 +305,44 @@ class ClusterScopedPermission(permissions.BasePermission):
                 cluster = getattr(obj.farmer, "cluster_id", None)
             return user.assigned_cluster_id == cluster
         return True
+
+
+class UserAdminPermission(permissions.BasePermission):
+    """Only the Super Administrator manages accounts. Management and auditors may read."""
+
+    read_roles = {User.ROLE_SUPER_ADMIN, User.ROLE_SGR_EXECUTIVE, User.ROLE_AUDITOR}
+    write_roles = {User.ROLE_SUPER_ADMIN}
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        if request.method in permissions.SAFE_METHODS:
+            return user.role in self.read_roles
+        return user.role in self.write_roles
+
+
+class AuditReadPermission(RolePermission):
+    allowed_roles = {User.ROLE_SUPER_ADMIN, User.ROLE_SGR_EXECUTIVE, User.ROLE_AUDITOR}
+
+    def has_permission(self, request, view):
+        return request.method in permissions.SAFE_METHODS and super().has_permission(request, view)
+
+
+class ManagementReadPermission(permissions.BasePermission):
+    """Imported workbook tables: management and auditors read, administrators write."""
+
+    read_roles = ManagementPermission.allowed_roles
+    write_roles = {User.ROLE_SUPER_ADMIN, User.ROLE_SGR_EXECUTIVE}
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        if request.method in permissions.SAFE_METHODS:
+            return user.role in self.read_roles
+        return user.role in self.write_roles

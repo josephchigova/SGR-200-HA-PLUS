@@ -2,11 +2,15 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import apiClient from '../api/client'
+import { useAuth } from '../auth'
 import FarmLocationFields from '../components/FarmLocationFields'
 import { coordinateError, googleMapsUrl } from '../coordinates'
 import { formatDisplay } from '../formatNumbers'
 
 function FarmerDetailsPage() {
+  const { can, profile } = useAuth()
+  const canEdit = can('farmers', 'edit')
+  const canRemoveFarm = canEdit && profile?.role !== 'lead_farmer'
   const { id } = useParams()
   const [farmer, setFarmer] = useState(null)
   const [farms, setFarms] = useState([])
@@ -125,8 +129,8 @@ function FarmerDetailsPage() {
         <div><dt>Arable hectares</dt><dd>{formatDisplay('arable_hectares', farmer.total_arable_hectares) || '0'}</dd></div>
         <div><dt>Irrigated hectares</dt><dd>{formatDisplay('irrigated_hectares', farmer.total_irrigated_hectares) || '0'}</dd></div>
       </dl>
-      <div className="workflow-list-heading"><h4>Farms</h4><span>{farms.length} records</span><button type="button" className="primary-btn small" onClick={() => { resetFarmForm(); setShowFarmForm(true) }}>Add farm</button></div>
-      {showFarmForm ? <form className="workflow-form" onSubmit={saveFarm}>
+      <div className="workflow-list-heading"><h4>Farms</h4><span>{farms.length} records</span>{canEdit ? <button type="button" className="primary-btn small" onClick={() => { resetFarmForm(); setShowFarmForm(true) }}>Add farm</button> : null}</div>
+      {showFarmForm && canEdit ? <form className="workflow-form" onSubmit={saveFarm}>
         <h4>{editingFarmId ? 'Update farm record' : 'Add farm record'}</h4>
         <div className="workflow-fields">
           <label className="form-field">Farm name<input name="farm_name" value={farmForm.farm_name} onChange={updateFarmField} required maxLength="180" /></label>
@@ -140,7 +144,7 @@ function FarmerDetailsPage() {
       <div className="table-wrap"><table className="data-table"><thead><tr><th>Farm</th><th>Province</th><th>District</th><th>Cluster</th><th>Total ha</th><th>Arable ha</th><th>Irrigated ha</th><th>Farm coordinates</th><th>Status</th><th>Actions</th></tr></thead><tbody>
         {farms.map((farm) => {
           const mapsUrl = googleMapsUrl(farm.latitude, farm.longitude)
-          return <tr key={farm.id}><td>{farm.farm_name}</td><td>{farm.province_name || '—'}</td><td>{farm.district_name || '—'}</td><td>{farm.cluster_name || '—'}</td><td>{formatDisplay('total_hectares', farm.total_hectares)}</td><td>{formatDisplay('arable_hectares', farm.arable_hectares)}</td><td>{formatDisplay('irrigated_hectares', farm.irrigated_hectares)}</td><td>{mapsUrl ? <><span>{farm.latitude}, {farm.longitude}</span> <a href={mapsUrl} target="_blank" rel="noopener noreferrer">View on Google Maps</a></> : '—'}</td><td>{farm.is_active ? farm.verification_status : 'Inactive'}</td><td><button type="button" className="ghost-btn small" onClick={() => startFarmEdit(farm)}>Edit</button> <button type="button" className="ghost-btn small" onClick={() => setFarmActive(farm, !farm.is_active)}>{farm.is_active ? 'Deactivate' : 'Activate'}</button> <button type="button" className="ghost-btn small" onClick={() => deleteFarm(farm.id)}>Delete</button></td></tr>
+          return <tr key={farm.id}><td>{farm.farm_name}</td><td>{farm.province_name || '—'}</td><td>{farm.district_name || '—'}</td><td>{farm.cluster_name || '—'}</td><td>{formatDisplay('total_hectares', farm.total_hectares)}</td><td>{formatDisplay('arable_hectares', farm.arable_hectares)}</td><td>{formatDisplay('irrigated_hectares', farm.irrigated_hectares)}</td><td>{mapsUrl ? <><span>{farm.latitude}, {farm.longitude}</span> <a href={mapsUrl} target="_blank" rel="noopener noreferrer">View on Google Maps</a></> : '—'}</td><td>{farm.is_active ? farm.verification_status : 'Inactive'}</td><td>{canEdit ? <span className="table-actions"><button type="button" className="ghost-btn small" onClick={() => startFarmEdit(farm)}>Edit</button> <button type="button" className="ghost-btn small" onClick={() => setFarmActive(farm, !farm.is_active)}>{farm.is_active ? 'Deactivate' : 'Activate'}</button> {canRemoveFarm ? <button type="button" className="ghost-btn small danger" onClick={() => deleteFarm(farm.id)}>Delete</button> : null}</span> : 'View only'}</td></tr>
         })}
         {!farms.length ? <tr><td colSpan="10">No farm records.</td></tr> : null}
       </tbody></table></div>

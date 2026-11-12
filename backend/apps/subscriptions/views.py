@@ -50,15 +50,9 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
 
     @staticmethod
     def scope_farmers_to_user(farmers, user):
-        if user.is_superuser:
-            return farmers
-        if user.role == user.ROLE_DISTRICT_COORDINATOR:
-            return farmers.filter(district_id=user.district_id)
-        if user.role == user.ROLE_PROVINCIAL_COORDINATOR:
-            return farmers.filter(province_id=user.province_id)
-        if user.role == user.ROLE_LEAD_FARMER:
-            return farmers.filter(cluster_id=user.assigned_cluster_id)
-        return farmers
+        from apps.accounts.scoping import scope_farmers
+
+        return scope_farmers(farmers, user)
 
     @staticmethod
     def with_season_payment_status(farmers, season):
@@ -101,7 +95,9 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
         )
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        from apps.accounts.scoping import scope_by_farmer
+
+        queryset = scope_by_farmer(super().get_queryset(), self.request.user)
         # A farmer subscription belongs to the agricultural year named in season.
         # Summer and Winter share that payment, so crop_season is not applied.
         season = self.request.query_params.get("season")

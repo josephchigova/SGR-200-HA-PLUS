@@ -5,6 +5,9 @@ FINANCE = "finance"
 USERS = "users"
 
 READERS = {
+    User.ROLE_MEMBERSHIP_OFFICER,
+    User.ROLE_PROCUREMENT_OFFICER,
+    User.ROLE_STORES_OFFICER,
     User.ROLE_SUPER_ADMIN,
     User.ROLE_SGR_EXECUTIVE,
     User.ROLE_VERIFICATION_OFFICER,
@@ -504,10 +507,20 @@ def all_specs():
 def specs_for(user):
     if user.is_superuser:
         return all_specs()
+    # A scoped role only gets reports that can be limited to its own cluster,
+    # district or province. A report with no such field would show every record.
+    scope_attr = {
+        User.ROLE_LEAD_FARMER: "cluster_field",
+        User.ROLE_DISTRICT_COORDINATOR: "district_field",
+        User.ROLE_PROVINCIAL_COORDINATOR: "province_field",
+    }.get(user.role)
     allowed = []
     for spec in all_specs():
-        if user.role in AUDIENCES[spec.audience]:
-            allowed.append(spec)
+        if user.role not in AUDIENCES[spec.audience]:
+            continue
+        if scope_attr and not getattr(spec, scope_attr):
+            continue
+        allowed.append(spec)
     return allowed
 
 

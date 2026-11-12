@@ -22,9 +22,9 @@
 }
 
 .page-card {
-  background: #fff;
+  background: var(--surface);
   border-radius: 18px;
-  box-shadow: 0 10px 25px rgba(17, 24, 39, 0.08);
+  box-shadow: var(--shadow-sm);
   padding: 22px;
 }
 
@@ -36,15 +36,15 @@
 }
 
 .metric-box {
-  background: #fff;
+  background: var(--surface);
   border-radius: 18px;
-  box-shadow: 0 10px 25px rgba(17, 24, 39, 0.08);
+  box-shadow: var(--shadow-sm);
   padding: 18px 20px;
 }
 
 .metric-box span {
   display: block;
-  color: #4b5563;
+  color: var(--text-muted);
   font-size: 0.8rem;
 }
 
@@ -52,12 +52,12 @@
   display: block;
   margin-top: 10px;
   font-size: 2rem;
-  color: #1e3a2f;
+  color: var(--text);
 }
 
 .metric-box small {
   display: block;
-  color: #6b7280;
+  color: var(--text-muted);
   margin-top: 8px;
 }
 
@@ -77,7 +77,7 @@
 .global-search input {
   width: 280px;
   max-width: 100%;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0 12px;
   font: inherit;
@@ -85,7 +85,7 @@
 
 .tab-search {
   min-width: 210px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
   font: inherit;
@@ -93,7 +93,7 @@
 
 .section-head h3 {
   margin: 0;
-  color: #1e3a2f;
+  color: var(--text);
 }
 
 .primary-btn.small {
@@ -121,8 +121,8 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: #f7f8f6;
-  box-shadow: inset 0 -1px 0 #e5e7eb;
+  background: var(--surface-2);
+  box-shadow: inset 0 -1px 0 var(--border);
 }
 
 .data-table {
@@ -135,11 +135,11 @@
 .data-table td {
   padding: 12px 10px;
   text-align: left;
-  border-bottom: 1px solid #e5e7eb;
+  border-bottom: 1px solid var(--border);
 }
 
 .data-table th {
-  color: #374151;
+  color: var(--text-muted);
   font-size: 0.78rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -154,13 +154,13 @@
 }
 
 .status-pill.active {
-  background: #e6f7ed;
-  color: #1e7a4a;
+  background: var(--success-bg);
+  color: var(--accent);
 }
 
 .status-pill.review {
-  background: #fff3d6;
-  color: #9a6700;
+  background: var(--warning-bg);
+  color: var(--warning);
 }
 
 .login-card {
@@ -185,7 +185,7 @@
   height: 48px;
   border-radius: 8px;
   background: var(--green-900);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .login-brand h1,
@@ -199,7 +199,7 @@
 }
 
 .login-brand p {
-  color: #59665d;
+  color: var(--text-muted);
 }
 
 .login-shell {
@@ -234,14 +234,14 @@
   display: grid;
   gap: 8px;
   font-weight: 600;
-  color: #374151;
+  color: var(--text-muted);
 }
 
 .login-card input,
 .form-field input,
 .form-field select,
 .form-field textarea {
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 10px;
   padding: 12px 14px;
   font: inherit;
@@ -259,9 +259,9 @@
   gap: 16px;
   margin-bottom: 20px;
   padding: 18px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: #f9fbfa;
+  background: var(--surface-2);
 }
 
 .form-grid {
@@ -278,27 +278,27 @@
   grid-column: 1 / -1;
   margin: 0;
   padding: 16px;
-  border: 1px solid #d1d5db;
+  border: 1px solid var(--border);
   border-radius: 12px;
 }
 
 .coordinate-fields legend {
   padding: 0 6px;
   font-weight: 700;
-  color: #14532d;
+  color: var(--text);
 }
 
 .form-message {
   margin: 12px 0;
   padding: 10px 12px;
   border-radius: 10px;
-  background: #eef7f3;
-  color: #1e3a2f;
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .form-message.error {
-  background: #feeceb;
-  color: #9f1d1d;
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .workflow-page {
@@ -338,7 +338,7 @@
 
 .workflow-form h4 {
   margin: 0;
-  color: #34473d;
+  color: var(--text);
 }
 
 .workflow-fields,
@@ -353,10 +353,10 @@
 .workflow-fields select {
   min-width: 0;
   width: 100%;
-  border: 1px solid #cbd5cf;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
   padding: 9px 10px;
-  background: #fff;
+  background: var(--surface);
 }
 
 .farmer-autocomplete {
@@ -391,14 +391,14 @@
   border: 0;
   border-radius: 4px;
   background: transparent;
-  color: #58645c;
+  color: var(--text-muted);
   font-size: 1.25rem;
   line-height: 1;
 }
 
 .farmer-autocomplete-clear:hover {
-  background: #edf2ee;
-  color: #1e3a2f;
+  background: var(--surface-2);
+  color: var(--text);
 }
 
 .farmer-suggestion-list {
@@ -409,10 +409,10 @@
   z-index: 20;
   max-height: 280px;
   overflow-y: auto;
-  border: 1px solid #aebbb1;
+  border: 1px solid var(--border-strong);
   border-radius: 6px;
-  background: #fff;
-  box-shadow: 0 8px 20px rgba(20, 35, 25, 0.18);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .farmer-suggestion {
@@ -421,9 +421,9 @@
   gap: 2px;
   padding: 9px 12px;
   border: 0;
-  border-bottom: 1px solid #e5eae6;
-  background: #fff;
-  color: #25342a;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
   text-align: left;
 }
 
@@ -433,7 +433,7 @@
 
 .farmer-suggestion:hover,
 .farmer-suggestion.highlighted {
-  background: #eef5ef;
+  background: var(--surface-2);
 }
 
 .farmer-suggestion strong {
@@ -444,14 +444,14 @@
 
 .farmer-suggestion small {
   overflow-wrap: anywhere;
-  color: #5b685f;
+  color: var(--text-muted);
   font-size: 0.76rem;
   font-weight: 400;
 }
 
 .farmer-suggestion-state {
   padding: 10px 12px;
-  color: #536158;
+  color: var(--text-muted);
   font-size: 0.84rem;
 }
 
@@ -471,7 +471,7 @@
 
 .detail-grid dt,
 .qa-item span {
-  color: #647168;
+  color: var(--text-muted);
   font-size: 0.78rem;
 }
 
@@ -483,7 +483,7 @@
 
 .qa-artifact-state {
   margin: 0;
-  color: #4b5c51;
+  color: var(--text-muted);
 }
 
 .qa-item {
@@ -492,8 +492,8 @@
   min-height: 96px;
   align-content: center;
   padding: 14px;
-  border-left: 3px solid #3c7d5e;
-  background: #f0f5f1;
+  border-left: 3px solid var(--accent);
+  background: var(--surface-2);
 }
 
 .qa-item strong {
@@ -521,22 +521,22 @@
 
 .subscription-record-count,
 .subscription-season-label {
-  color: #5b685f;
+  color: var(--text-muted);
   font-size: 0.88rem;
 }
 
 .subscription-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  border-block: 1px solid #dce4de;
-  background: #f4f8f4;
+  border-block: 1px solid var(--border);
+  background: var(--surface-2);
 }
 
 .subscription-summary > div {
   display: grid;
   gap: 4px;
   padding: 12px 16px;
-  border-right: 1px solid #dce4de;
+  border-right: 1px solid var(--border);
 }
 
 .subscription-summary > div:last-child {
@@ -544,7 +544,7 @@
 }
 
 .subscription-summary span {
-  color: #5b685f;
+  color: var(--text-muted);
   font-size: 0.76rem;
 }
 
@@ -566,8 +566,8 @@
 }
 
 .subscription-payment-form input[readonly] {
-  color: #405449;
-  background: #f1f5f2;
+  color: var(--text-muted);
+  background: var(--surface-2);
 }
 
 .subscription-payment-form > button {
@@ -601,23 +601,23 @@
 
 .subscription-table td:first-child small {
   margin-top: 3px;
-  color: #66736a;
+  color: var(--text-muted);
   font-size: 0.76rem;
 }
 
 .subscription-status.paid {
-  background: #e6f7ed;
-  color: #1e7a4a;
+  background: var(--success-bg);
+  color: var(--accent);
 }
 
 .subscription-status.partial {
-  background: #fff3d6;
-  color: #8a5b00;
+  background: var(--warning-bg);
+  color: var(--warning);
 }
 
 .subscription-status.unpaid {
-  background: #feeceb;
-  color: #9f1d1d;
+  background: var(--danger-bg);
+  color: var(--danger);
 }
 
 .subscription-pagination {
@@ -626,7 +626,7 @@
   align-items: center;
   gap: 12px;
   margin-top: 14px;
-  color: #5b685f;
+  color: var(--text-muted);
   font-size: 0.84rem;
 }
 
@@ -676,7 +676,7 @@
   }
 
   .subscription-summary > div:nth-child(-n + 2) {
-    border-bottom: 1px solid #dce4de;
+    border-bottom: 1px solid var(--border);
   }
 
   .subscription-status-section .workflow-list-heading {
@@ -782,22 +782,22 @@
 .report-category,
 .report-choice {
   text-align: left;
-  border: 1px solid var(--line, #d9e2dc);
-  background: var(--white, #fff);
+  border: 1px solid var(--border);
+  background: var(--surface);
   border-radius: 12px;
   padding: 10px 12px;
 }
 
 .report-category.active,
 .report-choice.active {
-  border-color: var(--green-700, #1f6b45);
-  background: #f3faf6;
+  border-color: var(--accent);
+  background: var(--surface-2);
 }
 
 .report-choice small,
 .report-note,
 .report-gap {
-  color: #52635a;
+  color: var(--text-muted);
 }
 
 .report-bars {
@@ -815,7 +815,7 @@
 
 .report-bar-track {
   height: 8px;
-  background: #e6eee9;
+  background: var(--surface-2);
   border-radius: 99px;
   overflow: hidden;
 }
@@ -823,7 +823,7 @@
 .report-bar-track span {
   display: block;
   height: 100%;
-  background: var(--green-700, #1f6b45);
+  background: var(--accent);
 }
 
 .report-actions,

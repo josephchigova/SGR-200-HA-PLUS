@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import apiClient from '../api/client'
+import { useAuth } from '../auth'
 import TabSearch from '../components/TabSearch'
 
 const PAGE_SIZE = 25
@@ -14,6 +15,8 @@ const statusOptions = [
 ]
 
 function VerificationPage() {
+  const { can } = useAuth()
+  const canDecide = can('farmers', 'approve')
   const [farmers, setFarmers] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -185,9 +188,11 @@ function VerificationPage() {
                     />
                   </td>
                   <td>
-                    <button type="button" className="primary-btn small" onClick={() => submitDecision(farmer.id)}>
-                      Save
-                    </button>
+                    {canDecide ? (
+                      <button type="button" className="primary-btn small" onClick={() => submitDecision(farmer.id)}>
+                        Save
+                      </button>
+                    ) : <span className="pill">View only</span>}
                   </td>
                 </tr>
               )

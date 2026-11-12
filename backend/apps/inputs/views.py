@@ -3,7 +3,9 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.exceptions import ValidationError
 
+from apps.accounts.models import User
 from apps.accounts.permissions import ProgrammeWorkflowPermission
+from apps.accounts.scoping import scope_by_farmer
 from apps.farmers.models import Farmer
 from apps.programmes.models import Crop, Programme
 from apps.programmes.period import filter_allocations_by_crop_season, filter_by_agricultural_year, parse_crop_season
@@ -17,12 +19,19 @@ class InputIssueViewSet(viewsets.ModelViewSet):
     queryset = InputIssue.objects.select_related("farmer").all()
     serializer_class = InputIssueSerializer
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
+    # Stores officers record physical distribution.
+    extra_write_roles = {User.ROLE_STORES_OFFICER}
+
+    def get_queryset(self):
+        return scope_by_farmer(super().get_queryset(), self.request.user)
 
 
 class InputViewSet(viewsets.ModelViewSet):
     queryset = Input.objects.filter(active=True)
     serializer_class = InputSerializer
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
+    # Procurement and stores officers maintain the input product list.
+    extra_write_roles = {User.ROLE_PROCUREMENT_OFFICER, User.ROLE_STORES_OFFICER}
 
 
 class InputAllocationViewSet(viewsets.ModelViewSet):
@@ -31,7 +40,7 @@ class InputAllocationViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = scope_by_farmer(super().get_queryset(), self.request.user)
         season = self.request.query_params.get("season")
         season_name = self.request.query_params.get("season_name")
         queryset = filter_by_agricultural_year(queryset, season, season_name, relation="programme__season")

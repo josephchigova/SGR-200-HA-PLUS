@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import apiClient from '../api/client'
+import { useAuth } from '../auth'
 import FarmLocationFields from '../components/FarmLocationFields'
 import TabSearch from '../components/TabSearch'
 import { coordinateError } from '../coordinates'
@@ -65,6 +66,8 @@ const getAllPages = async (path, params = {}) => {
 }
 
 function FarmersPage() {
+  const { can } = useAuth()
+  const canCreate = can('farmers', 'create')
   const [farmers, setFarmers] = useState([])
   const [provinces, setProvinces] = useState([])
   const [provincesLoading, setProvincesLoading] = useState(true)
@@ -303,14 +306,21 @@ function FarmersPage() {
   return (
     <div className="page-card">
       <div className="section-head">
-        <h3>Farmer Register</h3>
-        <TabSearch value={search} onChange={setSearch} placeholder="Filter farmers..." />
-        <button type="button" className="primary-btn small" onClick={() => setShowForm((previous) => !previous)}>
-          {showForm ? 'Close Form' : 'Add Farmer'}
-        </button>
+        <div>
+          <h3>Farmers</h3>
+          <p>The permanent register of members and applicants. Open a farmer to see farms and history.</p>
+        </div>
+        <div className="page-actions">
+          <TabSearch value={search} onChange={setSearch} placeholder="Filter farmers..." />
+          {canCreate ? (
+            <button type="button" className="primary-btn" onClick={() => setShowForm((previous) => !previous)}>
+              {showForm ? 'Close Form' : 'Add Farmer'}
+            </button>
+          ) : null}
+        </div>
       </div>
 
-      {showForm ? (
+      {showForm && canCreate ? (
         <form className="farmer-form" onSubmit={handleSubmit}>
           <div className="form-grid">
             <label className="form-field">

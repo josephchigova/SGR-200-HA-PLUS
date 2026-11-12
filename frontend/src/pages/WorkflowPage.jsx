@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import apiClient from '../api/client'
+import { useAuth } from '../auth'
 import { formatDisplay } from '../formatNumbers'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
 
@@ -45,7 +46,20 @@ function eligibleCell(column, row) {
   return <span className={`status-pill subscription-status ${kind}`}>{status}</span>
 }
 
-function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, editAction = false, deleteAction = false, summaryEndpoint = '', summaryColumns = [], eligibleEndpoint = '', eligibleTitle = '', eligibleColumns = [], selectedSeason = null, seasonScoped = false, activeSeasonOnly = false, cropSeason = '', periodStatus = 'ready' }) {
+const SUBTITLES = {
+  Programmes: 'Input programmes with their agricultural year, crop and announced hectares.',
+  'Input Requests': 'Requests submitted to ARDA, with the capacity still available in each batch.',
+  'Farmer Production': 'Planted hectares and actual production for each farmer and crop.',
+  'Seasonal Farmer Planting': 'What each farmer plants in the Summer and Winter of the selected year.',
+  'GMB Deliveries': 'Grain delivered to GMB. Each delivery reduces the farmer’s input debt.',
+}
+
+function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, editAction = false, deleteAction = false, summaryEndpoint = '', summaryColumns = [], eligibleEndpoint = '', eligibleTitle = '', eligibleColumns = [], selectedSeason = null, seasonScoped = false, activeSeasonOnly = false, cropSeason = '', periodStatus = 'ready', module = '' }) {
+  const { can } = useAuth()
+  const canCreate = !module || can(module, 'create')
+  const canEdit = !module || can(module, 'edit')
+  const canDelete = !module || can(module, 'delete')
+  const canApprove = !module || can(module, 'approve')
   const [rows, setRows] = useState([])
   const [summaryRows, setSummaryRows] = useState([])
   const [eligibleData, setEligibleData] = useState({ key: '', rows: [] })
@@ -388,6 +402,10 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
   return (
     <section className="workflow-page">
       <div className="workflow-heading">
+        <div>
+          <h3>{title}</h3>
+          {SUBTITLES[title] ? <p>{SUBTITLES[title]}</p> : null}
+        </div>
         <button type="button" className="ghost-btn" onClick={refresh}>Refresh</button>
       </div>
       {waitingForPeriod ? <div className="form-message">Loading the selected period...</div> : null}
@@ -399,7 +417,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
       {message ? <div className="form-message" role="status">{message}</div> : null}
 
       {forms.map((form) => (
-        <form className="workflow-form" key={form.key} onSubmit={(event) => submit(event, form)}>
+        <form className="workflow-form" key={form.key} onSubmit={(event) => submit(event, form)} hidden={!canCreate && !(editingId && canEdit)}>
           <h4>{form.title}</h4>
           <div className="workflow-fields">
             {form.fields.map((field) => {
@@ -534,11 +552,11 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
               <tr key={row.id}>
                 {columns.map((column) => <td key={column.key}>{column.render ? column.render(row) : formatDisplay(column.key, row[column.key]) ?? '—'}</td>)}
                 {showActions ? <td>
-                  {approveAction && row.status === 'PENDING' ? <button className="primary-btn small" type="button" onClick={() => approve(row)}>Approve</button> : null}
-                  {editAction && !seasonReadOnly ? <button className="ghost-btn small" type="button" onClick={() => startEditing(row)}>{editButtonLabel}</button> : null}
-                  {deleteAction && !seasonReadOnly ? <button className="ghost-btn small" type="button" onClick={() => setPendingDelete(row)}>Delete</button> : null}
-                  {approveAction && row.status !== 'PENDING' ? row.status : null}
-                  {editAction && seasonReadOnly ? 'Read-only' : null}
+                  {approveAction && canApprove && row.status === 'PENDING' ? <button className="primary-btn small" type="button" onClick={() => approve(row)}>Approve</button> : null}
+                  {editAction && canEdit && !seasonReadOnly ? <button className="ghost-btn small" type="button" onClick={() => startEditing(row)}>{editButtonLabel}</button> : null}
+                  {deleteAction && canDelete && !seasonReadOnly ? <button className="ghost-btn small" type="button" onClick={() => setPendingDelete(row)}>Delete</button> : null}
+                  {approveAction && (row.status !== 'PENDING' || !canApprove) ? row.status : null}
+                  {editAction && (seasonReadOnly || !canEdit) ? 'Read-only' : null}
                 </td> : null}
               </tr>
             ))}

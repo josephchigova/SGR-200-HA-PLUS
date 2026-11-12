@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { render as baseRender, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import apiClient from '../api/client'
@@ -7,6 +8,9 @@ import DashboardPage from './DashboardPage'
 vi.mock('../api/client', () => ({
   default: { get: vi.fn() },
 }))
+
+// The dashboard links to other pages, so it needs a router around it.
+const render = (ui) => baseRender(ui, { wrapper: MemoryRouter })
 
 const season = { id: 4, name: '2026/2027', status: 'ACTIVE', is_current: true }
 

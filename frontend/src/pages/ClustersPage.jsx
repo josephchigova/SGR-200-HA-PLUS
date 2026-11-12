@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import apiClient from '../api/client'
+import { useAuth } from '../auth'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
 
 const toList = (data) => (Array.isArray(data) ? data : data?.results || [])
@@ -27,6 +28,8 @@ async function getAllPages(path, params = {}) {
 }
 
 function ClustersPage() {
+  const { can } = useAuth()
+  const canEdit = can('clusters', 'edit')
   const [clusters, setClusters] = useState([])
   const [provinces, setProvinces] = useState([])
   const [districts, setDistricts] = useState([])
@@ -209,7 +212,7 @@ function ClustersPage() {
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
       {message ? <div className="form-message">{message}</div> : null}
 
-      <form className="workflow-form" onSubmit={submit}>
+      {canEdit ? <form className="workflow-form" onSubmit={submit}>
         <h4>{editingId ? 'Edit cluster' : 'Create cluster'}</h4>
         <div className="workflow-fields">
           <label className="form-field">Cluster name
@@ -250,7 +253,7 @@ function ClustersPage() {
           <button className="primary-btn small" type="submit" disabled={saving}>{saving ? 'Saving…' : editingId ? 'Update cluster' : 'Create cluster'}</button>
           {editingId ? <button type="button" className="ghost-btn" onClick={() => { setEditingId(null); setForm(emptyForm) }}>Cancel</button> : null}
         </div>
-      </form>
+      </form> : null}
 
       <div className="workflow-form">
         <h4>Find clusters</h4>
@@ -286,7 +289,7 @@ function ClustersPage() {
                 <td>{cluster.member_count ?? 0}</td>
                 <td>{cluster.active ? 'Active' : 'Inactive'}</td>
                 <td>
-                  <button type="button" className="ghost-btn small" onClick={() => editCluster(cluster)}>Edit</button>
+                  {canEdit ? <button type="button" className="ghost-btn small" onClick={() => editCluster(cluster)}>Edit</button> : null}
                   <button type="button" className="ghost-btn small" onClick={() => setSelectedId(String(cluster.id))}>Members</button>
                 </td>
               </tr>
@@ -304,14 +307,14 @@ function ClustersPage() {
             {selected.lead_member_national_id ? ` · National ID ${selected.lead_member_national_id}` : ''}
             {selected.lead_member_phone ? ` · ${selected.lead_member_phone}` : ''}
           </p>
-          <div className="workflow-fields">
+          {canEdit ? <div className="workflow-fields">
             <FarmerAutocomplete
               label="Add registered farmer"
               value={memberToAdd?.id || ''}
               onChange={setMemberToAdd}
             />
             <button type="button" className="primary-btn small" disabled={saving || !memberToAdd} onClick={assignMember}>Add member</button>
-          </div>
+          </div> : null}
           <div className="table-wrap">
             <table className="data-table">
               <thead><tr><th>Farmer</th><th>National ID</th><th>Phone</th><th>Role</th><th>Actions</th></tr></thead>
@@ -322,7 +325,7 @@ function ClustersPage() {
                     <td>{farmer.national_id || '—'}</td>
                     <td>{farmer.phone_primary || '—'}</td>
                     <td>{String(selected.lead_member) === String(farmer.id) ? 'Lead farmer' : 'Member'}</td>
-                    <td>
+                    <td>{canEdit ? <>
                       <button type="button" className="ghost-btn small" onClick={() => moveMember(farmer, null)}>Remove</button>
                       <select aria-label={`Transfer ${farmer.full_name}`} value={transferClusterId} onChange={(event) => setTransferClusterId(event.target.value)}>
                         <option value="">Transfer to…</option>
@@ -331,7 +334,7 @@ function ClustersPage() {
                         ))}
                       </select>
                       <button type="button" className="ghost-btn small" disabled={!transferClusterId} onClick={() => moveMember(farmer, Number(transferClusterId))}>Transfer</button>
-                    </td>
+                    </> : '—'}</td>
                   </tr>
                 ))}
                 {members.length === 0 ? <tr><td colSpan={5}>This cluster has no ordinary members yet. The lead farmer is stored on the cluster and does not need to be added here.</td></tr> : null}

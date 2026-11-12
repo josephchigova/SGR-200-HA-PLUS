@@ -38,7 +38,7 @@ describe('Reports centre', () => {
 
     render(<ReportsPage selectedSeason={{ id: 1, name: '2026/2027' }} cropSeason="SUMMER" />)
     expect(await screen.findByText('Registered farmers')).toBeTruthy()
-    fireEvent.click(await screen.findByRole('button', { name: /Complete farmer register/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'View Complete farmer register' }))
     expect(await screen.findByText('Banda')).toBeTruthy()
     expect(screen.getByText('Records')).toBeTruthy()
     expect(apiClient.get).toHaveBeenCalledWith('/reports/farmers-register/preview/', expect.objectContaining({

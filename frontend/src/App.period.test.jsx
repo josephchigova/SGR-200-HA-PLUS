@@ -29,11 +29,15 @@ const olderYear = {
   crop_seasons: [{ code: 'SUMMER', label: 'Summer' }],
 }
 
-const renderShell = () => render(
+const renderShell = () => {
+  // The workspace is only shown to a signed-in user.
+  localStorage.setItem('sgr_access_token', 'test-token')
+  return render(
   <MemoryRouter initialEntries={['/dashboard']}>
     <AppShell />
   </MemoryRouter>,
-)
+  )
+}
 
 describe('agricultural year and season selectors', () => {
   beforeEach(() => {
@@ -62,7 +66,7 @@ describe('agricultural year and season selectors', () => {
     expect(screen.getByRole('option', { name: '2026/2027' })).toBeTruthy()
     expect(screen.getByRole('option', { name: 'Summer' })).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('link', { name: 'Farmers Register' }))
+    fireEvent.click(screen.getAllByRole('link', { name: 'Farmers' })[0])
     expect(screen.getByLabelText('Agricultural year').value).toBe('1')
     expect(screen.getByLabelText('Season').value).toBe('WINTER')
   })

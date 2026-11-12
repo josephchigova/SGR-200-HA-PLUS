@@ -157,7 +157,8 @@ def _summaries(spec, rows, params):
         else:
             from django.db.models import Sum
             amount = rows.aggregate(total=Sum(column.key))["total"]
-        summaries.append({"label": f"Total {column.label}", "value": format_value(amount, column.kind)})
+        label = column.label if column.label.lower().startswith("total") else f"Total {column.label}"
+        summaries.append({"label": label, "value": format_value(amount, column.kind)})
     return summaries
 
 
@@ -311,8 +312,12 @@ def analytics(user, params):
         cards.append({"label": "Hectares planted", "value": format_value(production.aggregate(total=Sum("planted_hectares"))["total"] or 0, "qty")})
         allocations = apply_common(InputAllocation.objects.all(), _filter_spec(**linked, season_field="programme__season_id", crop_field="crop"), params)
         cards.append({"label": "Input costs allocated", "value": format_value(allocations.aggregate(total=Sum("total_input_cost"))["total"] or 0, "money")})
-        requests = apply_common(ARDARequestBatch.objects.all(), _filter_spec(season_field="season_id", crop_field="crop"), params)
-        cards.append({"label": "ARDA hectares requested", "value": format_value(requests.aggregate(total=Sum("requested_hectares"))["total"] or 0, "qty")})
+        from apps.accounts.scoping import is_scoped
+
+        if not is_scoped(user):
+            # Request batches are organisation-wide and cannot be limited to one cluster.
+            requests = apply_common(ARDARequestBatch.objects.all(), _filter_spec(season_field="season_id", crop_field="crop"), params)
+            cards.append({"label": "ARDA hectares requested", "value": format_value(requests.aggregate(total=Sum("requested_hectares"))["total"] or 0, "qty")})
         deliveries = apply_common(GMBDelivery.objects.all(), _filter_spec(**linked, season_field="season_id", crop_field="crop", date_field="delivery_date"), params)
         cards.append({"label": "Tonnes delivered to GMB", "value": format_value(deliveries.aggregate(total=Sum("tonnes"))["total"] or 0, "qty")})
         debts = apply_common(InputDebt.objects.all(), _filter_spec(**linked, season_field="programme__season_id", crop_field="crop"), params)

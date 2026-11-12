@@ -6,6 +6,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from apps.accounts.permissions import FarmerWorkflowPermission, ProgrammePermission
+from apps.accounts.scoping import is_scoped, scope_by_farmer, scope_farmers
 from apps.arda_requests.models import ARDARequestBatch
 from apps.inputs.models import InputAllocation
 from apps.production.models import FarmerProduction, GMBDelivery
@@ -34,6 +35,7 @@ class FarmerViewSet(viewsets.ModelViewSet):
     ordering_fields = ["registration_date", "full_name", "verification_status", "membership_status"]
     ordering = ["-registration_date"]
     permission_classes = [permissions.IsAuthenticated, FarmerWorkflowPermission]
+    restrict_delete = True
     eligible_search_fields = (
         "full_name",
         "first_name",
@@ -47,15 +49,7 @@ class FarmerViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        user = self.request.user
-        if user.is_superuser:
-            pass
-        elif user.role == user.ROLE_DISTRICT_COORDINATOR:
-            queryset = queryset.filter(district_id=user.district_id)
-        elif user.role == user.ROLE_PROVINCIAL_COORDINATOR:
-            queryset = queryset.filter(province_id=user.province_id)
-        elif user.role == user.ROLE_LEAD_FARMER:
-            queryset = queryset.filter(cluster_id=user.assigned_cluster_id)
+        queryset = scope_farmers(queryset, self.request.user)
         province_id = self.request.query_params.get("province")
         district_id = self.request.query_params.get("district")
         ward_id = self.request.query_params.get("ward")
@@ -144,6 +138,9 @@ class FarmerViewSet(viewsets.ModelViewSet):
         request_batches = filter_by_agricultural_year(request_batches, season, season_name, relation="season")
         if crop_season:
             request_batches = filter_by_crop_name(request_batches, crop_season, "crop")
+        if is_scoped(request.user):
+            # Request batches are organisation-wide, so a scoped user gets no total.
+            request_batches = request_batches.none()
         allocations = InputAllocation.objects.exclude(status=InputAllocation.STATUS_CANCELLED).filter(farmer_id__in=accessible_farmers)
         allocations = filter_by_agricultural_year(allocations, season, season_name, relation="programme__season")
         if crop_season:
@@ -189,7 +186,15 @@ class FarmerViewSet(viewsets.ModelViewSet):
             debts=debts,
             requested=summary["arda_requested_hectares"],
             allocated=summary["input_allocated_hectares"],
+            restrict_to_farmers=is_scoped(request.user),
         )
+        from apps.accounts.roles import can
+
+        summary["scope"] = _dashboard_scope(request.user)
+        if not can(request.user, "finance"):
+            # Organisation spending belongs to the finance roles only.
+            summary["charts"].pop("expenses_by_category", None)
+            summary["charts"].pop("expenses_by_month", None)
         return Response(summary)
 
     @action(detail=True, methods=["post"], url_path="verify")
@@ -228,15 +233,7 @@ class FarmViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        user = self.request.user
-        if user.is_superuser:
-            pass
-        elif user.role == user.ROLE_DISTRICT_COORDINATOR:
-            queryset = queryset.filter(district_id=user.district_id)
-        elif user.role == user.ROLE_PROVINCIAL_COORDINATOR:
-            queryset = queryset.filter(province_id=user.province_id)
-        elif user.role == user.ROLE_LEAD_FARMER:
-            queryset = queryset.filter(farmer__cluster_id=user.assigned_cluster_id)
+        queryset = scope_by_farmer(queryset, self.request.user)
         farmer_id = self.request.query_params.get("farmer")
         if farmer_id:
             queryset = queryset.filter(farmer_id=farmer_id)
@@ -260,5 +257,19 @@ class FarmerDocumentViewSet(viewsets.ModelViewSet):
         if user.role == user.ROLE_PROVINCIAL_COORDINATOR:
             return queryset.filter(Q(farmer__province_id=user.province_id) | Q(farmer__isnull=True, farm__province_id=user.province_id))
         if user.role == user.ROLE_LEAD_FARMER:
+            if not user.assigned_cluster_id:
+                return queryset.none()
             return queryset.filter(farmer__cluster_id=user.assigned_cluster_id)
         return queryset
+
+
+def _dashboard_scope(user):
+    if user.is_superuser:
+        return {"kind": "all", "label": "All farmers"}
+    if user.role == user.ROLE_LEAD_FARMER:
+        return {"kind": "cluster", "label": getattr(user.assigned_cluster, "name", "") or "No cluster assigned"}
+    if user.role == user.ROLE_DISTRICT_COORDINATOR:
+        return {"kind": "district", "label": getattr(user.district, "name", "") or "No district assigned"}
+    if user.role == user.ROLE_PROVINCIAL_COORDINATOR:
+        return {"kind": "province", "label": getattr(user.province, "name", "") or "No province assigned"}
+    return {"kind": "all", "label": "All farmers"}

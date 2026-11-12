@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import apiClient from '../api/client'
+import { useAuth } from '../auth'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
 
 const toList = (data) => (Array.isArray(data) ? data : data?.results || [])
@@ -17,6 +18,8 @@ const getAllPages = async (path) => {
 }
 
 function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodStatus = 'ready' }) {
+  const { can } = useAuth()
+  const canAllocate = can('allocations', 'create')
   const [rows, setRows] = useState([])
   const [farms, setFarms] = useState([])
   const [farmsLoading, setFarmsLoading] = useState(false)
@@ -197,12 +200,16 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
   return (
     <section className="workflow-page">
       <div className="workflow-heading">
+        <div>
+          <h3>Input allocations</h3>
+          <p>Inputs allocated to approved farmers. Only farmers with a fully paid subscription can receive inputs.</p>
+        </div>
         <button type="button" className="ghost-btn" onClick={refresh}>Refresh</button>
       </div>
       {error ? <div className="form-message error">{error}</div> : null}
       {message ? <div className="form-message">{message}</div> : null}
 
-      <form className="workflow-form" onSubmit={submit}>
+      <form className="workflow-form" onSubmit={submit} hidden={!canAllocate}>
         <h4>Allocate crop inputs</h4>
         <div className="workflow-fields">
           <FarmerAutocomplete

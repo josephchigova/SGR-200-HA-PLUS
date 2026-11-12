@@ -1,4 +1,6 @@
-from rest_framework import permissions, viewsets
+from rest_framework import viewsets
+
+from apps.accounts.permissions import FinanceAccessPermission, ManagementReadPermission
 
 from .models import (
     BalanceSheetLine,
@@ -21,7 +23,13 @@ from .serializers import (
 
 
 class SourceViewSet(viewsets.ReadOnlyModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    # Imported workbook tables hold organisation-wide figures.
+    permission_classes = [ManagementReadPermission]
+
+
+class FinanceSourceViewSet(SourceViewSet):
+    # Cash flow, statements, salaries and budgets follow the finance rules.
+    permission_classes = [FinanceAccessPermission]
 
 
 class DataBankEntryViewSet(SourceViewSet):
@@ -34,26 +42,26 @@ class ClusterPerformanceViewSet(SourceViewSet):
     serializer_class = ClusterPerformanceSerializer
 
 
-class FinanceCashFlowViewSet(SourceViewSet):
+class FinanceCashFlowViewSet(FinanceSourceViewSet):
     queryset = FinanceCashFlow.objects.all()
     serializer_class = FinanceCashFlowSerializer
 
 
-class BalanceSheetLineViewSet(SourceViewSet):
+class BalanceSheetLineViewSet(FinanceSourceViewSet):
     queryset = BalanceSheetLine.objects.all()
     serializer_class = BalanceSheetLineSerializer
 
 
-class ProfitLossLineViewSet(SourceViewSet):
+class ProfitLossLineViewSet(FinanceSourceViewSet):
     queryset = ProfitLossLine.objects.all()
     serializer_class = ProfitLossLineSerializer
 
 
-class MonthlySalaryViewSet(SourceViewSet):
+class MonthlySalaryViewSet(FinanceSourceViewSet):
     queryset = MonthlySalary.objects.all()
     serializer_class = MonthlySalarySerializer
 
 
-class BudgetLineViewSet(SourceViewSet):
+class BudgetLineViewSet(FinanceSourceViewSet):
     queryset = BudgetLine.objects.all()
     serializer_class = BudgetLineSerializer

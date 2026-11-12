@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import apiClient from '../api/client'
+import { useAuth } from '../auth'
 import { addDecimal, multiplyDecimal } from '../decimal'
 
 const costTypeChoices = [
@@ -56,6 +57,8 @@ const dedupeCrops = (records) => {
 }
 
 function CropCataloguePage() {
+  const { can } = useAuth()
+  const readOnly = !can('crops', 'edit')
   const [crops, setCrops] = useState([])
   const [selectedCropId, setSelectedCropId] = useState('')
   const [requirements, setRequirements] = useState([])
@@ -333,7 +336,7 @@ function CropCataloguePage() {
         </table>
       </div>
 
-      <form className="workflow-form" onSubmit={submitRequirement}>
+      <form className="workflow-form" onSubmit={submitRequirement} hidden={readOnly}>
         <h4>{selectedCrop ? `${selectedCrop.name.toUpperCase()} - INPUT REQUIREMENTS` : 'Input Requirements'}</h4>
         <div className="workflow-fields">
           <label className="form-field">Group
@@ -388,9 +391,10 @@ function CropCataloguePage() {
                 <td>{formatCatalogueMoney(row.cost_per_hectare)}</td>
                 <td>{row.active ? 'Active' : 'Inactive'}</td>
                 <td>
-                  <button type="button" className="ghost-btn small" onClick={() => editRequirement(row)}>Edit</button>
-                  <button type="button" className="ghost-btn small" onClick={() => toggleActive(row)}>{row.active ? 'Deactivate' : 'Activate'}</button>
-                  <button type="button" className="ghost-btn small" onClick={() => setPendingDelete({ kind: 'requirement', url: `/crop-input-requirements/${row.id}/`, label: row.item_name })}>Delete</button>
+                  {readOnly ? "View only" : null}
+                  <button type="button" className="ghost-btn small" hidden={readOnly} onClick={() => editRequirement(row)}>Edit</button>
+                  <button type="button" className="ghost-btn small" hidden={readOnly} onClick={() => toggleActive(row)}>{row.active ? 'Deactivate' : 'Activate'}</button>
+                  <button type="button" className="ghost-btn small" hidden={readOnly} onClick={() => setPendingDelete({ kind: 'requirement', url: `/crop-input-requirements/${row.id}/`, label: row.item_name })}>Delete</button>
                 </td>
               </tr>
             ))}
@@ -401,7 +405,7 @@ function CropCataloguePage() {
       </div>
       <div className="form-message">TOTAL INPUT COST / HA: {formatCatalogueMoney(totalCostPerHa)}</div>
 
-      <form className="workflow-form" onSubmit={submitPrice}>
+      <form className="workflow-form" onSubmit={submitPrice} hidden={readOnly}>
         <h4>{selectedCrop ? `${selectedCrop.name} — Selling Price per Tonne — Agricultural Year ${seasons.find((season) => String(season.id) === String(priceForm.season))?.name || ''}`.trim() : 'Selling Price per Tonne'}</h4>
         <p className="finance-note">A selling price belongs to an agricultural year. It is not carried forward to the next year.</p>
         <div className="workflow-fields">
@@ -444,9 +448,10 @@ function CropCataloguePage() {
                 <td>{row.currency}</td>
                 <td>{row.active ? 'Active' : 'Inactive'}</td>
                 <td>
-                  <button type="button" className="ghost-btn small" onClick={() => { setEditingPriceId(row.id); setPriceForm({ season: row.season ? String(row.season) : '', price_per_tonne: formatCatalogueMoney(row.price_per_tonne), currency: row.currency || 'USD', active: row.active }) }}>Edit</button>
-                  <button type="button" className="ghost-btn small" onClick={async () => { try { await apiClient.patch(`/crop-selling-prices/${row.id}/`, { active: !row.active }); await loadPrices(selectedCropId) } catch { setError('Unable to update the selling price.') } }}>{row.active ? 'Deactivate' : 'Activate'}</button>
-                  <button type="button" className="ghost-btn small" onClick={() => setPendingDelete({ kind: 'price', url: `/crop-selling-prices/${row.id}/`, label: `${row.crop_name || selectedCrop?.name || 'Crop'} ${row.season_name || ''} price` })}>Delete</button>
+                  {readOnly ? "View only" : null}
+                  <button type="button" className="ghost-btn small" hidden={readOnly} onClick={() => { setEditingPriceId(row.id); setPriceForm({ season: row.season ? String(row.season) : '', price_per_tonne: formatCatalogueMoney(row.price_per_tonne), currency: row.currency || 'USD', active: row.active }) }}>Edit</button>
+                  <button type="button" className="ghost-btn small" hidden={readOnly} onClick={async () => { try { await apiClient.patch(`/crop-selling-prices/${row.id}/`, { active: !row.active }); await loadPrices(selectedCropId) } catch { setError('Unable to update the selling price.') } }}>{row.active ? 'Deactivate' : 'Activate'}</button>
+                  <button type="button" className="ghost-btn small" hidden={readOnly} onClick={() => setPendingDelete({ kind: 'price', url: `/crop-selling-prices/${row.id}/`, label: `${row.crop_name || selectedCrop?.name || 'Crop'} ${row.season_name || ''} price` })}>Delete</button>
                 </td>
               </tr>
             ))}

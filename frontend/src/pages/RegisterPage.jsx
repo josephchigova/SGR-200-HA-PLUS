@@ -2,17 +2,19 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 
 import apiClient from '../api/client'
+import { errorMessage } from '../components/ui'
+import AuthLayout from './AuthLayout'
+
+const FIELDS = [
+  ['first_name', 'First name', 'text', 'given-name'],
+  ['last_name', 'Last name', 'text', 'family-name'],
+  ['email', 'Email address', 'email', 'email'],
+  ['phone_number', 'Phone number (optional)', 'tel', 'tel'],
+]
 
 function RegisterPage() {
   const navigate = useNavigate()
-  const [form, setForm] = useState({
-    email: '',
-    username: '',
-    first_name: '',
-    last_name: '',
-    phone_number: '',
-    password: '',
-  })
+  const [form, setForm] = useState({ email: '', first_name: '', last_name: '', phone_number: '', password: '' })
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -25,53 +27,39 @@ function RegisterPage() {
     event.preventDefault()
     setError('')
     setLoading(true)
-
     try {
-      await apiClient.post('/auth/register/', form)
-      navigate('/login', { state: { message: 'Registration complete. Sign in to continue.' } })
+      await apiClient.post('/auth/register/', { ...form, username: form.email })
+      navigate('/login', { state: { message: 'Your request was received. An administrator must approve the account before you can sign in.' } })
     } catch (requestError) {
-      const details = requestError.response?.data
-      setError(details ? Object.values(details).flat().join(' ') : 'Registration failed.')
+      setError(errorMessage(requestError, 'The account request could not be sent.'))
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="page-card login-card">
-      <div className="section-head">
-        <h3>Create ARDA Account</h3>
-      </div>
-
-      <form onSubmit={handleSubmit}>
-        {['first_name', 'last_name', 'username', 'email', 'phone_number'].map((field) => (
-          <label key={field}>
-            {field.replace('_', ' ')}
-            <input
-              type={field === 'email' ? 'email' : 'text'}
-              name={field}
-              value={form[field]}
-              onChange={handleChange}
-              required={field !== 'phone_number'}
-            />
+    <AuthLayout back={{ to: '/login', label: 'Back to sign in' }}>
+      <div className="auth-card">
+        <h2>Request access</h2>
+        <p>An administrator reviews each request, assigns a role and activates the account.</p>
+        <form onSubmit={handleSubmit}>
+          {FIELDS.map(([name, label, type, autoComplete]) => (
+            <label key={name}>
+              {label}
+              <input type={type} name={name} autoComplete={autoComplete} value={form[name]} onChange={handleChange} required={name !== 'phone_number'} />
+            </label>
+          ))}
+          <label>
+            Password
+            <input type="password" name="password" autoComplete="new-password" value={form.password} onChange={handleChange} minLength="8" required />
+            <span className="field-hint">At least 8 characters. Avoid common words and your own name.</span>
           </label>
-        ))}
-        <label>
-          Password
-          <input type="password" name="password" value={form.password} onChange={handleChange} minLength="8" required />
-        </label>
-
-        {error ? <div className="form-message error">{error}</div> : null}
-        <div className="login-actions">
-          <button type="submit" className="primary-btn" disabled={loading}>
-            {loading ? 'Creating account...' : 'Create account'}
-          </button>
-        </div>
-        <div className="form-message">
-          Already registered? <Link to="/login">Sign in</Link>
-        </div>
-      </form>
-    </div>
+          {error ? <div className="form-message error" role="alert">{error}</div> : null}
+          <button type="submit" className="primary-btn block" disabled={loading}>{loading ? 'Sending…' : 'Send request'}</button>
+        </form>
+        <div className="auth-links">Already approved? <Link to="/login">Sign in</Link></div>
+      </div>
+    </AuthLayout>
   )
 }
 

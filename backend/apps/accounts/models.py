@@ -16,18 +16,24 @@ class User(AbstractUser):
     ROLE_LEAD_FARMER = "lead_farmer"
     ROLE_AUDITOR = "auditor"
     ROLE_VIEWER = "viewer"
+    ROLE_MEMBERSHIP_OFFICER = "membership_officer"
+    ROLE_PROCUREMENT_OFFICER = "procurement_officer"
+    ROLE_STORES_OFFICER = "stores_officer"
 
     ROLE_CHOICES: ClassVar[list[tuple[str, str]]] = [
         (ROLE_SUPER_ADMIN, "Super Administrator"),
         (ROLE_SGR_EXECUTIVE, "SGR Executive / Management"),
-        (ROLE_VERIFICATION_OFFICER, "Membership / Verification Officer"),
+        (ROLE_MEMBERSHIP_OFFICER, "Membership Officer"),
+        (ROLE_VERIFICATION_OFFICER, "Verification Officer"),
         (ROLE_FINANCE_OFFICER, "Finance Officer"),
-        (ROLE_PROGRAMME_OFFICER, "Programme Officer"),
+        (ROLE_PROGRAMME_OFFICER, "Agricultural / Programme Officer"),
+        (ROLE_PROCUREMENT_OFFICER, "Procurement Officer"),
+        (ROLE_STORES_OFFICER, "Stores Officer"),
         (ROLE_RECOVERY_OFFICER, "Recovery Officer"),
         (ROLE_PROVINCIAL_COORDINATOR, "Provincial Coordinator"),
         (ROLE_DISTRICT_COORDINATOR, "District Coordinator"),
         (ROLE_LEAD_FARMER, "Lead Farmer / Cluster Leader"),
-        (ROLE_AUDITOR, "Auditor / Viewer"),
+        (ROLE_AUDITOR, "Auditor"),
         (ROLE_VIEWER, "Viewer"),
     ]
 
@@ -37,6 +43,7 @@ class User(AbstractUser):
     province = models.ForeignKey("geography.Province", on_delete=models.SET_NULL, null=True, blank=True, related_name="assigned_users")
     district = models.ForeignKey("geography.District", on_delete=models.SET_NULL, null=True, blank=True, related_name="assigned_users")
     assigned_cluster = models.ForeignKey("clusters.Cluster", on_delete=models.SET_NULL, null=True, blank=True, related_name="assigned_users")
+    must_change_password = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -86,3 +93,45 @@ class User(AbstractUser):
         if self.role == self.ROLE_LEAD_FARMER:
             return self.assigned_cluster_id == cluster_id
         return True
+
+
+class AuditLog(models.Model):
+    """One row for every change made through the API, and for sign-in events."""
+
+    ACTION_CREATE = "CREATE"
+    ACTION_UPDATE = "UPDATE"
+    ACTION_DELETE = "DELETE"
+    ACTION_LOGIN = "LOGIN"
+    ACTION_LOGIN_FAILED = "LOGIN_FAILED"
+    ACTION_PASSWORD = "PASSWORD"
+    ACTION_EXPORT = "EXPORT"
+    ACTION_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (ACTION_CREATE, "Created"),
+        (ACTION_UPDATE, "Updated"),
+        (ACTION_DELETE, "Deleted"),
+        (ACTION_LOGIN, "Signed in"),
+        (ACTION_LOGIN_FAILED, "Failed sign-in"),
+        (ACTION_PASSWORD, "Password change"),
+        (ACTION_EXPORT, "Exported"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="audit_logs")
+    user_email = models.CharField(max_length=254, blank=True, default="")
+    user_role = models.CharField(max_length=32, blank=True, default="")
+    action = models.CharField(max_length=16, choices=ACTION_CHOICES)
+    module = models.CharField(max_length=60, blank=True, default="")
+    object_id = models.CharField(max_length=60, blank=True, default="")
+    summary = models.CharField(max_length=255, blank=True, default="")
+    method = models.CharField(max_length=8, blank=True, default="")
+    path = models.CharField(max_length=255, blank=True, default="")
+    status_code = models.PositiveSmallIntegerField(default=0)
+    changed_fields = models.JSONField(default=list, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        indexes = [models.Index(fields=["module", "created_at"], name="audit_module_created_idx")]
+
+    def __str__(self):
+        return f"{self.created_at:%Y-%m-%d %H:%M} {self.user_email} {self.action} {self.module}"

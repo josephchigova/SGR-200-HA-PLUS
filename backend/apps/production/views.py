@@ -1,4 +1,5 @@
 from django.db import transaction
+from apps.accounts.scoping import scope_by_farmer
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -51,7 +52,7 @@ class FarmerProductionViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = scope_by_farmer(super().get_queryset(), self.request.user)
         season = self.request.query_params.get("season")
         season_name = self.request.query_params.get("season_name")
         queryset = filter_by_agricultural_year(queryset, season, season_name, relation="season")
@@ -68,7 +69,7 @@ class GMBDeliveryViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = scope_by_farmer(super().get_queryset(), self.request.user)
         season = self.request.query_params.get("season")
         season_name = self.request.query_params.get("season_name")
         queryset = filter_by_agricultural_year(queryset, season, season_name, relation="season")
@@ -200,7 +201,7 @@ class SeasonalPlantingPlanViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = scope_by_farmer(super().get_queryset(), self.request.user)
         season = self.request.query_params.get("season")
         season_name = self.request.query_params.get("season_name")
         queryset = filter_by_agricultural_year(queryset, season, season_name, relation="season")

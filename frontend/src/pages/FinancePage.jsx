@@ -1,19 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 
 import apiClient from '../api/client'
+import { useAuth } from '../auth'
+import Icon from '../components/Icon'
+import { EmptyState, PageHead, Pill, Skeleton, StatCard } from '../components/ui'
 import AssetsPanel from './AssetsPanel'
 
+// Plain-language sections. Each one reads the same finance endpoints as before.
 const REPORTS = [
-  ['dashboard', 'Dashboard'],
-  ['assets', 'Assets'],
-  ['operations', 'Operations'],
-  ['subscription-report', 'Subscriptions'],
-  ['debtors', 'Debtors'],
-  ['expense-schedule', 'Expenses'],
-  ['cash-bank', 'Cash and Bank'],
-  ['profit-loss', 'Profit & Loss'],
-  ['balance-sheet', 'Balance Sheet'],
+  ['dashboard', 'Overview', 'Where the money stands for the selected dates.'],
+  ['subscription-report', 'Income', 'Subscription amounts due, received and still owed.'],
+  ['expense-schedule', 'Expenses', 'Record spending and see what has been paid.'],
+  ['cash-bank', 'Cash and bank', 'Money received and paid, by cash and bank.'],
+  ['debtors', 'Money owed', 'Farmers with subscription balances or input debt.'],
+  ['assets', 'Assets', 'Equipment and property owned by the club.'],
+  ['profit-loss', 'Profit and loss', 'Income minus expenses for the selected dates.'],
+  ['balance-sheet', 'Balance sheet', 'What the club owns and owes at the end date.'],
+  ['operations', 'Operations', 'Subscriptions, allocations, debt and deliveries in money terms.'],
 ]
+// Sections produced by the finance report endpoint, which can be exported.
+const EXPORTABLE = new Set(['dashboard', 'subscription-report', 'cash-bank', 'profit-loss', 'balance-sheet', 'operations'])
 
 function money(value) {
   if (value === null || value === undefined || value === '') return 'Not available'
@@ -23,6 +29,9 @@ function money(value) {
 }
 
 function FinancePage({ selectedSeason }) {
+  const { can } = useAuth()
+  const canWrite = can('finance', 'create')
+  const canExport = can('finance', 'export')
   const [reportName, setReportName] = useState('dashboard')
   const [report, setReport] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -120,39 +129,34 @@ function FinancePage({ selectedSeason }) {
     }
   }
 
+  const section = REPORTS.find(([key]) => key === reportName)
+
   return (
     <div className="page-card finance-page">
-      <div className="section-head">
-        <div>
-          <h3>Finance</h3>
-          <p className="finance-note">Subscription income is recognized only when it is posted. The balance sheet opening position comes from the workbook calculation.</p>
-        </div>
-      </div>
+      <PageHead title="Finance" subtitle="Income, expenses, bank position and assets for the selected dates.">
+        {canWrite ? null : <Pill tone="warn">Read only</Pill>}
+      </PageHead>
       <div className="finance-tabs" role="tablist" aria-label="Finance sections">
         {REPORTS.map(([key, label]) => (
           <button key={key} type="button" role="tab" aria-selected={reportName === key} className={reportName === key ? 'active' : ''} onClick={() => setReportName(key)}>{label}</button>
         ))}
       </div>
+      {section ? <p className="card-sub">{section[2]}</p> : null}
       {reportName === 'assets' ? <AssetsPanel /> : null}
-      {reportName !== 'assets' ? <div className="finance-filters">
+      {reportName !== 'assets' ? <div className="finance-filters no-print">
         <label>From <input type="date" value={start} onChange={(event) => { setManualRange(true); setStart(event.target.value) }} /></label>
         <label>To <input type="date" value={end} onChange={(event) => { setManualRange(true); setEnd(event.target.value) }} /></label>
-        <button type="button" className="ghost-btn" onClick={() => download('csv')}>Export CSV</button>
-        <button type="button" className="ghost-btn" onClick={() => download('pdf')}>Export PDF</button>
-        <button type="button" className="ghost-btn" onClick={async () => {
-          try {
-            await apiClient.post('/ledger-accounts/ensure-defaults/')
-            setNotice('Default accounts are ready.')
-            setReload((value) => value + 1)
-          } catch (requestError) {
-            const detail = requestError.response?.data?.detail
-            setError(typeof detail === 'string' ? detail : 'The chart of accounts could not be loaded.')
-          }
-        }}>Load default accounts</button>
+        {manualRange && seasonStart ? <button type="button" className="ghost-btn" onClick={() => setManualRange(false)}>Use {selectedSeason?.name || 'season'} dates</button> : null}
+        {canExport && EXPORTABLE.has(reportName) ? (
+          <>
+            <button type="button" className="ghost-btn" onClick={() => download('csv')}><Icon name="download" />Export CSV</button>
+            <button type="button" className="ghost-btn" onClick={() => download('pdf')}><Icon name="printer" />Export PDF</button>
+          </>
+        ) : null}
       </div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
-      {notice ? <div className="form-message" role="status">{notice}</div> : null}
-      {loading ? <div className="form-message">Loading financial records...</div> : null}
+      {notice ? <div className="form-message success" role="status">{notice}</div> : null}
+      {loading ? <div className="finance-grid"><Skeleton kind="stat" count={4} /></div> : null}
       {!loading && reportName === 'dashboard' && report ? <Dashboard report={report} /> : null}
       {!loading && reportName === 'profit-loss' && report ? <ProfitAndLoss report={report} /> : null}
       {!loading && reportName === 'balance-sheet' && report ? <BalanceSheet report={report} /> : null}
@@ -160,7 +164,23 @@ function FinancePage({ selectedSeason }) {
       {!loading && reportName === 'subscription-report' && report ? <SubscriptionReport report={report} /> : null}
       {!loading && reportName === 'cash-bank' && report ? <CashBank report={report} /> : null}
       {!loading && reportName === 'debtors' ? <Debtors rows={debtors?.results || []} /> : null}
-      {!loading && reportName === 'expense-schedule' ? <ExpenseSchedule schedule={schedule} form={expenseForm} setForm={setExpenseForm} onSubmit={saveExpense} /> : null}
+      {!loading && reportName === 'expense-schedule' ? <ExpenseSchedule schedule={schedule} form={expenseForm} setForm={setExpenseForm} onSubmit={saveExpense} canWrite={canWrite} /> : null}
+      {canWrite && reportName === 'dashboard' ? (
+        <details className="report-note no-print">
+          <summary>Accounting setup</summary>
+          <p style={{ margin: '8px 0 12px' }}>Creates the standard list of accounts if it is missing. Existing accounts and entries are not changed.</p>
+          <button type="button" className="ghost-btn small" onClick={async () => {
+            try {
+              await apiClient.post('/ledger-accounts/ensure-defaults/')
+              setNotice('Default accounts are ready.')
+              setReload((value) => value + 1)
+            } catch (requestError) {
+              const detail = requestError.response?.data?.detail
+              setError(typeof detail === 'string' ? detail : 'The chart of accounts could not be loaded.')
+            }
+          }}>Load default accounts</button>
+        </details>
+      ) : null}
     </div>
   )
 }
@@ -178,15 +198,22 @@ function Dashboard({ report }) {
     ['Recognized Receivables', report.ledger_receivable, 'Posted receivables for the selected dates. Opening subscription amounts due are on the balance sheet.'],
     ['Recognized Payables', report.ledger_payable, 'Posted payables for the selected dates. A genuine zero means no payable journals have been posted.'],
   ]
+  const net = Number(report.net_profit)
+  const headline = cards.slice(0, 3)
+  const position = cards.slice(3)
   return (
-    <section className="finance-grid">
-      {cards.map(([label, value, caption]) => (
-        <article className="stat-card" key={label}>
-          <span>{label}</span>
-          <strong>{money(value)}</strong>
-          {caption ? <small>{caption}</small> : null}
-        </article>
-      ))}
+    <section className="finance-stack">
+      <div className="finance-grid">
+        {headline.map(([label, value, caption]) => (
+          <StatCard key={label} label={label} value={money(value)} hint={caption} tone={label === 'Net profit' && !Number.isNaN(net) ? (net < 0 ? 'bad' : 'good') : ''} />
+        ))}
+      </div>
+      <details className="report-note" open>
+        <summary>Assets, liabilities, cash and amounts owed</summary>
+        <div className="finance-grid" style={{ marginTop: 14 }}>
+          {position.map(([label, value, caption]) => <StatCard key={label} label={label} value={money(value)} hint={caption} />)}
+        </div>
+      </details>
     </section>
   )
 }
@@ -313,10 +340,10 @@ function namedRows(rows) {
 function SubscriptionReport({ report }) {
   return (
     <section className="finance-grid">
-      <article className="stat-card"><span>Obligations due</span><strong>{money(report.obligations_due)}</strong></article>
-      <article className="stat-card"><span>Payments received</span><strong>{money(report.payments_received)}</strong></article>
-      <article className="stat-card"><span>Outstanding receivables</span><strong>{money(report.outstanding_receivables)}</strong></article>
-      <article className="stat-card"><span>Paid / Partial / Unpaid</span><strong>{report.paid} / {report.partial} / {report.unpaid}</strong></article>
+      <StatCard label="Subscriptions due" value={money(report.obligations_due)} hint="Total billed to farmers" />
+      <StatCard label="Payments received" value={money(report.payments_received)} tone="good" />
+      <StatCard label="Still owed" value={money(report.outstanding_receivables)} tone={Number(report.outstanding_receivables) > 0 ? 'warn' : ''} />
+      <StatCard label="Paid / Partial / Unpaid" value={`${report.paid} / ${report.partial} / ${report.unpaid}`} hint="Number of farmers" />
       <p className="finance-note">{report.note}</p>
     </section>
   )
@@ -345,7 +372,7 @@ function CashBank({ report }) {
 }
 
 function Debtors({ rows }) {
-  if (!rows.length) return <div className="form-message">No recognised outstanding subscription balances for this year.</div>
+  if (!rows.length) return <div className="card"><EmptyState icon="check" title="No money is owed for this year">No recognised outstanding subscription balances for this year.</EmptyState></div>
   return (
     <div className="table-wrap"><table className="finance-table">
       <thead><tr><th>Farmer</th><th>Province</th><th>District</th><th className="num">Due</th><th className="num">Paid</th><th className="num">Subscription outstanding</th><th className="num">Input debt</th><th className="num">Total</th><th>Status</th></tr></thead>
@@ -368,29 +395,29 @@ function Debtors({ rows }) {
   )
 }
 
-function ExpenseSchedule({ schedule, form, setForm, onSubmit }) {
+function ExpenseSchedule({ schedule, form, setForm, onSubmit, canWrite = true }) {
   const rows = schedule?.results || []
   const categories = schedule?.categories || []
   return (
     <section className="finance-stack">
-      <form className="journal-grid" onSubmit={onSubmit}>
+      {canWrite ? <form className="journal-grid" onSubmit={onSubmit} aria-label="Record an expense">
         <label>Date <input type="date" required value={form.expense_date} onChange={(event) => setForm({ ...form, expense_date: event.target.value })} /></label>
         <label>Description <input required value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
         <label>Amount <input required inputMode="decimal" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} /></label>
         <label>Payment method <select value={form.method} onChange={(event) => setForm({ ...form, method: event.target.value })}><option value="CASH">Cash</option><option value="BANK">Bank</option></select></label>
         <label>Category <select value={form.category} onChange={(event) => setForm({ ...form, category: event.target.value })}>{categories.map((category) => <option key={category.code} value={category.code}>{category.label}</option>)}{categories.length ? null : <option value="OTHER">Other Expenses</option>}</select></label>
         <label>Reference <input value={form.reference} onChange={(event) => setForm({ ...form, reference: event.target.value })} /></label>
-        <label>Paid now <input type="checkbox" checked={form.paid} onChange={(event) => setForm({ ...form, paid: event.target.checked })} /></label>
         <label>Notes <input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></label>
+        <label className="check-row"><input type="checkbox" checked={form.paid} onChange={(event) => setForm({ ...form, paid: event.target.checked })} />Paid now</label>
         <button type="submit">Record expense</button>
-      </form>
+      </form> : null}
       <p className="finance-total">Total {money(schedule?.total || 0)} · Paid {money(schedule?.paid || 0)} · Outstanding {money(schedule?.outstanding || 0)}</p>
       {rows.length ? (
         <div className="table-wrap"><table className="finance-table">
           <thead><tr><th>Date</th><th>Description</th><th>Category</th><th className="num">Amount</th><th>Method</th><th>Status</th><th>Reference</th></tr></thead>
           <tbody>{rows.map((row) => <tr key={row.id}><td>{row.date}</td><td>{row.description}</td><td>{row.category}</td><td className="num">{money(row.amount)}</td><td>{row.method}</td><td>{row.status}</td><td>{row.reference}</td></tr>)}</tbody>
         </table></div>
-      ) : <div className="form-message">No expenses for the selected period.</div>}
+      ) : <div className="card"><EmptyState icon="wallet" title="No expenses for the selected period">Change the dates or record an expense.</EmptyState></div>}
     </section>
   )
 }

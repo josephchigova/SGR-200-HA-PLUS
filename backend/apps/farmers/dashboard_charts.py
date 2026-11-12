@@ -17,10 +17,14 @@ def _amount(value):
     return f"{Decimal(str(value or 0)):.2f}"
 
 
-def build_dashboard_charts(*, farmers, season_name, season_start, season_end, allocations, productions, deliveries, debts, requested, allocated):
+def build_dashboard_charts(*, farmers, season_name, season_start, season_end, allocations, productions, deliveries, debts, requested, allocated, restrict_to_farmers=False):
     registrations = farmers
     receipts = SubscriptionPayment.objects.all()
     legacy_receipts = FarmerSubscription.objects.filter(paid_amount__gt=0)
+    if restrict_to_farmers:
+        # A lead farmer or coordinator only sees money received from their own farmers.
+        receipts = receipts.filter(subscription__farmer_id__in=farmers.values("id"))
+        legacy_receipts = legacy_receipts.filter(farmer_id__in=farmers.values("id"))
     expenses = Expense.objects.exclude(expense_date__isnull=True)
     claims = ExpenseClaim.objects.exclude(status=ExpenseClaim.STATUS_DRAFT)
     if season_start and season_end:

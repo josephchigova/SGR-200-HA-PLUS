@@ -3,6 +3,8 @@ import io
 
 from django.http import HttpResponse, StreamingHttpResponse
 from rest_framework import permissions, viewsets
+
+from apps.accounts.permissions import ManagementReadPermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -16,7 +18,7 @@ from .serializers import ReportTemplateSerializer
 class ReportTemplateViewSet(viewsets.ModelViewSet):
     queryset = ReportTemplate.objects.all()
     serializer_class = ReportTemplateSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [ManagementReadPermission]
 
 
 def _params(request):

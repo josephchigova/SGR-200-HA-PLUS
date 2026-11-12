@@ -3,7 +3,9 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
+from apps.accounts.models import User
 from apps.accounts.permissions import ProgrammeWorkflowPermission
+from apps.accounts.scoping import scope_by_farmer
 from apps.programmes.period import filter_by_agricultural_year, filter_by_crop_name, parse_crop_season
 
 from .models import ARDAFarmerRequest, ARDARequest, ARDARequestBatch
@@ -15,11 +17,16 @@ class ARDARequestViewSet(viewsets.ModelViewSet):
     serializer_class = ARDARequestSerializer
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
 
+    def get_queryset(self):
+        return scope_by_farmer(super().get_queryset(), self.request.user)
+
 
 class ARDARequestBatchViewSet(viewsets.ModelViewSet):
     queryset = ARDARequestBatch.objects.select_related("programme", "season").all()
     serializer_class = ARDARequestBatchSerializer
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
+    # Request batches are organisation-wide submissions to ARDA.
+    denied_roles = {User.ROLE_LEAD_FARMER}
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -66,7 +73,7 @@ class ARDAFarmerRequestViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
+        queryset = scope_by_farmer(super().get_queryset(), self.request.user)
         season = self.request.query_params.get("season")
         season_name = self.request.query_params.get("season_name")
         queryset = filter_by_agricultural_year(queryset, season, season_name, relation="request_batch__season")

@@ -236,10 +236,9 @@ export function DoughnutChart({ title, slices = [], unit = 'farmers', note }) {
               cy={centerY}
               r={radius}
               className="chart-ring"
-              stroke={arc.color}
               strokeDasharray={`${arc.length} ${Math.max(circumference - arc.length, 0.01)}`}
               strokeDashoffset={-arc.offset}
-              style={{ transform: 'rotate(-90deg)', transformOrigin: `${width / 2}px ${centerY}px` }}
+              style={{ stroke: arc.color, transform: 'rotate(-90deg)', transformOrigin: `${width / 2}px ${centerY}px` }}
             >
               <title>{arc.label}: {formatMeasure(arc.value, unit)}</title>
             </circle>
@@ -280,7 +279,7 @@ export function GroupedBarChart({ title, series = [], unit = 'ha', note }) {
             const placement = valueLabelPlacement(top, drawn, PLOT_TOP, tickText(item.value, unit), barWidth)
             return (
               <g key={item.label}>
-                <rect x={x} y={top} width={barWidth} height={drawn} fill={item.color} rx="3">
+                <rect x={x} y={top} width={barWidth} height={drawn} style={{ fill: item.color }} rx="3">
                   <title>{item.label}: {formatMeasure(item.value, unit)}</title>
                 </rect>
                 <text x={x + barWidth / 2} y={placement.y} textAnchor="middle" className={placement.onBar ? 'chart-onbar' : 'chart-axis'}>{tickText(item.value, unit)}</text>
@@ -294,7 +293,7 @@ export function GroupedBarChart({ title, series = [], unit = 'ha', note }) {
   )
 }
 
-export function ColumnChart({ title, rows = [], labelKey, valueKey, unit, note, color = '#1f6b45' }) {
+export function ColumnChart({ title, rows = [], labelKey, valueKey, unit, note, color = 'var(--chart-1)' }) {
   const [plotRef, width] = useChartWidth()
   if (!rows.length) return <EmptyChart title={title} note={note} />
   const max = niceMax(Math.max(...rows.map((row) => Number(row[valueKey]) || 0)), unit)
@@ -323,7 +322,7 @@ export function ColumnChart({ title, rows = [], labelKey, valueKey, unit, note, 
             const rotate = rows.length > 6
             return (
               <g key={`${row[labelKey]}-${index}`}>
-                <rect x={x} y={y} width={barWidth} height={Math.max(barHeight, 0)} fill={color} rx="3">
+                <rect x={x} y={y} width={barWidth} height={Math.max(barHeight, 0)} style={{ fill: color }} rx="3">
                   <title>{label}: {formatMeasure(value, unit)}</title>
                 </rect>
                 <text x={x + barWidth / 2} y={placement.y} textAnchor="middle" className={placement.onBar ? 'chart-onbar' : 'chart-axis'}>{tickText(value, unit)}</text>
@@ -345,7 +344,7 @@ export function ColumnChart({ title, rows = [], labelKey, valueKey, unit, note, 
   )
 }
 
-const EXPENSE_COLORS = ['#1f6b45', '#0f766e', '#b8860b', '#1d4e89', '#64748b', '#9a3412']
+const EXPENSE_COLORS = ['var(--chart-1)', 'var(--chart-2)', 'var(--chart-3)', 'var(--chart-5)', 'var(--chart-4)', 'var(--chart-6)']
 
 export function ExpenseAnalysis({ categories = [], months = [] }) {
   const categoryRows = categories.filter((row) => Number(row.amount) > 0)
@@ -367,7 +366,7 @@ export function ExpenseAnalysis({ categories = [], months = [] }) {
         </div>
         <div>
           <p className="chart-subhead">By month</p>
-          {monthRows.length ? <ColumnBody rows={monthRows} labelKey="month" valueKey="amount" unit="USD" color="#0f766e" /> : <p className="chart-empty-inline">No data available for the selected period.</p>}
+          {monthRows.length ? <ColumnBody rows={monthRows} labelKey="month" valueKey="amount" unit="USD" color="var(--chart-2)" /> : <p className="chart-empty-inline">No data available for the selected period.</p>}
         </div>
       </div>
     </figure>
@@ -392,7 +391,7 @@ function DoughnutBody({ slices, unit }) {
         <ChartSvg width={width} height={height} label="Expenses by category">
           <circle cx={width / 2} cy={centerY} r={radius} className="chart-ring-track" />
           {arcs.filter((arc) => arc.length > 0).map((arc) => (
-            <circle key={arc.label} cx={width / 2} cy={centerY} r={radius} className="chart-ring" stroke={arc.color} strokeDasharray={`${arc.length} ${Math.max(circumference - arc.length, 0.01)}`} strokeDashoffset={-arc.offset} style={{ transform: 'rotate(-90deg)', transformOrigin: `${width / 2}px ${centerY}px` }}>
+            <circle key={arc.label} cx={width / 2} cy={centerY} r={radius} className="chart-ring" strokeDasharray={`${arc.length} ${Math.max(circumference - arc.length, 0.01)}`} strokeDashoffset={-arc.offset} style={{ stroke: arc.color, transform: 'rotate(-90deg)', transformOrigin: `${width / 2}px ${centerY}px` }}>
               <title>{arc.label}: {formatMeasure(arc.value, unit)}</title>
             </circle>
           ))}
@@ -429,7 +428,7 @@ function ColumnBody({ rows, valueKey, unit, color }) {
           const placement = valueLabelPlacement(y, barHeight, PLOT_TOP, tickText(value, unit), barWidth)
           return (
             <g key={`${label}-${index}`}>
-              <rect x={x} y={y} width={barWidth} height={Math.max(barHeight, 0)} fill={color} rx="3">
+              <rect x={x} y={y} width={barWidth} height={Math.max(barHeight, 0)} style={{ fill: color }} rx="3">
                 <title>{label}: {formatMeasure(value, unit)}</title>
               </rect>
               <text x={x + barWidth / 2} y={placement.y} textAnchor="middle" className={placement.onBar ? 'chart-onbar' : 'chart-axis'}>{tickText(value, unit)}</text>
@@ -455,7 +454,7 @@ export function HorizontalBarChart({ title, rows = [], labelKey, valueKey, unit 
             <div key={row[labelKey]} className="hbar-row">
               <span>{row[labelKey]}</span>
               <div className="hbar-track" title={`${row[labelKey]}: ${formatMeasure(value, unit)}`}>
-                <i style={{ width: `${(value / max) * 100}%`, background: row.color || '#1f6b45' }} />
+                <i style={{ width: `${(value / max) * 100}%`, background: row.color || 'var(--chart-1)' }} />
               </div>
               <strong>{formatMeasure(value, unit)}</strong>
             </div>

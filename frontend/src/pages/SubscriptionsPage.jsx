@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import apiClient from '../api/client'
+import { useAuth } from '../auth'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
 
 const PAGE_SIZE = 25
@@ -25,6 +26,8 @@ const errorMessage = (error) => {
 }
 
 function SubscriptionsPage({ selectedSeason }) {
+  const { can } = useAuth()
+  const canReceive = can('subscriptions', 'create')
   const seasonName = selectedSeason?.name || ''
   const [rows, setRows] = useState([])
   const [summary, setSummary] = useState(null)
@@ -200,8 +203,8 @@ function SubscriptionsPage({ selectedSeason }) {
       <header className="subscription-page-heading">
         <div>
           <p className="eyebrow">{seasonName || 'Season unavailable'}</p>
-          <h3>Farmer subscriptions</h3>
-          <p className="period-note">Payments belong to the agricultural year and are shared by Summer and Winter.</p>
+          <h3>Subscriptions</h3>
+          <p className="period-note">Annual membership subscriptions. Payments belong to the agricultural year and are shared by Summer and Winter.{canReceive ? '' : ' Payments are recorded by the finance team.'}</p>
         </div>
         <span className="subscription-record-count">{visibleCount.toLocaleString()} farmers</span>
       </header>
@@ -217,7 +220,7 @@ function SubscriptionsPage({ selectedSeason }) {
         <div><span>Unpaid</span><strong>{currentSummary ? currentSummary.unpaid.toLocaleString() : '—'}</strong></div>
       </section>
 
-      <form className="workflow-form subscription-payment-form" onSubmit={submitPayment}>
+      {canReceive ? <form className="workflow-form subscription-payment-form" onSubmit={submitPayment}>
         <div className="workflow-heading">
           <h4>Record or update payment</h4>
           <span className="subscription-season-label">{seasonName || 'No season selected'}</span>
@@ -309,7 +312,7 @@ function SubscriptionsPage({ selectedSeason }) {
         <button className="primary-btn" type="submit" disabled={saving || farmerStatusLoading || !currentFarmerStatus || !seasonName}>
           {saving ? 'Saving...' : 'Record payment'}
         </button>
-      </form>
+      </form> : null}
 
       <section className="subscription-status-section" aria-labelledby="subscription-status-heading">
         <div className="workflow-list-heading">
@@ -344,7 +347,7 @@ function SubscriptionsPage({ selectedSeason }) {
                   <th>Balance</th>
                   <th>Status</th>
                   <th>Payment date</th>
-                  <th aria-label="Actions" />
+                  {canReceive ? <th aria-label="Actions" /> : null}
                 </tr>
               </thead>
               <tbody>
@@ -361,7 +364,7 @@ function SubscriptionsPage({ selectedSeason }) {
                     <td>{formatMoney(row.outstanding_amount)}</td>
                     <td><span className={`status-pill subscription-status ${row.payment_status.toLowerCase()}`}>{row.payment_status}</span></td>
                     <td>{row.payment_date || '—'}</td>
-                    <td>
+                    {canReceive ? <td>
                       <button
                         type="button"
                         className="ghost-btn small"
@@ -376,7 +379,7 @@ function SubscriptionsPage({ selectedSeason }) {
                       >
                         Update
                       </button>
-                    </td>
+                    </td> : null}
                   </tr>
                 ))}
               </tbody>

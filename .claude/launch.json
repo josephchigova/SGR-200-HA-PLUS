@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sgr-preview-api",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd backend && DJANGO_SETTINGS_MODULE=preview_settings PYTHONPATH=/tmp/claude-1000/-home-joseph--claude-spares-spare-qI86TS/a8b0ef7e-d44d-4d0e-a21c-41f6c3f3b699/scratchpad/preview .venv/bin/python manage.py runserver 127.0.0.1:8000 --noreload"],
+      "port": 8000
+    },
+    {
+      "name": "sgr-frontend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd frontend && npx vite --port 5175 --strictPort"],
+      "port": 5175
+    }
+  ]
+}

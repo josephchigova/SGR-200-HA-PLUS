@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import apiClient from '../api/client'
-import TabSearch from '../components/TabSearch'
+import Icon from '../components/Icon'
+import { EmptyState, Modal, PageHead, Skeleton, StatCard, errorMessage } from '../components/ui'
 
 const toList = (data) => (Array.isArray(data) ? data : data?.results || [])
 
@@ -18,6 +19,10 @@ async function loadAll(path) {
   return rows
 }
 
+function cleanFilters(filters) {
+  return Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== '' && value !== undefined))
+}
+
 function ReportsPage({ selectedSeason = null, cropSeason = '' }) {
   const [catalogue, setCatalogue] = useState(null)
   const [analytics, setAnalytics] = useState(null)
@@ -32,33 +37,33 @@ function ReportsPage({ selectedSeason = null, cropSeason = '' }) {
   const [previewing, setPreviewing] = useState(false)
   const [downloading, setDownloading] = useState('')
   const [error, setError] = useState('')
+  const [previewError, setPreviewError] = useState('')
+  const [showCharts, setShowCharts] = useState(false)
 
   useEffect(() => {
     let mounted = true
     const load = async () => {
       setLoading(true)
       try {
-        const [catalogueResponse, analyticsResponse, provinces, districts, wards, clusters, crops, programmes, seasons] = await Promise.all([
+        const [catalogueResponse, analyticsResponse] = await Promise.all([
           apiClient.get('/reports/catalogue/'),
           apiClient.get('/reports/analytics/'),
-          loadAll('/provinces/?page_size=200'),
-          loadAll('/districts/?page_size=300'),
-          loadAll('/wards/?page_size=300'),
-          loadAll('/clusters/?page_size=200'),
-          loadAll('/crops/?page_size=100'),
-          loadAll('/programmes/?page_size=200'),
-          loadAll('/seasons/?page_size=50'),
         ])
         if (!mounted) return
         setCatalogue(catalogueResponse.data)
         setAnalytics(analyticsResponse.data)
-        setOptions({ provinces, districts, wards, clusters, crops, programmes, seasons })
         setError('')
-      } catch {
-        if (mounted) setError('Unable to load the reporting centre.')
+      } catch (requestError) {
+        if (mounted) setError(errorMessage(requestError, 'Unable to load the reporting centre.'))
       } finally {
         if (mounted) setLoading(false)
       }
+      // Filter choices load separately. A role that cannot read one list still gets its reports.
+      const names = ['provinces', 'districts', 'wards', 'clusters', 'crops', 'programmes', 'seasons']
+      const paths = ['/provinces/?page_size=200', '/districts/?page_size=300', '/wards/?page_size=300', '/clusters/?page_size=200', '/crops/?page_size=100', '/programmes/?page_size=200', '/seasons/?page_size=50']
+      const results = await Promise.allSettled(paths.map(loadAll))
+      if (!mounted) return
+      setOptions(Object.fromEntries(names.map((name, index) => [name, results[index].status === 'fulfilled' ? results[index].value : []])))
     }
     load()
     return () => { mounted = false }
@@ -74,6 +79,17 @@ function ReportsPage({ selectedSeason = null, cropSeason = '' }) {
     })
   }, [catalogue, category, search])
 
+  const grouped = useMemo(() => (catalogue?.categories || [])
+    .map((item) => ({ ...item, reports: reports.filter((report) => report.category === item.code) }))
+    .filter((item) => item.reports.length), [catalogue, reports])
+
+  const periodFilters = (report) => {
+    const next = {}
+    if (report.filters.includes('agricultural_year') && selectedSeason?.id) next.agricultural_year = String(selectedSeason.id)
+    if (report.filters.includes('season') && cropSeason) next.season = cropSeason
+    return next
+  }
+
   useEffect(() => {
     if (!selected) return undefined
     let mounted = true
@@ -85,12 +101,11 @@ function ReportsPage({ selectedSeason = null, cropSeason = '' }) {
         })
         if (mounted) {
           setPreview(response.data)
-          setError('')
+          setPreviewError('')
         }
       } catch (requestError) {
         if (!mounted) return
-        const detail = requestError.response?.data?.detail
-        setError(typeof detail === 'string' ? detail : 'Unable to preview this report.')
+        setPreviewError(errorMessage(requestError, 'Unable to preview this report.'))
         setPreview(null)
       } finally {
         if (mounted) setPreviewing(false)
@@ -101,34 +116,42 @@ function ReportsPage({ selectedSeason = null, cropSeason = '' }) {
   }, [selected, filters, page])
 
   const chooseReport = (report) => {
-    const next = {}
-    if (report.filters.includes('agricultural_year') && selectedSeason?.id) next.agricultural_year = String(selectedSeason.id)
-    if (report.filters.includes('season') && cropSeason) next.season = cropSeason
-    setFilters(next)
+    setFilters(periodFilters(report))
     setPage(1)
+    setPreview(null)
+    setPreviewError('')
     setSelected(report)
+  }
+
+  const closeReport = () => {
+    setSelected(null)
     setPreview(null)
   }
 
-  const download = async (format) => {
-    if (!selected) return
-    setDownloading(format)
+  const download = async (report, format, reportFilters) => {
+    setDownloading(`${report.code}:${format}`)
     try {
-      const response = await apiClient.get(`/reports/${selected.code}/export/`, {
-        params: { ...cleanFilters(filters), file_format: format },
+      const response = await apiClient.get(`/reports/${report.code}/export/`, {
+        params: { ...cleanFilters(reportFilters), file_format: format },
         responseType: 'blob',
+        timeout: 120000,
       })
       const url = URL.createObjectURL(response.data)
       const disposition = response.headers?.['content-disposition'] || ''
       const named = /filename="([^"]+)"/.exec(disposition)
       const link = document.createElement('a')
       link.href = url
-      link.download = named?.[1] || `${selected.code}.${format}`
+      link.download = named?.[1] || `${report.code}.${format}`
       link.click()
       URL.revokeObjectURL(url)
       setError('')
-    } catch {
-      setError(`Unable to download the ${format.toUpperCase()} report.`)
+      setPreviewError('')
+    } catch (requestError) {
+      const message = requestError.response?.status === 403
+        ? 'Your role is not allowed to export this report.'
+        : `Unable to download the ${format.toUpperCase()} report.`
+      if (selected) setPreviewError(message)
+      else setError(message)
     } finally {
       setDownloading('')
     }
@@ -136,91 +159,134 @@ function ReportsPage({ selectedSeason = null, cropSeason = '' }) {
 
   const districts = options.districts.filter((district) => !filters.province || String(district.province) === String(filters.province))
   const wards = options.wards.filter((ward) => !filters.district || String(ward.district) === String(filters.district))
+  const charts = (analytics?.charts || []).filter((chart) => chart.rows?.length)
+  const periodLabel = selectedSeason?.name ? `${selectedSeason.name}${cropSeason ? ` · ${cropSeason.charAt(0)}${cropSeason.slice(1).toLowerCase()}` : ''}` : ''
 
   return (
     <div className="page-card">
-      <div className="section-head">
-        <div>
-          <h3>Reports</h3>
-          <p>Generate filtered reports from the live records and download PDF or Excel-compatible CSV.</p>
-        </div>
-        <TabSearch value={search} onChange={setSearch} placeholder="Search reports" />
-      </div>
+      <PageHead title="Reports" subtitle="Standard reports computed from the live records. View, print or export a report for the selected agricultural year." />
+
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
-      {loading ? <div className="form-message">Loading reports...</div> : null}
+      {loading ? (
+        <>
+          <div className="stats-grid"><Skeleton kind="stat" count={4} /></div>
+          <Skeleton kind="block" />
+        </>
+      ) : null}
+
       {!loading && analytics?.cards?.length ? (
         <div className="stats-grid">
-          {analytics.cards.map((card) => (
-            <article className="stat-card" key={card.label}><span>{card.label}</span><strong>{card.value}</strong></article>
-          ))}
+          {analytics.cards.map((card) => <StatCard key={card.label} label={card.label} value={card.value} />)}
         </div>
       ) : null}
-      {!loading && analytics?.charts?.length ? (
-        <div className="report-bars">
-          {analytics.charts.filter((chart) => chart.rows?.length).map((chart) => <Bars key={chart.title} chart={chart} />)}
+
+      {!loading && charts.length ? (
+        <div>
+          <button type="button" className="ghost-btn small" aria-expanded={showCharts} onClick={() => setShowCharts((value) => !value)}>
+            <Icon name="chart" />{showCharts ? 'Hide summary charts' : 'Show summary charts'}
+          </button>
+          {showCharts ? <div className="report-charts" style={{ marginTop: 14 }}>{charts.map((chart) => <div className="card" key={chart.title}><Bars chart={chart} /></div>)}</div> : null}
         </div>
       ) : null}
+
       {!loading && catalogue ? (
-        <div className="report-layout">
-          <div className="report-categories">
-            <button type="button" className={category ? 'report-category' : 'report-category active'} onClick={() => setCategory('')}>All reports</button>
+        <>
+          <div className="report-toolbar no-print">
+            <input className="tab-search" type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search reports" aria-label="Search reports" />
+            <span className="card-sub">{reports.length} of {catalogue.reports.length} reports{periodLabel ? ` · Period ${periodLabel}` : ''}</span>
+          </div>
+          <div className="chip-row no-print" role="group" aria-label="Report categories">
+            <button type="button" className={category ? 'chip' : 'chip active'} aria-pressed={!category} onClick={() => setCategory('')}>All <small>{catalogue.reports.length}</small></button>
             {(catalogue.categories || []).map((item) => (
-              <button type="button" key={item.code} className={category === item.code ? 'report-category active' : 'report-category'} onClick={() => setCategory(item.code)}>
-                {item.label} ({item.count})
+              <button type="button" key={item.code} className={category === item.code ? 'chip active' : 'chip'} aria-pressed={category === item.code} onClick={() => setCategory(item.code)}>
+                {item.label} <small>{item.count}</small>
               </button>
             ))}
           </div>
-          <div className="report-main">
-            {reports.map((report) => (
-              <button type="button" key={report.code} className={selected?.code === report.code ? 'report-choice active' : 'report-choice'} onClick={() => chooseReport(report)}>
-                <strong>{report.title}</strong>
-                <small>{report.description}</small>
-              </button>
-            ))}
-            {!reports.length ? <div className="form-message">No reports match this search.</div> : null}
-            {selected ? (
-              <form className="workflow-form" onSubmit={(event) => { event.preventDefault(); setPage(1) }}>
-                <h4>{selected.title}</h4>
-                <div className="workflow-fields">
-                  {selected.filters.map((name) => (
-                    <FilterField
-                      key={name}
-                      name={name}
-                      label={catalogue.filters?.[name] || name}
-                      value={filters[name] || ''}
-                      options={fieldOptions(name, selected, options, districts, wards)}
-                      onChange={(value) => {
-                        setPage(1)
-                        setFilters((current) => ({ ...current, [name]: value, ...(name === 'province' ? { district: '', ward: '' } : {}), ...(name === 'district' ? { ward: '' } : {}) }))
-                      }}
-                    />
-                  ))}
-                </div>
-                <div className="report-actions">
-                  <button type="submit" className="primary-btn small">Update preview</button>
-                  <button type="button" className="ghost-btn" onClick={() => { setFilters({}); setPage(1) }}>All records</button>
-                  <button type="button" className="primary-btn small" disabled={!!downloading} onClick={() => download('pdf')}>{downloading === 'pdf' ? 'Preparing PDF…' : 'Download PDF'}</button>
-                  <button type="button" className="primary-btn small" disabled={!!downloading} onClick={() => download('csv')}>{downloading === 'csv' ? 'Preparing CSV…' : 'Download CSV'}</button>
-                </div>
-              </form>
-            ) : null}
-            {previewing ? <div className="form-message">Preparing the preview...</div> : null}
-            {preview ? <Preview preview={preview} page={page} setPage={setPage} /> : null}
-            {catalogue.limitations?.length ? (
-              <div className="report-note">
-                <strong>Data notes</strong>
-                <ul>{catalogue.limitations.map((item) => <li key={item}>{item}</li>)}</ul>
+
+          {!grouped.length ? <div className="card"><EmptyState icon="search" title="No reports match this search">Try another word or choose a different category.</EmptyState></div> : null}
+
+          {grouped.map((group) => (
+            <section className="report-section" key={group.code}>
+              <h3>{group.label}</h3>
+              <div className="report-grid">
+                {group.reports.map((report) => (
+                  <article className="report-card" key={report.code}>
+                    <h4>{report.title}</h4>
+                    <p>{report.description}</p>
+                    <footer>
+                      <code>{report.filters.includes('agricultural_year') && selectedSeason?.name ? selectedSeason.name : 'All dates'}</code>
+                      <span className="table-actions">
+                        <button type="button" className="ghost-btn small" aria-label={`Export ${report.title} as CSV`} disabled={Boolean(downloading)} onClick={() => download(report, 'csv', periodFilters(report))}>
+                          <Icon name="download" />{downloading === `${report.code}:csv` ? 'Preparing…' : 'CSV'}
+                        </button>
+                        <button type="button" className="ghost-btn small" aria-label={`Export ${report.title} as PDF`} disabled={Boolean(downloading)} onClick={() => download(report, 'pdf', periodFilters(report))}>
+                          <Icon name="printer" />{downloading === `${report.code}:pdf` ? 'Preparing…' : 'PDF'}
+                        </button>
+                        <button type="button" className="primary-btn small" aria-label={`View ${report.title}`} onClick={() => chooseReport(report)}>
+                          <Icon name="eye" />View
+                        </button>
+                      </span>
+                    </footer>
+                  </article>
+                ))}
               </div>
-            ) : null}
-          </div>
-        </div>
+            </section>
+          ))}
+
+          {catalogue.limitations?.length ? (
+            <details className="report-note">
+              <summary>Data notes</summary>
+              <ul>{catalogue.limitations.map((item) => <li key={item}>{item}</li>)}</ul>
+            </details>
+          ) : null}
+        </>
+      ) : null}
+
+      {selected ? (
+        <Modal
+          wide
+          title={selected.title}
+          subtitle={selected.description}
+          onClose={closeReport}
+          footer={(
+            <>
+              <button type="button" className="ghost-btn" onClick={() => window.print()}><Icon name="printer" />Print this page</button>
+              <button type="button" className="ghost-btn" disabled={Boolean(downloading)} onClick={() => download(selected, 'csv', filters)}>{downloading === `${selected.code}:csv` ? 'Preparing CSV…' : 'Download CSV'}</button>
+              <button type="button" className="primary-btn" disabled={Boolean(downloading)} onClick={() => download(selected, 'pdf', filters)}>{downloading === `${selected.code}:pdf` ? 'Preparing PDF…' : 'Download PDF'}</button>
+            </>
+          )}
+        >
+          {selected.filters.length ? (
+            <form className="no-print" onSubmit={(event) => event.preventDefault()}>
+              <div className="workflow-fields">
+                {selected.filters.map((name) => (
+                  <FilterField
+                    key={name}
+                    name={name}
+                    label={catalogue.filters?.[name] || name}
+                    value={filters[name] || ''}
+                    options={fieldOptions(name, selected, options, districts, wards)}
+                    onChange={(value) => {
+                      setPage(1)
+                      setFilters((current) => ({ ...current, [name]: value, ...(name === 'province' ? { district: '', ward: '' } : {}), ...(name === 'district' ? { ward: '' } : {}) }))
+                    }}
+                  />
+                ))}
+              </div>
+              <div className="report-actions">
+                <button type="button" className="ghost-btn small" onClick={() => { setFilters({}); setPage(1) }}>Clear filters</button>
+                <button type="button" className="ghost-btn small" onClick={() => { setFilters(periodFilters(selected)); setPage(1) }}>Selected period</button>
+              </div>
+            </form>
+          ) : null}
+          {previewError ? <div className="form-message error" role="alert">{previewError}</div> : null}
+          {previewing && !preview ? <Skeleton kind="block" /> : null}
+          {preview ? <Preview preview={preview} page={page} setPage={setPage} busy={previewing} /> : null}
+        </Modal>
       ) : null}
     </div>
   )
-}
-
-function cleanFilters(filters) {
-  return Object.fromEntries(Object.entries(filters).filter(([, value]) => value !== '' && value !== undefined))
 }
 
 function fieldOptions(name, report, options, districts, wards) {
@@ -253,33 +319,35 @@ function FilterField({ name, label, value, options, onChange }) {
   )
 }
 
-function Preview({ preview, page, setPage }) {
+function Preview({ preview, page, setPage, busy }) {
   const max = Math.max(...(preview.chart || []).map((row) => Number(row.value) || 0), 1)
   return (
-    <section>
-      <h4>{preview.title}</h4>
-      {preview.filters?.length ? <p className="report-note">Filters: {preview.filters.join('; ')}</p> : <p className="report-note">All available records</p>}
+    <section className="finance-stack" aria-busy={busy}>
+      <p className="card-sub">{preview.filters?.length ? `Filters: ${preview.filters.join('; ')}` : 'All available records'}</p>
       {preview.gap ? <p className="report-gap">{preview.gap}</p> : null}
       <div className="stats-grid">
-        {(preview.summaries || []).map((item) => <article className="stat-card" key={item.label}><span>{item.label}</span><strong>{item.value}</strong></article>)}
+        {(preview.summaries || []).map((item) => <StatCard key={item.label} label={item.label} value={item.value} />)}
       </div>
-      {preview.chart?.length ? <Bars chart={{ title: preview.title, rows: preview.chart }} max={max} /> : null}
+      {preview.chart?.length ? <div className="card no-print"><Bars chart={{ title: preview.title, rows: preview.chart }} max={max} /></div> : null}
       <div className="table-wrap">
-        <table className="data-table">
-          <thead><tr>{preview.columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead>
-          <tbody>
-            {preview.rows.map((row, index) => (
-              <tr key={`${preview.code}-${index}`}>{preview.columns.map((column) => <td key={column.key}>{row[column.key] || '—'}</td>)}</tr>
-            ))}
-            {!preview.rows.length ? <tr><td colSpan={preview.columns.length}>No records match these filters.</td></tr> : null}
-          </tbody>
-        </table>
-      </div>
-      <div className="report-pager">
-        <span>{preview.count} records</span>
-        <button type="button" className="ghost-btn" disabled={page <= 1} onClick={() => setPage((current) => current - 1)}>Previous</button>
-        <span>Page {preview.page} of {preview.pages}</span>
-        <button type="button" className="ghost-btn" disabled={page >= preview.pages} onClick={() => setPage((current) => current + 1)}>Next</button>
+        {preview.rows.length ? (
+          <table className="data-table">
+            <thead><tr>{preview.columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead>
+            <tbody>
+              {preview.rows.map((row, index) => (
+                <tr key={`${preview.code}-${index}`}>{preview.columns.map((column) => <td key={column.key}>{row[column.key] || '—'}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        ) : <EmptyState icon="database" title="No records match these filters">Clear a filter or choose another period.</EmptyState>}
+        <div className="report-pager no-print">
+          <span>{preview.count} record{preview.count === 1 ? '' : 's'}</span>
+          <span className="table-actions">
+            <button type="button" className="ghost-btn small" disabled={page <= 1} onClick={() => setPage((current) => current - 1)}>Previous</button>
+            <span style={{ alignSelf: 'center' }}>Page {preview.page} of {preview.pages}</span>
+            <button type="button" className="ghost-btn small" disabled={page >= preview.pages} onClick={() => setPage((current) => current + 1)}>Next</button>
+          </span>
+        </div>
       </div>
     </section>
   )

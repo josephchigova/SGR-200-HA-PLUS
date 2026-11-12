@@ -14,10 +14,17 @@ class ReportTemplateTests(TestCase):
             password="StrongPass123!",
             first_name="Nyasha",
             last_name="Chikuruwo",
-            role=User.ROLE_AUDITOR,
+            role=User.ROLE_SUPER_ADMIN,
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
+
+    def test_auditor_reads_but_cannot_create_report_templates(self):
+        auditor = User.objects.create_user(email="ro@example.com", username="ro", password="StrongPass123!", role=User.ROLE_AUDITOR)
+        self.client.force_authenticate(user=auditor)
+        url = reverse("report-template-list")
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertEqual(self.client.post(url, {"name": "X", "code": "X"}, format="json").status_code, 403)
 
     def test_report_template_can_be_created(self):
         url = reverse("report-template-list")
