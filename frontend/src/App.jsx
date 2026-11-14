@@ -22,6 +22,7 @@ import AuditLogPage from './pages/AuditLogPage'
 import DashboardPage from './pages/DashboardPage'
 import FinancePage from './pages/FinancePage'
 import CropCataloguePage from './pages/CropCataloguePage'
+import ClusterDashboard from './pages/ClusterDashboard'
 import ClustersPage from './pages/ClustersPage'
 import FarmerDetailsPage from './pages/FarmerDetailsPage'
 import FarmersPage from './pages/FarmersPage'
@@ -29,6 +30,7 @@ import InputAllocationsPage from './pages/InputAllocationsPage'
 import InputDebtPage from './pages/InputDebtPage'
 import LoginPage from './pages/LoginPage'
 import { ForgotPasswordPage, ResetPasswordPage } from './pages/PasswordPages'
+import RegisterFarmerPage from './pages/RegisterFarmerPage'
 import RegisterPage from './pages/RegisterPage'
 import ReportsPage from './pages/ReportsPage'
 import SearchPage from './pages/SearchPage'
@@ -45,8 +47,9 @@ const navGroups = [
     title: 'Your work',
     items: [
       { label: 'Overview', to: '/dashboard', icon: 'grid', module: 'dashboard' },
-      { label: 'Farmers', to: '/farmers', icon: 'users', module: 'farmers' },
-      { label: 'Verification', to: '/verification', icon: 'shield', module: 'verification' },
+      { label: 'Farmers', to: '/farmers', icon: 'users', module: 'farmers', end: true },
+      { label: 'Register farmer', to: '/farmers/register', icon: 'plus', module: 'farmers', action: 'create' },
+      { label: 'Approvals', to: '/verification', icon: 'shield', module: 'verification' },
       { label: 'Clusters', to: '/clusters', icon: 'layers', module: 'clusters' },
       { label: 'Subscriptions', to: '/subscriptions', icon: 'dollar', module: 'subscriptions' },
     ],
@@ -98,6 +101,8 @@ async function fetchAllSeasons() {
 }
 
 function pageTitle(pathname) {
+  if (pathname === '/farmers/register') return 'Register a farmer'
+  if (pathname.endsWith('/edit')) return 'Continue registration'
   if (pathname.startsWith('/farmers/')) return 'Farmer profile'
   const item = allItems.find((entry) => pathname === entry.to)
   return item?.label || extraTitles[pathname] || 'SGR 200HA+'
@@ -265,7 +270,7 @@ function Workspace() {
     ? (`${profile.first_name || ''} ${profile.last_name || ''}`.trim() || profile.username || profile.email)
     : ''
   const groups = navGroups
-    .map((group) => ({ ...group, items: group.items.filter((item) => can(item.module)) }))
+    .map((group) => ({ ...group, items: group.items.filter((item) => can(item.module, item.action || 'view')) }))
     .filter((group) => group.items.length)
   const bottomItems = bottomCandidates
     .map((to) => allItems.find((item) => item.to === to))
@@ -293,6 +298,7 @@ function Workspace() {
                 <NavLink
                   key={item.to}
                   to={item.to}
+                  end={Boolean(item.end)}
                   title={collapsed ? item.label : undefined}
                   className={({ isActive }) => (isActive ? 'side-link active' : 'side-link')}
                   onClick={() => setNavOpen(false)}
@@ -419,8 +425,10 @@ function Workspace() {
           ) : null}
           <Routes>
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
-            <Route path="/dashboard" element={<Guard module="dashboard"><DashboardPage {...period} /></Guard>} />
+            <Route path="/dashboard" element={<Guard module="dashboard">{profile?.role === 'lead_farmer' ? <ClusterDashboard {...period} /> : <DashboardPage {...period} />}</Guard>} />
             <Route path="/farmers" element={<Guard module="farmers"><FarmersPage /></Guard>} />
+            <Route path="/farmers/register" element={<Guard module="farmers" action="create"><RegisterFarmerPage key="new" /></Guard>} />
+            <Route path="/farmers/:id/edit" element={<Guard module="farmers" action="edit"><RegisterFarmerPage /></Guard>} />
             <Route path="/farmers/:id" element={<Guard module="farmers"><FarmerDetailsPage /></Guard>} />
             <Route path="/clusters" element={<Guard module="clusters"><ClustersPage /></Guard>} />
             <Route path="/verification" element={<Guard module="verification"><VerificationPage /></Guard>} />

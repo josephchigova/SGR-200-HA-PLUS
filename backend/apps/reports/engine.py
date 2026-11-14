@@ -361,4 +361,11 @@ def analytics(user, params):
         expense = lines.filter(account__account_type="EXPENSE", account__category="EXPENSE").aggregate(debit=Sum("debit"), credit=Sum("credit"))
         cards.append({"label": "Posted income", "value": format_value((income["credit"] or 0) - (income["debit"] or 0), "money")})
         cards.append({"label": "Posted operational expenditure", "value": format_value((expense["debit"] or 0) - (expense["credit"] or 0), "money")})
+    from apps.accounts.privacy import hides_money
+
+    if hides_money(user):
+        money_cards = {"Input costs allocated", "Outstanding input debt", "Recovered debt", "Subscription collections"}
+        money_charts = {"Input allocation by crop", "Subscription collection performance"}
+        cards = [card for card in cards if card["label"] not in money_cards]
+        charts = [item for item in charts if item["title"] not in money_charts]
     return {"cards": cards, "charts": charts, "limitations": LIMITATIONS, "generated": datetime.now().isoformat(timespec="minutes")}

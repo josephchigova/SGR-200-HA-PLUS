@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import apiClient from '../api/client'
+import RegistrationReview, { DocumentList, HistoryList, useRegistration } from '../components/RegistrationReview'
+import { Pill } from '../components/ui'
+import { statusOf } from '../registration'
 import { useAuth } from '../auth'
 import FarmLocationFields from '../components/FarmLocationFields'
 import { coordinateError, googleMapsUrl } from '../coordinates'
@@ -9,10 +12,15 @@ import { formatDisplay } from '../formatNumbers'
 
 function FarmerDetailsPage() {
   const { can, profile } = useAuth()
-  const canEdit = can('farmers', 'edit')
-  const canRemoveFarm = canEdit && profile?.role !== 'lead_farmer'
+  const canEditRecord = can('farmers', 'edit')
   const { id } = useParams()
   const [farmer, setFarmer] = useState(null)
+  const [reviewing, setReviewing] = useState(false)
+  const registration = useRegistration(id)
+  const canDecide = can('farmers', 'approve')
+  // A lead farmer changes farms only while the registration is still open to them.
+  const canEdit = canEditRecord && (profile?.role !== 'lead_farmer' || ['DRAFT', 'CORRECTIONS_REQUESTED', 'REJECTED'].includes(farmer?.verification_status))
+  const canRemoveFarm = canEdit && profile?.role !== 'lead_farmer'
   const [farms, setFarms] = useState([])
   const [showFarmForm, setShowFarmForm] = useState(false)
   const [editingFarmId, setEditingFarmId] = useState(null)
@@ -109,17 +117,33 @@ function FarmerDetailsPage() {
     }
   }
 
+  const [statusLabel, statusTone] = statusOf(farmer?.verification_status)
+  const awaiting = ['SUBMITTED', 'UNDER_REVIEW', 'PENDING'].includes(farmer?.verification_status)
+  const canResume = canEdit && Boolean(farmer?.registered_by) && ['DRAFT', 'CORRECTIONS_REQUESTED', 'REJECTED'].includes(farmer?.verification_status)
+
   if (error) return <div className="form-message error" role="alert">{error}</div>
   if (!farmer) return <div className="form-message">Loading farmer…</div>
 
   return (
     <section className="workflow-page">
-      <div className="workflow-heading"><div><p className="eyebrow">Farmer record</p><h3>{farmer.full_name}</h3></div><Link className="ghost-btn" to="/farmers">Back to register</Link></div>
+      <div className="workflow-heading">
+        <div>
+          <p className="eyebrow">Farmer record</p>
+          <h3>{farmer.full_name}</h3>
+          <p><Pill tone={statusTone}>{statusLabel}</Pill> <Pill tone={farmer.membership_status === 'ACTIVE' ? 'good' : ''}>{farmer.membership_status === 'ACTIVE' ? 'Active member' : 'Not yet a member'}</Pill>{farmer.registered_by_name ? ` Registered by ${farmer.registered_by_name}.` : ''}</p>
+        </div>
+        <div className="page-actions">
+          {canResume ? <Link className="primary-btn" to={`/farmers/${farmer.id}/edit`}>{farmer.verification_status === 'DRAFT' ? 'Continue registration' : 'Correct and resubmit'}</Link> : null}
+          {canDecide && awaiting ? <button type="button" className="primary-btn" onClick={() => setReviewing(true)}>Review registration</button> : null}
+          <Link className="ghost-btn" to="/farmers">Back to farmers</Link>
+        </div>
+      </div>
+      {farmer.review_remarks && ['CORRECTIONS_REQUESTED', 'REJECTED'].includes(farmer.verification_status) ? <div className="form-message warning" role="status"><strong>Administrator remarks:</strong> {farmer.review_remarks}</div> : null}
       <dl className="detail-grid">
         <div><dt>National ID</dt><dd>{farmer.national_id || '—'}</dd></div>
         <div><dt>Membership number</dt><dd>{farmer.membership_number || '—'}</dd></div>
-        <div><dt>Verification</dt><dd>{farmer.verification_status}</dd></div>
-        <div><dt>Membership</dt><dd>{farmer.membership_status}</dd></div>
+        <div><dt>Registration</dt><dd>{statusLabel}</dd></div>
+        <div><dt>Ward</dt><dd>{farmer.ward_name || '—'}</dd></div>
         <div><dt>Province</dt><dd>{farmer.province_name || '—'}</dd></div>
         <div><dt>District</dt><dd>{farmer.district_name || '—'}</dd></div>
         <div><dt>Cluster</dt><dd>{farmer.cluster_name || '—'}</dd></div>
@@ -148,6 +172,17 @@ function FarmerDetailsPage() {
         })}
         {!farms.length ? <tr><td colSpan="10">No farm records.</td></tr> : null}
       </tbody></table></div>
+      <div className="split">
+        <section className="card">
+          <div className="card-head"><h3>KYC documents</h3></div>
+          <DocumentList documents={registration.documents} />
+        </section>
+        <section className="card">
+          <div className="card-head"><h3>Registration history</h3></div>
+          <HistoryList events={registration.events} />
+        </section>
+      </div>
+      {reviewing ? <RegistrationReview farmerId={farmer.id} canDecide={canDecide} onClose={() => setReviewing(false)} onDecided={() => { setReviewing(false); window.location.reload() }} /> : null}
     </section>
   )
 }

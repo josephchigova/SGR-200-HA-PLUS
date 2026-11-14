@@ -14,6 +14,7 @@ class Farmer(models.Model):
     STATUS_VERIFIED = "VERIFIED"
     STATUS_APPROVED = "APPROVED"
     STATUS_REJECTED = "REJECTED"
+    STATUS_CORRECTIONS = "CORRECTIONS_REQUESTED"
     STATUS_SUSPENDED = "SUSPENDED"
     STATUS_ARCHIVED = "ARCHIVED"
 
@@ -29,6 +30,7 @@ class Farmer(models.Model):
         (STATUS_VERIFIED, "Verified"),
         (STATUS_APPROVED, "Approved"),
         (STATUS_REJECTED, "Rejected"),
+        (STATUS_CORRECTIONS, "Corrections requested"),
         (STATUS_SUSPENDED, "Suspended"),
         (STATUS_ARCHIVED, "Archived"),
     ]
@@ -67,6 +69,10 @@ class Farmer(models.Model):
     verification_date = models.DateTimeField(null=True, blank=True)
     verified_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="verified_farmers")
     rejection_reason = models.TextField(blank=True)
+    # The reviewer's latest remarks, shown to the person who registered the farmer.
+    review_remarks = models.TextField(blank=True)
+    registered_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="registered_farmers")
+    submitted_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -79,7 +85,7 @@ class Farmer(models.Model):
         ]
 
     def save(self, *args, **kwargs):
-        self.full_name = f"{self.first_name} {self.middle_name} {self.surname}".strip()
+        self.full_name = " ".join(part for part in (self.first_name, self.middle_name, self.surname) if part).strip()
         if not self.membership_number:
             self.membership_number = self._generate_membership_number()
         super().save(*args, **kwargs)
@@ -161,6 +167,15 @@ class Farm(models.Model):
 
 
 class FarmerDocument(models.Model):
+    REVIEW_PENDING = "PENDING"
+    REVIEW_VERIFIED = "VERIFIED"
+    REVIEW_REJECTED = "REJECTED"
+    REVIEW_CHOICES = [
+        (REVIEW_PENDING, "Awaiting review"),
+        (REVIEW_VERIFIED, "Verified"),
+        (REVIEW_REJECTED, "Rejected"),
+    ]
+
     farmer = models.ForeignKey(Farmer, on_delete=models.CASCADE, related_name="documents", null=True, blank=True)
     farm = models.ForeignKey(Farm, on_delete=models.CASCADE, related_name="documents", null=True, blank=True)
     document_type = models.CharField(max_length=120)
@@ -170,9 +185,51 @@ class FarmerDocument(models.Model):
     upload_date = models.DateTimeField(auto_now_add=True)
     verified = models.BooleanField(default=False)
     verified_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="verified_documents")
+    review_status = models.CharField(max_length=12, choices=REVIEW_CHOICES, default=REVIEW_PENDING)
+    review_remarks = models.CharField(max_length=255, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    original_name = models.CharField(max_length=255, blank=True)
 
     class Meta:
         ordering = ["-upload_date"]
 
     def __str__(self):
         return f"{self.document_type} - {self.farmer or self.farm}"
+
+
+class FarmerReviewEvent(models.Model):
+    """The history of one registration: each submission, decision and document check."""
+
+    SUBMITTED = "SUBMITTED"
+    RESUBMITTED = "RESUBMITTED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    CORRECTIONS = "CORRECTIONS_REQUESTED"
+    DOCUMENT_UPLOADED = "DOCUMENT_UPLOADED"
+    DOCUMENT_VERIFIED = "DOCUMENT_VERIFIED"
+    DOCUMENT_REJECTED = "DOCUMENT_REJECTED"
+    UPDATED = "UPDATED"
+    ACTION_CHOICES = [
+        (SUBMITTED, "Submitted for approval"),
+        (RESUBMITTED, "Resubmitted after changes"),
+        (APPROVED, "Approved"),
+        (REJECTED, "Rejected"),
+        (CORRECTIONS, "Corrections requested"),
+        (DOCUMENT_UPLOADED, "Document uploaded"),
+        (DOCUMENT_VERIFIED, "Document verified"),
+        (DOCUMENT_REJECTED, "Document rejected"),
+        (UPDATED, "Details changed"),
+    ]
+
+    farmer = models.ForeignKey(Farmer, on_delete=models.CASCADE, related_name="review_events")
+    action = models.CharField(max_length=24, choices=ACTION_CHOICES)
+    remarks = models.TextField(blank=True)
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="farmer_review_events")
+    actor_name = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.farmer_id} {self.action}"

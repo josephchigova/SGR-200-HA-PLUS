@@ -520,6 +520,9 @@ def specs_for(user):
             continue
         if scope_attr and not getattr(spec, scope_attr):
             continue
+        if user.role == User.ROLE_LEAD_FARMER and any(column.kind == "money" for column in spec.columns):
+            # Lead farmers follow progress in percentages. Reports with amounts stay with finance.
+            continue
         allowed.append(spec)
     return allowed
 

@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from apps.accounts.privacy import MoneyPrivacyMixin
 from rest_framework import serializers
 
 from .models import FarmerSubscription, Subscription
@@ -21,7 +22,9 @@ class SubscriptionSerializer(serializers.ModelSerializer):
         ]
 
 
-class FarmerSubscriptionSerializer(serializers.ModelSerializer):
+class FarmerSubscriptionSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
+    money_fields = ('expected_amount', 'paid_amount', 'outstanding_amount')
+
     farmer_name = serializers.CharField(source="farmer.full_name", read_only=True)
     season = serializers.CharField(max_length=80, trim_whitespace=True, required=True)
     paid_amount = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0.00"))

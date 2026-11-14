@@ -12,7 +12,8 @@ from apps.inputs.models import InputAllocation
 from apps.production.models import FarmerProduction, GMBDelivery
 from apps.recovery.models import InputDebt
 
-from .models import Farmer, Farm, FarmerDocument
+from . import kyc
+from .models import Farmer, Farm, FarmerDocument, FarmerReviewEvent
 from .serializers import EligibleFarmerSerializer, FarmerDocumentSerializer, FarmerSerializer, FarmSerializer
 from .services import FarmerApprovalEligibilityService
 
@@ -24,7 +25,7 @@ class FarmerSearchPagination(PageNumberPagination):
 
 
 class FarmerViewSet(viewsets.ModelViewSet):
-    queryset = Farmer.objects.select_related("province", "district", "ward", "cluster", "verified_by").prefetch_related("farms").all()
+    queryset = Farmer.objects.select_related("province", "district", "ward", "cluster", "verified_by", "registered_by").prefetch_related("farms", "documents").all()
     serializer_class = FarmerSerializer
     pagination_class = FarmerSearchPagination
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -75,6 +76,9 @@ class FarmerViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(verification_status__in=verification_statuses)
         if membership_status:
             queryset = queryset.filter(membership_status=membership_status)
+        if self.request.query_params.get("submitted_only") in {"1", "true"}:
+            # The approval queue leaves out registrations a lead farmer has not finished yet.
+            queryset = queryset.exclude(verification_status=Farmer.STATUS_DRAFT, registered_by__isnull=False)
         # Farmer identity is permanent and stays visible for every year and season.
         return queryset
 
@@ -195,10 +199,18 @@ class FarmerViewSet(viewsets.ModelViewSet):
             # Organisation spending belongs to the finance roles only.
             summary["charts"].pop("expenses_by_category", None)
             summary["charts"].pop("expenses_by_month", None)
+        from apps.accounts.privacy import hides_money
+
+        if hides_money(request.user):
+            # A lead farmer sees how many farmers have paid, never how much.
+            for key in ("receivables", "subscription_receipts", "subscription_receipts_undated"):
+                summary["charts"].pop(key, None)
+            summary["charts"]["recent"] = [row for row in summary["charts"].get("recent", []) if row.get("kind") != "Subscription payment"]
         return Response(summary)
 
     @action(detail=True, methods=["post"], url_path="verify")
     def verify(self, request, pk=None):
+        """The reviewer's decision: approve, reject, or send back for corrections."""
         farmer = self.get_object()
         verification_status = request.data.get("verification_status")
 
@@ -206,24 +218,103 @@ class FarmerViewSet(viewsets.ModelViewSet):
         if verification_status not in valid_statuses:
             return Response({"verification_status": ["Select a valid verification status."]}, status=400)
 
-        rejection_reason = request.data.get("rejection_reason", "").strip()
-        if verification_status == Farmer.STATUS_REJECTED and not rejection_reason:
+        remarks = str(request.data.get("remarks") or request.data.get("rejection_reason") or "").strip()
+        if verification_status == Farmer.STATUS_REJECTED and not remarks:
             return Response({"rejection_reason": ["A rejection reason is required."]}, status=400)
+        if verification_status == Farmer.STATUS_CORRECTIONS and not remarks:
+            return Response({"remarks": ["Say what must be corrected."]}, status=400)
+        if verification_status in kyc.APPROVED_STATES:
+            # A draft from the registration wizard still lacks its documents.
+            if farmer.verification_status == Farmer.STATUS_DRAFT and farmer.registered_by_id:
+                return Response({"detail": "This registration has not been submitted yet."}, status=400)
+            pending = kyc.unverified_documents(farmer)
+            if pending:
+                return Response({"detail": "Verify every uploaded document before approving. Still to check: " + ", ".join(pending) + "."}, status=400)
 
         farmer.verification_status = verification_status
         farmer.verified_by = request.user
         farmer.verification_date = timezone.now()
-        farmer.rejection_reason = rejection_reason if verification_status == Farmer.STATUS_REJECTED else ""
-        farmer.save(update_fields=["verification_status", "verified_by", "verification_date", "rejection_reason", "updated_at"])
+        farmer.rejection_reason = remarks if verification_status == Farmer.STATUS_REJECTED else ""
+        farmer.review_remarks = remarks
+        if verification_status in kyc.APPROVED_STATES:
+            # Only an approved registration becomes an active member.
+            farmer.membership_status = Farmer.MEMBERSHIP_ACTIVE
+        elif verification_status in {Farmer.STATUS_REJECTED, Farmer.STATUS_CORRECTIONS}:
+            farmer.membership_status = Farmer.MEMBERSHIP_INACTIVE
+        farmer.save(update_fields=["verification_status", "verified_by", "verification_date", "rejection_reason", "review_remarks", "membership_status", "updated_at"])
         if verification_status == Farmer.STATUS_VERIFIED:
             farmer.farms.update(
                 verification_status="VERIFIED",
                 verified_by=request.user,
                 verification_date=timezone.now(),
             )
+        event = {
+            Farmer.STATUS_VERIFIED: FarmerReviewEvent.APPROVED,
+            Farmer.STATUS_APPROVED: FarmerReviewEvent.APPROVED,
+            Farmer.STATUS_REJECTED: FarmerReviewEvent.REJECTED,
+            Farmer.STATUS_CORRECTIONS: FarmerReviewEvent.CORRECTIONS,
+        }.get(verification_status)
+        if event:
+            kyc.record_event(farmer, event, request.user, remarks)
 
         serializer = self.get_serializer(farmer)
         return Response(serializer.data)
+
+    @action(detail=True, methods=["post"], url_path="submit")
+    def submit(self, request, pk=None):
+        """Send a draft or corrected registration to the approval queue."""
+        farmer = self.get_object()
+        if farmer.verification_status not in kyc.EDITABLE_BY_REGISTRAR:
+            return Response({"detail": "This registration is already with the administrator."}, status=400)
+        missing = kyc.missing_required_documents(farmer)
+        if missing:
+            return Response({"detail": "Upload the required documents first: " + ", ".join(missing) + "."}, status=400)
+        if not farmer.farms.exists():
+            return Response({"detail": "Add the farm details before submitting."}, status=400)
+        kyc.submit_registration(farmer, request.user)
+        return Response(self.get_serializer(farmer).data)
+
+    @action(detail=True, methods=["get"], url_path="history")
+    def history(self, request, pk=None):
+        farmer = self.get_object()
+        return Response([
+            {
+                "id": event.id,
+                "action": event.action,
+                "label": event.get_action_display(),
+                "remarks": event.remarks,
+                "actor": event.actor_name or "System",
+                "created_at": event.created_at,
+            }
+            for event in farmer.review_events.all()[:100]
+        ])
+
+    @action(detail=False, methods=["get"], url_path="registration-context")
+    def registration_context(self, request):
+        """Where this user may register farmers. A lead farmer is fixed to the assigned cluster."""
+        user = request.user
+        data = {"locked": False, "cluster": None, "province": None, "district": None, "documents": kyc.DOCUMENT_TYPES,
+                "max_upload_mb": kyc.MAX_UPLOAD_BYTES // (1024 * 1024), "national_id_pattern": kyc.NATIONAL_ID_PATTERN.pattern}
+        if not user.is_superuser and user.role == user.ROLE_LEAD_FARMER:
+            cluster = user.assigned_cluster
+            data["locked"] = True
+            if cluster is not None:
+                data["cluster"] = {"id": cluster.id, "name": cluster.name}
+                data["province"] = {"id": cluster.province_id, "name": cluster.province.name}
+                if cluster.district_id:
+                    data["district"] = {"id": cluster.district_id, "name": cluster.district.name}
+        return Response(data)
+
+    @action(detail=False, methods=["get"], url_path="cluster-overview")
+    def cluster_overview(self, request):
+        from .cluster_overview import build_cluster_overview
+
+        queryset = scope_farmers(Farmer.objects.all(), request.user)
+        cluster_id = request.query_params.get("cluster")
+        if cluster_id and str(cluster_id).isdigit():
+            queryset = queryset.filter(cluster_id=int(cluster_id))
+        season_name = request.query_params.get("season_name") or ""
+        return Response(build_cluster_overview(queryset, request.user, season_name))
 
 
 class FarmViewSet(viewsets.ModelViewSet):
@@ -246,9 +337,13 @@ class FarmerDocumentViewSet(viewsets.ModelViewSet):
     queryset = FarmerDocument.objects.select_related("farmer", "farm", "uploaded_by", "verified_by").all()
     serializer_class = FarmerDocumentSerializer
     permission_classes = [permissions.IsAuthenticated, FarmerWorkflowPermission]
+    http_method_names = ["get", "post", "delete", "head", "options"]
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        farmer_id = self.request.query_params.get("farmer")
+        if farmer_id and str(farmer_id).isdigit():
+            queryset = queryset.filter(farmer_id=int(farmer_id))
         user = self.request.user
         if user.is_superuser:
             return queryset
@@ -261,6 +356,69 @@ class FarmerDocumentViewSet(viewsets.ModelViewSet):
                 return queryset.none()
             return queryset.filter(farmer__cluster_id=user.assigned_cluster_id)
         return queryset
+
+    def perform_create(self, serializer):
+        farmer = serializer.validated_data.get("farmer")
+        document_type = serializer.validated_data.get("document_type")
+        upload = serializer.validated_data.get("file")
+        # A new upload of the same document replaces the earlier copy.
+        replaced = list(FarmerDocument.objects.filter(farmer=farmer, document_type=document_type)) if farmer else []
+        document = serializer.save(uploaded_by=self.request.user, original_name=(getattr(upload, "name", "") or "")[:255],
+                                   verified=False, verified_by=None, review_status=FarmerDocument.REVIEW_PENDING)
+        for old in replaced:
+            old.file.delete(save=False)
+            old.delete()
+        if farmer:
+            kyc.record_event(farmer, FarmerReviewEvent.DOCUMENT_UPLOADED, self.request.user, kyc.DOCUMENT_LABELS.get(document.document_type, document.document_type))
+
+    def perform_destroy(self, instance):
+        instance.file.delete(save=False)
+        instance.delete()
+
+    @action(detail=True, methods=["get"], url_path="download")
+    def download(self, request, pk=None):
+        """Documents are only served here, to a signed-in user allowed to see the farmer."""
+        import mimetypes
+
+        from django.http import FileResponse, Http404
+
+        document = self.get_object()
+        try:
+            handle = document.file.open("rb")
+        except (FileNotFoundError, ValueError) as error:
+            raise Http404("The file is no longer stored.") from error
+        name = document.original_name or document.file.name.rsplit("/", 1)[-1]
+        content_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+        response = FileResponse(handle, content_type=content_type)
+        disposition = "attachment" if request.query_params.get("save") == "1" else "inline"
+        response["Content-Disposition"] = f'{disposition}; filename="{name.replace(chr(34), "")}"'
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @action(detail=True, methods=["post"], url_path="review")
+    def review(self, request, pk=None):
+        document = self.get_object()
+        decision = request.data.get("review_status")
+        remarks = str(request.data.get("remarks") or "").strip()
+        if decision not in {FarmerDocument.REVIEW_VERIFIED, FarmerDocument.REVIEW_REJECTED, FarmerDocument.REVIEW_PENDING}:
+            return Response({"review_status": ["Choose verified or rejected."]}, status=400)
+        if decision == FarmerDocument.REVIEW_REJECTED and not remarks:
+            return Response({"remarks": ["Say why the document is rejected."]}, status=400)
+        document.review_status = decision
+        document.review_remarks = remarks[:255]
+        document.verified = decision == FarmerDocument.REVIEW_VERIFIED
+        document.verified_by = request.user
+        document.reviewed_at = timezone.now()
+        document.save(update_fields=["review_status", "review_remarks", "verified", "verified_by", "reviewed_at"])
+        if document.farmer_id and decision != FarmerDocument.REVIEW_PENDING:
+            label = kyc.DOCUMENT_LABELS.get(document.document_type, document.document_type)
+            kyc.record_event(
+                document.farmer,
+                FarmerReviewEvent.DOCUMENT_VERIFIED if document.verified else FarmerReviewEvent.DOCUMENT_REJECTED,
+                request.user,
+                f"{label}{': ' + remarks if remarks else ''}",
+            )
+        return Response(self.get_serializer(document).data)
 
 
 def _dashboard_scope(user):

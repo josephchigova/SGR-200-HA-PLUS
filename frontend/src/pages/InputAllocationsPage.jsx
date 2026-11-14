@@ -289,8 +289,8 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
                 <td>{row.programme_name}</td>
                 <td>{row.crop_name || row.crop}</td>
                 <td>{row.hectares}</td>
-                <td>{row.calculated_input_cost_per_hectare}</td>
-                <td>{row.total_input_cost}</td>
+                <td>{row.calculated_input_cost_per_hectare ?? '—'}</td>
+                <td>{row.total_input_cost ?? '—'}</td>
                 <td>{row.status}</td>
               </tr>
             ))}

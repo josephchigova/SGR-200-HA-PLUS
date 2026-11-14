@@ -43,7 +43,8 @@ MATRIX = {
         VerificationPermission.allowed_roles | {User.ROLE_AUDITOR},
     ),
     "clusters": (
-        ALL_ROLES - {User.ROLE_PROCUREMENT_OFFICER, User.ROLE_STORES_OFFICER},
+        # A lead farmer is tied to one cluster, so there is nothing to choose or manage here.
+        ALL_ROLES - {User.ROLE_PROCUREMENT_OFFICER, User.ROLE_STORES_OFFICER, User.ROLE_LEAD_FARMER},
         LocationReferencePermission.write_roles,
         LocationReferencePermission.write_roles,
         ADMIN, set(), set(),

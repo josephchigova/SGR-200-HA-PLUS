@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
+import { Meter } from './ClusterDashboard'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
 
 const PAGE_SIZE = 25
@@ -26,8 +27,10 @@ const errorMessage = (error) => {
 }
 
 function SubscriptionsPage({ selectedSeason }) {
-  const { can } = useAuth()
+  const { can, profile } = useAuth()
   const canReceive = can('subscriptions', 'create')
+  // Lead farmers follow progress as a percentage. The server sends them no amounts.
+  const showMoney = profile?.role !== 'lead_farmer'
   const seasonName = selectedSeason?.name || ''
   const [rows, setRows] = useState([])
   const [summary, setSummary] = useState(null)
@@ -204,7 +207,7 @@ function SubscriptionsPage({ selectedSeason }) {
         <div>
           <p className="eyebrow">{seasonName || 'Season unavailable'}</p>
           <h3>Subscriptions</h3>
-          <p className="period-note">Annual membership subscriptions. Payments belong to the agricultural year and are shared by Summer and Winter.{canReceive ? '' : ' Payments are recorded by the finance team.'}</p>
+          <p className="period-note">Annual membership subscriptions. Payments belong to the agricultural year and are shared by Summer and Winter.{canReceive ? '' : ' Payments are recorded by the finance team.'}{showMoney ? '' : ' You see each farmer’s progress as a percentage.'}</p>
         </div>
         <span className="subscription-record-count">{visibleCount.toLocaleString()} farmers</span>
       </header>
@@ -342,11 +345,9 @@ function SubscriptionsPage({ selectedSeason }) {
                   <th>Farmer</th>
                   <th>Arable ha</th>
                   <th>Category</th>
-                  <th>Expected</th>
-                  <th>Paid to date</th>
-                  <th>Balance</th>
+                  {showMoney ? <><th>Expected</th><th>Paid to date</th><th>Balance</th></> : <th>Subscription compliance</th>}
                   <th>Status</th>
-                  <th>Payment date</th>
+                  {showMoney ? <th>Payment date</th> : null}
                   {canReceive ? <th aria-label="Actions" /> : null}
                 </tr>
               </thead>
@@ -359,11 +360,17 @@ function SubscriptionsPage({ selectedSeason }) {
                     </td>
                     <td>{row.farmer_arable_hectares}</td>
                     <td>{row.category}</td>
-                    <td>{formatMoney(row.expected_amount)}</td>
-                    <td>{formatMoney(row.paid_amount)}</td>
-                    <td>{formatMoney(row.outstanding_amount)}</td>
-                    <td><span className={`status-pill subscription-status ${row.payment_status.toLowerCase()}`}>{row.payment_status}</span></td>
-                    <td>{row.payment_date || '—'}</td>
+                    {showMoney ? (
+                      <>
+                        <td>{formatMoney(row.expected_amount)}</td>
+                        <td>{formatMoney(row.paid_amount)}</td>
+                        <td>{formatMoney(row.outstanding_amount)}</td>
+                      </>
+                    ) : <td><Meter value={row.compliance_percent} label={`${row.farmer_name} subscription compliance`} /></td>}
+                    <td>{showMoney
+                      ? <span className={`status-pill subscription-status ${row.payment_status.toLowerCase()}`}>{row.payment_status}</span>
+                      : <span className={`status-pill subscription-status ${row.payment_status.toLowerCase()}`}>{row.compliance_status || row.payment_status}</span>}</td>
+                    {showMoney ? <td>{row.payment_date || '—'}</td> : null}
                     {canReceive ? <td>
                       <button
                         type="button"

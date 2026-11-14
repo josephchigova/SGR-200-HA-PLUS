@@ -1,3 +1,4 @@
+from apps.accounts.privacy import MoneyPrivacyMixin
 from rest_framework import serializers
 
 from decimal import Decimal
@@ -50,7 +51,9 @@ class FarmerProductionSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"non_field_errors": [str(error)]}) from error
 
 
-class GMBDeliverySerializer(serializers.ModelSerializer):
+class GMBDeliverySerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
+    money_fields = ('price', 'value', 'amount_recovered', 'farmer_balance')
+
     farmer_name = serializers.CharField(source="farmer.full_name", read_only=True)
     season_name = serializers.CharField(source="season.name", read_only=True)
 

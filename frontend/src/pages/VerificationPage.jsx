@@ -2,16 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
+import Icon from '../components/Icon'
+import RegistrationReview from '../components/RegistrationReview'
 import TabSearch from '../components/TabSearch'
+import { EmptyState, Pill } from '../components/ui'
+import { statusOf } from '../registration'
 
 const PAGE_SIZE = 25
 const VERIFICATION_QUEUE_FILTER = 'DRAFT,SUBMITTED,UNDER_REVIEW'
-
-const statusOptions = [
-  { value: 'SUBMITTED', label: 'Submitted' },
-  { value: 'UNDER_REVIEW', label: 'Under Review' },
-  { value: 'VERIFIED', label: 'Verified' },
-  { value: 'REJECTED', label: 'Rejected' },
+const QUEUES = [
+  [VERIFICATION_QUEUE_FILTER, 'Awaiting approval'],
+  ['CORRECTIONS_REQUESTED', 'Corrections requested'],
+  ['REJECTED', 'Rejected'],
+  ['VERIFIED,APPROVED', 'Approved'],
 ]
 
 function VerificationPage() {
@@ -20,7 +23,9 @@ function VerificationPage() {
   const [farmers, setFarmers] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [pendingDecision, setPendingDecision] = useState({})
+  const [queue, setQueue] = useState(VERIFICATION_QUEUE_FILTER)
+  const [reviewing, setReviewing] = useState(null)
+  const [notice, setNotice] = useState('')
   const [search, setSearch] = useState('')
   const [appliedSearch, setAppliedSearch] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
@@ -31,11 +36,13 @@ function VerificationPage() {
   const isFirstPage = currentPage <= 1
   const isLastPage = currentPage >= totalPages
 
-  const loadQueue = async (query = '', page = 1) => {
+  const loadQueue = async (query = '', page = 1, statuses = queue) => {
     try {
       setLoading(true)
       const params = {
-        verification_status: VERIFICATION_QUEUE_FILTER,
+        verification_status: statuses,
+        // Registrations still being captured are not shown to the reviewer.
+        submitted_only: 1,
         page,
         page_size: PAGE_SIZE,
       }
@@ -74,147 +81,82 @@ function VerificationPage() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      loadQueue(appliedSearch, currentPage)
+      loadQueue(appliedSearch, currentPage, queue)
     }, 0)
     return () => clearTimeout(timer)
-  }, [appliedSearch, currentPage])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appliedSearch, currentPage, queue])
 
-  const handleDecisionChange = (farmerId, field, value) => {
-    setPendingDecision((previous) => ({
-      ...previous,
-      [farmerId]: {
-        ...(previous[farmerId] || {}),
-        [field]: value,
-      },
-    }))
-  }
-
-  const submitDecision = async (farmerId) => {
-    const token = localStorage.getItem('sgr_access_token')
-    const payload = pendingDecision[farmerId] || {}
-
-    if (!payload.verification_status) {
-      setError('Choose a verification outcome before submitting.')
-      return
-    }
-
-    try {
-      const response = await apiClient.post(`/farmers/${farmerId}/verify/`, payload, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-
-      setPendingDecision((previous) => {
-        const next = { ...previous }
-        delete next[farmerId]
-        return next
-      })
-      setError('')
-      const targetPage = currentPage > 1 && farmers.length === 1 ? currentPage - 1 : currentPage
-      setCurrentPage(targetPage)
-      await loadQueue(appliedSearch, targetPage)
-      if (response.data) {
-        console.log('Verification updated', response.data)
-      }
-    } catch (requestError) {
-      const message = requestError.response?.data
-        ? Object.values(requestError.response.data).flat().join(' ')
-        : 'Unable to save verification decision.'
-      setError(message)
-    }
+  const decided = async (status) => {
+    setReviewing(null)
+    setNotice(status === 'VERIFIED' ? 'The registration was approved. The farmer is now an active member.' : status === 'REJECTED' ? 'The registration was rejected. The lead farmer can see the reason.' : 'Corrections were requested. The lead farmer can see your remarks.')
+    const targetPage = currentPage > 1 && farmers.length === 1 ? currentPage - 1 : currentPage
+    setCurrentPage(targetPage)
+    await loadQueue(appliedSearch, targetPage, queue)
   }
 
   return (
     <div className="page-card">
       <div className="section-head">
-        <h3>Farmer Verification</h3>
+        <div>
+          <h3>Registration approvals</h3>
+          <p>Check each submitted registration and its KYC documents, then approve it, reject it or ask for corrections.{canDecide ? '' : ' Your role can view the queue but not decide.'}</p>
+        </div>
         <TabSearch value={search} onChange={setSearch} placeholder="Filter verification queue..." />
       </div>
 
-      {error ? <div className="form-message error">{error}</div> : null}
-      {loading ? <div className="form-message">Loading review queue...</div> : null}
+      <div className="chip-row" role="group" aria-label="Queue">
+        {QUEUES.map(([value, label]) => (
+          <button key={value} type="button" className={queue === value ? 'chip active' : 'chip'} aria-pressed={queue === value} onClick={() => { setCurrentPage(1); setQueue(value) }}>{label}</button>
+        ))}
+      </div>
 
-      {!loading && farmers.length === 0 ? (
-        <div className="form-message">No farmers are awaiting verification.</div>
+      {error ? <div className="form-message error" role="alert">{error}</div> : null}
+      {notice ? <div className="form-message success" role="status">{notice}</div> : null}
+      {loading ? <div className="form-message">Loading verification queue...</div> : null}
+
+      {!loading && !error ? (
+        <div className="table-wrap">
+          {farmers.length ? (
+            <table className="data-table">
+              <thead>
+                <tr><th>Farmer</th><th>National ID</th><th>Province</th><th>District</th><th>Cluster</th><th>Registered by</th><th>Documents</th><th>Status</th><th>Action</th></tr>
+              </thead>
+              <tbody>
+                {farmers.map((farmer) => {
+                  const [label, tone] = statusOf(farmer.verification_status)
+                  const summary = farmer.documents_summary
+                  return (
+                    <tr key={farmer.id}>
+                      <td>{farmer.full_name || `${farmer.first_name || ''} ${farmer.surname || ''}`.trim()}</td>
+                      <td>{farmer.national_id || '—'}</td>
+                      <td>{farmer.province_name || '—'}</td>
+                      <td>{farmer.district_name || '—'}</td>
+                      <td>{farmer.cluster_name || '—'}</td>
+                      <td>{farmer.registered_by_name || '—'}</td>
+                      <td>{summary ? `${summary.verified} of ${summary.uploaded} verified` : '—'}</td>
+                      <td><Pill tone={tone}>{label}</Pill></td>
+                      <td><button type="button" className="primary-btn small" onClick={() => { setNotice(''); setReviewing(farmer.id) }}><Icon name="eye" />Review</button></td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          ) : <EmptyState icon="check" title="Nothing in this queue">Registrations appear here when a lead farmer or officer submits them.</EmptyState>}
+          <div className="table-foot">
+            <span>{totalCount} farmers in queue</span>
+            {totalPages > 1 ? (
+              <span className="table-actions">
+                <button type="button" className="ghost-btn small" disabled={isFirstPage || loading} onClick={() => setCurrentPage((previous) => Math.max(previous - 1, 1))}>Previous</button>
+                <span style={{ alignSelf: 'center' }}>Page {currentPage} of {totalPages}</span>
+                <button type="button" className="ghost-btn small" disabled={isLastPage || loading} onClick={() => setCurrentPage((previous) => Math.min(previous + 1, totalPages))}>Next</button>
+              </span>
+            ) : null}
+          </div>
+        </div>
       ) : null}
 
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Farmer</th>
-              <th>Membership</th>
-              <th>National ID</th>
-              <th>Phone</th>
-              <th>Province</th>
-              <th>District</th>
-              <th>Membership status</th>
-              <th>Decision</th>
-              <th>Reason</th>
-              <th>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {farmers.map((farmer) => {
-              const customerDecision = pendingDecision[farmer.id] || {}
-              const isRejected = customerDecision.verification_status === 'REJECTED'
-
-              return (
-                <tr key={farmer.id}>
-                  <td>{farmer.full_name || `${farmer.first_name || ''} ${farmer.surname || ''}`.trim()}</td>
-                  <td>{farmer.membership_number || '—'}</td>
-                  <td>{farmer.national_id || '—'}</td>
-                  <td>{farmer.phone_primary || '—'}</td>
-                  <td>{farmer.province_name || '—'}</td>
-                  <td>{farmer.district_name || '—'}</td>
-                  <td>{farmer.membership_status || '—'}</td>
-                  <td>
-                    <select
-                      value={customerDecision.verification_status || ''}
-                      onChange={(event) => handleDecisionChange(farmer.id, 'verification_status', event.target.value)}
-                    >
-                      <option value="">Select</option>
-                      {statusOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
-                    <input
-                      type="text"
-                      value={customerDecision.rejection_reason || ''}
-                      onChange={(event) => handleDecisionChange(farmer.id, 'rejection_reason', event.target.value)}
-                      placeholder={isRejected ? 'Required for rejection' : 'Optional notes'}
-                      disabled={!isRejected}
-                    />
-                  </td>
-                  <td>
-                    {canDecide ? (
-                      <button type="button" className="primary-btn small" onClick={() => submitDecision(farmer.id)}>
-                        Save
-                      </button>
-                    ) : <span className="pill">View only</span>}
-                  </td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-
-        <div className="workflow-form-actions">
-          <span>{totalCount} farmers in queue</span>
-          {totalPages > 1 ? (
-            <>
-              <button type="button" className="ghost-btn" disabled={isFirstPage || loading} onClick={() => setCurrentPage((previous) => Math.max(previous - 1, 1))}>
-                Previous
-              </button>
-              <span>Page {currentPage} of {totalPages}</span>
-              <button type="button" className="ghost-btn" disabled={isLastPage || loading} onClick={() => setCurrentPage((previous) => Math.min(previous + 1, totalPages))}>
-                Next
-              </button>
-            </>
-          ) : null}
-        </div>
-      </div>
+      {reviewing ? <RegistrationReview farmerId={reviewing} canDecide={canDecide} onClose={() => setReviewing(null)} onDecided={decided} /> : null}
     </div>
   )
 }

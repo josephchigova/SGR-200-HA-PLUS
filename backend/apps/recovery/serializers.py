@@ -1,10 +1,13 @@
+from apps.accounts.privacy import MoneyPrivacyMixin
 from rest_framework import serializers
 
 from .models import InputDebt, RecoveryRecord
 from .services import RecoveryCalculationService
 
 
-class RecoveryRecordSerializer(serializers.ModelSerializer):
+class RecoveryRecordSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
+    money_fields = ('debt_amount', 'amount_recovered', 'outstanding_amount', 'balance')
+
     farmer_name = serializers.CharField(source="farmer.full_name", read_only=True)
 
     class Meta:
@@ -31,7 +34,9 @@ class RecoveryRecordSerializer(serializers.ModelSerializer):
         ]
 
 
-class InputDebtSerializer(serializers.ModelSerializer):
+class InputDebtSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
+    money_fields = ('input_value', 'selling_price_per_tonne', 'amount_recovered', 'outstanding_monetary_balance')
+
     farmer_name = serializers.CharField(source="farmer.full_name", read_only=True)
     programme_name = serializers.CharField(source="programme.name", read_only=True)
     province_name = serializers.CharField(source="province.name", read_only=True)

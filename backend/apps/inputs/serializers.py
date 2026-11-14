@@ -1,9 +1,12 @@
+from apps.accounts.privacy import MoneyPrivacyMixin
 from rest_framework import serializers
 
 from .models import Input, InputAllocation, InputAllocationLine, InputIssue
 
 
-class InputAllocationLineSerializer(serializers.ModelSerializer):
+class InputAllocationLineSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
+    money_fields = ('cost_per_unit', 'cost_per_hectare', 'calculated_cost')
+
     class Meta:
         model = InputAllocationLine
         fields = [
@@ -47,7 +50,9 @@ class InputSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-class InputAllocationSerializer(serializers.ModelSerializer):
+class InputAllocationSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
+    money_fields = ('calculated_input_cost_per_hectare', 'total_input_cost')
+
     farmer_name = serializers.CharField(source="farmer.full_name", read_only=True)
     programme_name = serializers.CharField(source="programme.name", read_only=True)
     crop_name = serializers.CharField(source="crop_reference.name", read_only=True)

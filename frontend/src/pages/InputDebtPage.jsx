@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import apiClient from '../api/client'
+import { useAuth } from '../auth'
 
 const toList = (data) => (Array.isArray(data) ? data : data?.results || [])
 
 function InputDebtPage({ selectedSeason = null, cropSeason = '', periodStatus = 'ready' }) {
+  const { profile } = useAuth()
+  // Lead farmers see tonnes and percentages only.
+  const showMoney = profile?.role !== 'lead_farmer'
   const [rows, setRows] = useState([])
   const [error, setError] = useState('')
   const [loadedKey, setLoadedKey] = useState('')
@@ -80,13 +84,13 @@ function InputDebtPage({ selectedSeason = null, cropSeason = '', periodStatus = 
               <th>Crop</th>
               <th>Programme</th>
               <th>Contracted Ha</th>
-              <th>Input Cost</th>
-              <th>Price/Tonne</th>
+              {showMoney ? <th>Input Cost</th> : null}
+              {showMoney ? <th>Price/Tonne</th> : null}
               <th>Required t</th>
               <th>Delivered t</th>
               <th>Outstanding t</th>
-              <th>Amount Recovered</th>
-              <th>Outstanding Balance</th>
+              {showMoney ? <th>Amount Recovered</th> : null}
+              {showMoney ? <th>Outstanding Balance</th> : null}
               <th>Recovery %</th>
               <th>Status</th>
             </tr>
@@ -100,13 +104,13 @@ function InputDebtPage({ selectedSeason = null, cropSeason = '', periodStatus = 
                 <td>{row.crop}</td>
                 <td>{row.programme_name}</td>
                 <td>{row.contracted_hectares}</td>
-                <td>{row.input_value}</td>
-                <td>{row.selling_price_per_tonne}</td>
+                {showMoney ? <td>{row.input_value}</td> : null}
+                {showMoney ? <td>{row.selling_price_per_tonne}</td> : null}
                 <td>{row.required_recovery_tonnes}</td>
                 <td>{row.recovered_tonnes}</td>
                 <td>{row.outstanding_tonnes}</td>
-                <td>{row.amount_recovered}</td>
-                <td>{row.outstanding_monetary_balance}</td>
+                {showMoney ? <td>{row.amount_recovered}</td> : null}
+                {showMoney ? <td>{row.outstanding_monetary_balance}</td> : null}
                 <td>{row.recovery_percentage}</td>
                 <td>{row.status}</td>
               </tr>

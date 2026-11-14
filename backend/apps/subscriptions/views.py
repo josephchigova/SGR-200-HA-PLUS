@@ -20,6 +20,7 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from apps.accounts.permissions import SubscriptionWorkflowPermission
+from apps.accounts.privacy import compliance_label, compliance_percent, hides_money
 from apps.farmers.models import Farm, Farmer
 from apps.recovery.models import InputDebt
 from apps.production.seasonal_services import SeasonalSubscriptionService
@@ -172,10 +173,19 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
                 "season": season,
             })
 
-        serializer = FarmerSubscriptionStatusSerializer(rows, many=True)
+        data = FarmerSubscriptionStatusSerializer(rows, many=True).data
+        private = hides_money(request.user)
+        for item, row in zip(data, rows):
+            percent = compliance_percent(row["expected_amount"], row["paid_amount"])
+            item["compliance_percent"] = percent
+            item["compliance_status"] = compliance_label(percent)
+            if private:
+                # A lead farmer sees progress, never the amounts behind it.
+                for name in ("expected_amount", "paid_amount", "outstanding_amount", "payment_date"):
+                    item.pop(name, None)
         if page is not None:
-            return self.get_paginated_response(serializer.data)
-        return Response(serializer.data)
+            return self.get_paginated_response(data)
+        return Response(data)
 
     @action(detail=False, methods=["get"], url_path="summary")
     def summary(self, request):
@@ -219,6 +229,8 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="debtors")
     def debtors(self, request):
+        if hides_money(request.user):
+            return Response({"detail": "Your role cannot view subscription balances."}, status=status.HTTP_403_FORBIDDEN)
         season = request.query_params.get("season_name") or request.query_params.get("season")
         if not season:
             return Response({"season": ["A season is required."]}, status=status.HTTP_400_BAD_REQUEST)

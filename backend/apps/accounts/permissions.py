@@ -214,7 +214,8 @@ class FarmerWorkflowPermission(permissions.BasePermission):
             return True
         if request.method in permissions.SAFE_METHODS:
             return user.role in self.read_roles
-        if getattr(view, "action", None) == "verify":
+        if getattr(view, "action", None) in {"verify", "review"}:
+            # Approving a registration or checking a KYC document is never open to the registrar.
             return user.role in VerificationPermission.allowed_roles
         if request.method == "DELETE":
             if user.role in self.delete_roles:
@@ -231,12 +232,14 @@ class FarmerWorkflowPermission(permissions.BasePermission):
             return True
         if user.role in {User.ROLE_SUPER_ADMIN, User.ROLE_SGR_EXECUTIVE, User.ROLE_AUDITOR, User.ROLE_VIEWER}:
             return True
+        # A farm or document is judged by the farmer it belongs to.
+        subject = obj if hasattr(obj, "national_id") else (getattr(obj, "farmer", None) or obj)
         if user.role == User.ROLE_DISTRICT_COORDINATOR:
-            return user.district_id == getattr(obj, "district_id", None)
+            return user.district_id == getattr(subject, "district_id", None)
         if user.role == User.ROLE_PROVINCIAL_COORDINATOR:
-            return user.province_id == getattr(obj, "province_id", None)
+            return user.province_id == getattr(subject, "province_id", None)
         if user.role == User.ROLE_LEAD_FARMER:
-            return user.assigned_cluster_id == getattr(obj, "cluster_id", None)
+            return bool(user.assigned_cluster_id) and user.assigned_cluster_id == getattr(subject, "cluster_id", None)
         return True
 
 

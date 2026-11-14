@@ -29,6 +29,12 @@ def validate_geographic_scope(serializer, *, province=None, district=None, clust
 
 
 class FarmerDocumentSerializer(serializers.ModelSerializer):
+    label = serializers.SerializerMethodField()
+    required = serializers.SerializerMethodField()
+    download_url = serializers.SerializerMethodField()
+    file_name = serializers.SerializerMethodField()
+    uploaded_by_name = serializers.SerializerMethodField()
+
     class Meta:
         model = FarmerDocument
         fields = [
@@ -36,28 +42,78 @@ class FarmerDocumentSerializer(serializers.ModelSerializer):
             "farmer",
             "farm",
             "document_type",
+            "label",
+            "required",
             "file",
+            "file_name",
+            "download_url",
             "reference_number",
             "uploaded_by",
+            "uploaded_by_name",
             "upload_date",
             "verified",
             "verified_by",
+            "review_status",
+            "review_remarks",
+            "reviewed_at",
         ]
+        # Only the review action changes the verification fields.
+        read_only_fields = ["uploaded_by", "verified", "verified_by", "review_status", "review_remarks", "reviewed_at"]
+        extra_kwargs = {"file": {"write_only": True}}
+
+    def get_label(self, obj):
+        from .kyc import DOCUMENT_LABELS
+
+        return DOCUMENT_LABELS.get(obj.document_type, obj.document_type)
+
+    def get_required(self, obj):
+        from .kyc import REQUIRED_CODES
+
+        return obj.document_type in REQUIRED_CODES
+
+    def get_download_url(self, obj):
+        # Files are never linked directly. This path checks the user on every request.
+        return f"/farmer-documents/{obj.pk}/download/"
+
+    def get_file_name(self, obj):
+        return obj.original_name or obj.file.name.rsplit("/", 1)[-1]
+
+    def get_uploaded_by_name(self, obj):
+        user = obj.uploaded_by
+        return (f"{user.first_name} {user.last_name}".strip() or user.email) if user else ""
+
+    def validate_file(self, upload):
+        from .kyc import validate_upload
+
+        problem = validate_upload(upload)
+        if problem:
+            raise serializers.ValidationError(problem)
+        return upload
 
     def validate(self, attrs):
+        from .kyc import AWAITING_REVIEW, DOCUMENT_CODES
+
         instance = self.instance
         farmer = attrs.get("farmer", getattr(instance, "farmer", None))
         farm = attrs.get("farm", getattr(instance, "farm", None))
         if farmer and farm and farm.farmer_id != farmer.pk:
             raise serializers.ValidationError({"farm": ["Farm must belong to the selected farmer."]})
         subject = farmer or getattr(farm, "farmer", None)
-        if subject:
-            validate_geographic_scope(
-                self,
-                province=subject.province,
-                district=subject.district,
-                cluster=subject.cluster,
-            )
+        if subject is None:
+            raise serializers.ValidationError({"farmer": ["Choose the farmer this document belongs to."]})
+        if attrs.get("document_type") not in DOCUMENT_CODES:
+            raise serializers.ValidationError({"document_type": ["Choose one of the listed document types."]})
+        validate_geographic_scope(
+            self,
+            province=subject.province,
+            district=subject.district,
+            cluster=subject.cluster,
+        )
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user and not user.is_superuser and user.role == user.ROLE_LEAD_FARMER:
+            if subject.verification_status in AWAITING_REVIEW or subject.verification_status in {Farmer.STATUS_VERIFIED, Farmer.STATUS_APPROVED}:
+                raise serializers.ValidationError({"detail": ["Documents cannot be changed while the registration is with the administrator or after approval."]})
         return attrs
 
 
@@ -114,6 +170,14 @@ class FarmSerializer(serializers.ModelSerializer):
         total = attrs.get("total_hectares", getattr(instance, "total_hectares", Decimal("0.00")))
         arable = attrs.get("arable_hectares", getattr(instance, "arable_hectares", Decimal("0.00")))
         irrigated = attrs.get("irrigated_hectares", getattr(instance, "irrigated_hectares", Decimal("0.00")))
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        owner = attrs.get("farmer", getattr(instance, "farmer", None))
+        if user is not None and user.is_authenticated and not user.is_superuser and user.role == user.ROLE_LEAD_FARMER and owner is not None:
+            from .kyc import EDITABLE_BY_REGISTRAR
+
+            if owner.verification_status not in EDITABLE_BY_REGISTRAR:
+                raise serializers.ValidationError({"detail": ["Farm details can be changed only while the registration is a draft or corrections are requested."]})
         if total <= 0:
             raise serializers.ValidationError({"total_hectares": ["Total hectares must be greater than zero."]})
         if arable < 0 or irrigated < 0:
@@ -181,6 +245,12 @@ class FarmerSerializer(serializers.ModelSerializer):
     )
     latitude = OptionalCoordinateField(max_digits=9, decimal_places=6, required=False, allow_null=True, write_only=True)
     longitude = OptionalCoordinateField(max_digits=9, decimal_places=6, required=False, allow_null=True, write_only=True)
+    # Set by the registration wizard: the farmer is saved as a draft until the KYC documents are in.
+    as_draft = serializers.BooleanField(write_only=True, required=False, default=False)
+    registered_by_name = serializers.SerializerMethodField()
+    documents_summary = serializers.SerializerMethodField()
+    primary_farm = serializers.SerializerMethodField()
+    ward_name = serializers.CharField(source="ward.name", read_only=True, default="")
 
     class Meta:
         model = Farmer
@@ -204,6 +274,7 @@ class FarmerSerializer(serializers.ModelSerializer):
             "district",
             "district_name",
             "ward",
+            "ward_name",
             "cluster",
             "cluster_name",
             "total_hectares",
@@ -224,6 +295,13 @@ class FarmerSerializer(serializers.ModelSerializer):
             "verification_date",
             "verified_by",
             "rejection_reason",
+            "review_remarks",
+            "registered_by",
+            "registered_by_name",
+            "submitted_at",
+            "as_draft",
+            "documents_summary",
+            "primary_farm",
             "is_active",
             "farm_count",
         ]
@@ -234,14 +312,61 @@ class FarmerSerializer(serializers.ModelSerializer):
             "verification_date",
             "verification_status",
             "verified_by",
+            "review_remarks",
+            "registered_by",
+            "submitted_at",
+            "membership_status",
             "farm_hectares",
             "total_arable_hectares",
             "total_irrigated_hectares",
             "farms",
         ]
 
+    def _registrar(self):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        return user if user is not None and user.is_authenticated else None
+
+    def _is_lead_farmer(self):
+        user = self._registrar()
+        return bool(user and not user.is_superuser and user.role == user.ROLE_LEAD_FARMER)
+
     def validate(self, attrs):
+        from .kyc import EDITABLE_BY_REGISTRAR, NATIONAL_ID_PATTERN
+
+        lead = self._is_lead_farmer()
+        if lead:
+            user = self._registrar()
+            cluster = user.assigned_cluster
+            if cluster is None:
+                raise serializers.ValidationError({"cluster": ["Your account has no cluster yet. Ask an administrator to assign one."]})
+            # The cluster is never taken from the request. It is always the lead farmer's own.
+            attrs["cluster"] = cluster
+            province = attrs.get("province", getattr(self.instance, "province", None))
+            district = attrs.get("district", getattr(self.instance, "district", None))
+            if province is not None and province.pk != cluster.province_id:
+                raise serializers.ValidationError({"province": [f"You can only register farmers in {cluster.province.name}."]})
+            if cluster.district_id and district is not None and district.pk != cluster.district_id:
+                raise serializers.ValidationError({"district": [f"You can only register farmers in {cluster.district.name}."]})
+            if self.instance is not None and self.instance.verification_status not in EDITABLE_BY_REGISTRAR:
+                raise serializers.ValidationError({"detail": ["This registration is with the administrator. It can be changed only if corrections are requested."]})
+        strict = attrs.get("as_draft") or lead
+        if strict:
+            # New registrations use capital letters and the national ID format 63-2330173E58.
+            for field in ("first_name", "middle_name", "surname", "farm_name", "national_id"):
+                if isinstance(attrs.get(field), str):
+                    attrs[field] = " ".join(attrs[field].upper().split())
+            national_id = attrs.get("national_id")
+            if national_id is not None and (self.instance is None or national_id != self.instance.national_id):
+                if not NATIONAL_ID_PATTERN.fullmatch(national_id):
+                    raise serializers.ValidationError({"national_id": ["Enter the national ID as 63-2330173E58: two digits, a hyphen, seven digits, a letter and two digits."]})
+            ward = attrs.get("ward", getattr(self.instance, "ward", None))
+            if self.instance is None and ward is None:
+                raise serializers.ValidationError({"ward": ["Choose the ward."]})
         source = dict(self.initial_data)
+        for field in ("first_name", "middle_name", "surname", "national_id", "farm_name"):
+            if field in attrs and field in source:
+                source[field] = attrs[field]
         if self.instance:
             for field in ("first_name", "surname", "national_id", "phone_primary", "province", "district", "ward"):
                 if field not in source:
@@ -307,8 +432,21 @@ class FarmerSerializer(serializers.ModelSerializer):
         latitude = validated_data.pop("latitude", None)
         longitude = validated_data.pop("longitude", None)
         additional_farms = validated_data.pop("additional_farms", [])
-        validated_data["verification_status"] = Farmer.STATUS_SUBMITTED
+        as_draft = validated_data.pop("as_draft", False) or self._is_lead_farmer()
+        # A draft waits for its KYC documents. Nothing is a member until an administrator approves it.
+        validated_data["verification_status"] = Farmer.STATUS_DRAFT if as_draft else Farmer.STATUS_SUBMITTED
+        validated_data["membership_status"] = Farmer.MEMBERSHIP_INACTIVE
+        validated_data["registered_by"] = self._registrar()
+        if not as_draft:
+            from django.utils import timezone
+
+            validated_data["submitted_at"] = timezone.now()
         farmer = Farmer.objects.create(**validated_data)
+        if not as_draft:
+            from .kyc import record_event
+            from .models import FarmerReviewEvent
+
+            record_event(farmer, FarmerReviewEvent.SUBMITTED, self._registrar())
         Farm.objects.create(
             farmer=farmer,
             farm_name=farm_name.strip() or f"{farmer.full_name} Farm",
@@ -339,16 +477,27 @@ class FarmerSerializer(serializers.ModelSerializer):
         return farmer
 
     def update(self, instance, validated_data):
-        validated_data.pop("total_hectares", None)
-        validated_data.pop("arable_hectares", None)
-        validated_data.pop("irrigated_hectares", None)
-        validated_data.pop("irrigation_type", None)
-        validated_data.pop("farm_name", None)
         validated_data.pop("additional_farms", None)
+        validated_data.pop("as_draft", None)
+        farm_changes = {
+            name: validated_data.pop(name)
+            for name in ("total_hectares", "arable_hectares", "irrigated_hectares", "irrigation_type", "farm_name")
+            if name in validated_data
+        }
         coordinates_sent = "latitude" in validated_data or "longitude" in validated_data
         latitude = validated_data.pop("latitude", None)
         longitude = validated_data.pop("longitude", None)
         farmer = super().update(instance, validated_data)
+        from .kyc import EDITABLE_BY_REGISTRAR
+
+        if farm_changes and farmer.verification_status in EDITABLE_BY_REGISTRAR:
+            # While a registration is still being prepared, its first farm follows the form.
+            farm = farmer.farms.order_by("id").first()
+            if farm is not None:
+                for name, value in farm_changes.items():
+                    setattr(farm, name, value)
+                farm.province, farm.district, farm.ward = farmer.province, farmer.district, farmer.ward
+                farm.save()
         if coordinates_sent:
             farm = farmer.farms.order_by("id").first()
             if farm is not None:
@@ -356,6 +505,39 @@ class FarmerSerializer(serializers.ModelSerializer):
                 farm.longitude = longitude
                 farm.save(update_fields=["latitude", "longitude", "updated_at"])
         return farmer
+
+    def get_registered_by_name(self, obj):
+        user = obj.registered_by
+        return (f"{user.first_name} {user.last_name}".strip() or user.email) if user else ""
+
+    def get_primary_farm(self, obj):
+        farms = sorted(obj.farms.all(), key=lambda farm: farm.pk)
+        if not farms:
+            return None
+        farm = farms[0]
+        return {
+            "id": farm.pk,
+            "farm_name": farm.farm_name,
+            "total_hectares": str(farm.total_hectares),
+            "arable_hectares": str(farm.arable_hectares),
+            "irrigated_hectares": str(farm.irrigated_hectares),
+            "irrigation_type": farm.irrigation_type,
+            "latitude": str(farm.latitude) if farm.latitude is not None else None,
+            "longitude": str(farm.longitude) if farm.longitude is not None else None,
+        }
+
+    def get_documents_summary(self, obj):
+        from .kyc import REQUIRED_CODES
+
+        documents = list(obj.documents.all())
+        present = {document.document_type for document in documents}
+        return {
+            "required": len(REQUIRED_CODES),
+            "uploaded_required": sum(1 for code in REQUIRED_CODES if code in present),
+            "uploaded": len(documents),
+            "verified": sum(1 for document in documents if document.review_status == "VERIFIED"),
+            "rejected": sum(1 for document in documents if document.review_status == "REJECTED"),
+        }
 
     def _active_farms(self, obj):
         return [farm for farm in obj.farms.all() if farm.is_active]
