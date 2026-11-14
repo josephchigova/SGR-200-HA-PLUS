@@ -147,13 +147,14 @@ function FarmerDetailsPage() {
         <div><dt>Province</dt><dd>{farmer.province_name || '—'}</dd></div>
         <div><dt>District</dt><dd>{farmer.district_name || '—'}</dd></div>
         <div><dt>Cluster</dt><dd>{farmer.cluster_name || '—'}</dd></div>
+        <div><dt>Lead farmer</dt><dd>{farmer.lead_farmer_name || '—'}</dd></div>
         <div><dt>Phone</dt><dd>{farmer.phone_primary || '—'}</dd></div>
         <div><dt>Farms</dt><dd>{farmer.farm_count ?? farms.length}</dd></div>
         <div><dt>Total hectares</dt><dd>{formatDisplay('farm_hectares', farmer.farm_hectares) || '0'}</dd></div>
         <div><dt>Arable hectares</dt><dd>{formatDisplay('arable_hectares', farmer.total_arable_hectares) || '0'}</dd></div>
         <div><dt>Irrigated hectares</dt><dd>{formatDisplay('irrigated_hectares', farmer.total_irrigated_hectares) || '0'}</dd></div>
       </dl>
-      <div className="workflow-list-heading"><h4>Farms</h4><span>{farms.length} records</span>{canEdit ? <button type="button" className="primary-btn small" onClick={() => { resetFarmForm(); setShowFarmForm(true) }}>Add farm</button> : null}</div>
+      <div className="workflow-list-heading" id="farms"><h4>Farms</h4><span>{farms.length} records</span>{canEdit ? <button type="button" className="primary-btn small" onClick={() => { resetFarmForm(); setShowFarmForm(true) }}>Add farm</button> : null}</div>
       {showFarmForm && canEdit ? <form className="workflow-form" onSubmit={saveFarm}>
         <h4>{editingFarmId ? 'Update farm record' : 'Add farm record'}</h4>
         <div className="workflow-fields">

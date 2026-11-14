@@ -111,7 +111,7 @@ describe('FarmersPage pagination', () => {
       </MemoryRouter>,
     )
 
-    expect(await screen.findByRole('cell', { name: 'Farmer 01' })).toBeTruthy()
+    expect(await screen.findByRole('link', { name: 'Farmer 01' })).toBeTruthy()
     expect(screen.getByText('55 farmers')).toBeTruthy()
     expect(screen.getByText('Page 1 of 3')).toBeTruthy()
 
@@ -123,20 +123,20 @@ describe('FarmersPage pagination', () => {
     expect(nextButton.disabled).toBe(false)
 
     fireEvent.click(nextButton)
-    expect(await screen.findByRole('cell', { name: 'Farmer 26' })).toBeTruthy()
+    expect(await screen.findByRole('link', { name: 'Farmer 26' })).toBeTruthy()
     expect(screen.getByText('Page 2 of 3')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    expect(await screen.findByRole('cell', { name: 'Farmer 51' })).toBeTruthy()
+    expect(await screen.findByRole('link', { name: 'Farmer 51' })).toBeTruthy()
     expect(screen.getByText('Page 3 of 3')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Next' }).disabled).toBe(true)
 
     fireEvent.click(screen.getByRole('button', { name: 'Previous' }))
-    expect(await screen.findByRole('cell', { name: 'Farmer 26' })).toBeTruthy()
+    expect(await screen.findByRole('link', { name: 'Farmer 26' })).toBeTruthy()
 
     fireEvent.change(screen.getByRole('searchbox', { name: 'Filter farmers...' }), { target: { value: 'Needle' } })
 
-    expect(await screen.findByRole('cell', { name: 'Needle 501' })).toBeTruthy()
+    expect(await screen.findByRole('link', { name: 'Needle 501' })).toBeTruthy()
     expect(screen.getByText('2 farmers')).toBeTruthy()
     expect(screen.queryByText('Page 1 of 1')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Previous' })).toBeNull()
@@ -147,6 +147,76 @@ describe('FarmersPage pagination', () => {
         '/farmers/',
         expect.objectContaining({
           params: expect.objectContaining({ search: 'Needle', page: 1, page_size: 25 }),
+        }),
+      )
+    })
+  })
+
+  it('groups farmers under their lead farmer and offers view and edit', async () => {
+    apiClient.get.mockImplementation((url, config = {}) => {
+      if (url === '/clusters/') {
+        const page = Number(config?.params?.page || 1)
+        if (page > 1) {
+          return Promise.resolve({ data: { count: 1, next: null, previous: null, results: [] } })
+        }
+        return Promise.resolve({
+          data: {
+            count: 1,
+            next: null,
+            previous: null,
+            results: [{ id: 7, name: 'Ruwa Springs', lead_member: 9, lead_farmer_name: 'J Chigumba' }],
+          },
+        })
+      }
+      if (url === '/farmers/') {
+        if (config?.params?.lead_member === '9') {
+          return Promise.resolve(pageResponse({
+            count: 1,
+            page: 1,
+            pageSize: 25,
+            results: [{
+              ...farmerRow(12, 'Rudo'),
+              lead_member: 9,
+              lead_farmer_name: 'J Chigumba',
+              cluster_name: 'Ruwa Springs',
+              verification_status: 'APPROVED',
+            }],
+          }))
+        }
+        return Promise.resolve(pageResponse({
+          count: 2,
+          page: 1,
+          pageSize: 25,
+          results: [
+            { ...farmerRow(3, 'Chenge'), lead_member: 9, lead_farmer_name: 'J Chigumba', cluster_name: 'Ruwa Springs' },
+            { ...farmerRow(4, 'Tarirai'), lead_member: null, lead_farmer_name: '', cluster_name: '' },
+          ],
+        }))
+      }
+      return Promise.resolve({ data: { count: 0, next: null, previous: null, results: [] } })
+    })
+
+    render(
+      <MemoryRouter>
+        <FarmersPage />
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByRole('cell', { name: 'J Chigumba Ruwa Springs' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Chenge 03' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'View Chenge 03' }).getAttribute('href')).toBe('/farmers/3')
+    expect(screen.getByRole('link', { name: 'Edit Chenge 03' }).getAttribute('href')).toBe('/farmers/3/edit')
+    expect(screen.getByRole('cell', { name: 'No lead farmer' })).toBeTruthy()
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Lead farmer' }), { target: { value: '9' } })
+
+    expect(await screen.findByRole('link', { name: 'Rudo 12' })).toBeTruthy()
+    expect(screen.getByRole('link', { name: 'Edit Rudo 12' }).getAttribute('href')).toBe('/farmers/12#farms')
+    await waitFor(() => {
+      expect(apiClient.get).toHaveBeenCalledWith(
+        '/farmers/',
+        expect.objectContaining({
+          params: expect.objectContaining({ lead_member: '9', page: 1, page_size: 25 }),
         }),
       )
     })

@@ -1081,9 +1081,65 @@ label,
   border-bottom: 0;
 }
 
+.data-table tr.lead-group td {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.data-table tr.lead-group td span {
+  margin-left: 8px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.data-table a.icon-btn {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.data-table a.icon-btn:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.farmers-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.farmers-filters .form-field {
+  width: min(100%, 360px);
+  margin: 0;
+}
+
+.farmer-row-name {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.farmer-row-name > a:first-child {
+  margin-right: 6px;
+}
+
+.farmer-row-name .icon-btn {
+  width: 32px;
+  height: 32px;
+}
+
 .data-table tbody tr:hover td,
 .finance-table tbody tr:hover td {
   background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+}
+
+.data-table tbody tr.lead-group:hover td {
+  background: var(--accent-soft);
 }
 
 .data-table td.num,

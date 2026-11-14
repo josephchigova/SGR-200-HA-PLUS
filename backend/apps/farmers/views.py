@@ -25,7 +25,9 @@ class FarmerSearchPagination(PageNumberPagination):
 
 
 class FarmerViewSet(viewsets.ModelViewSet):
-    queryset = Farmer.objects.select_related("province", "district", "ward", "cluster", "verified_by", "registered_by").prefetch_related("farms", "documents").all()
+    queryset = Farmer.objects.select_related(
+        "province", "district", "ward", "cluster", "cluster__lead_member", "cluster__lead_farmer", "verified_by", "registered_by",
+    ).prefetch_related("farms", "documents").all()
     serializer_class = FarmerSerializer
     pagination_class = FarmerSearchPagination
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -70,6 +72,13 @@ class FarmerViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(ward_id=ward_id)
         if cluster_id:
             queryset = queryset.filter(cluster_id=cluster_id)
+        lead_member = (self.request.query_params.get("lead_member") or "").strip()
+        if lead_member == "none":
+            queryset = queryset.filter(
+                Q(cluster__isnull=True) | Q(cluster__lead_member__isnull=True, cluster__lead_farmer__isnull=True)
+            )
+        elif lead_member.isdecimal():
+            queryset = queryset.filter(cluster__lead_member_id=lead_member)
         if unassigned in {"1", "true", "yes"}:
             queryset = queryset.filter(cluster__isnull=True)
         if verification_statuses:

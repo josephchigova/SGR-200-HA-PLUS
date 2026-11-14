@@ -226,6 +226,8 @@ class FarmerSerializer(serializers.ModelSerializer):
     registered_province_ids = serializers.SerializerMethodField()
     district_name = serializers.CharField(source="district.name", read_only=True)
     cluster_name = serializers.CharField(source="cluster.name", read_only=True)
+    lead_member = serializers.SerializerMethodField()
+    lead_farmer_name = serializers.SerializerMethodField()
     total_hectares = serializers.DecimalField(
         max_digits=12, decimal_places=2, min_value=Decimal("0.01"), write_only=True
     )
@@ -277,6 +279,8 @@ class FarmerSerializer(serializers.ModelSerializer):
             "ward_name",
             "cluster",
             "cluster_name",
+            "lead_member",
+            "lead_farmer_name",
             "total_hectares",
             "arable_hectares",
             "irrigated_hectares",
@@ -505,6 +509,21 @@ class FarmerSerializer(serializers.ModelSerializer):
                 farm.longitude = longitude
                 farm.save(update_fields=["latitude", "longitude", "updated_at"])
         return farmer
+
+    def get_lead_member(self, obj):
+        cluster = obj.cluster
+        return cluster.lead_member_id if cluster is not None and cluster.lead_member_id else None
+
+    def get_lead_farmer_name(self, obj):
+        cluster = obj.cluster
+        if cluster is None:
+            return ""
+        if cluster.lead_member_id:
+            return cluster.lead_member.full_name
+        user = cluster.lead_farmer
+        if user is None:
+            return ""
+        return f"{user.first_name} {user.last_name}".strip() or user.email
 
     def get_registered_by_name(self, obj):
         user = obj.registered_by

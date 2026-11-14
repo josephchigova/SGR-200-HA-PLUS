@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 import apiClient from '../api/client'
@@ -10,6 +10,7 @@ import { formatDisplay } from '../formatNumbers'
 import { statusOf } from '../registration'
 
 const PAGE_SIZE = 25
+const COLUMNS = 8
 // Each filter is a set of registration states.
 const FILTERS = [
   ['', 'All'],
@@ -23,16 +24,78 @@ const EDITABLE = ['DRAFT', 'CORRECTIONS_REQUESTED', 'REJECTED']
 
 const getListData = (data) => (Array.isArray(data) ? data : data?.results || [])
 
+const farmerName = (farmer) => farmer.full_name || `${farmer.first_name || ''} ${farmer.surname || ''}`.trim() || 'Unknown'
+
+function leadChoices(clusters) {
+  const choices = []
+  const seen = new Set()
+  for (const cluster of clusters) {
+    if (!cluster.lead_member || seen.has(cluster.lead_member)) continue
+    seen.add(cluster.lead_member)
+    choices.push({
+      id: String(cluster.lead_member),
+      name: cluster.lead_farmer_name || cluster.name,
+      cluster: cluster.name || '',
+    })
+  }
+  choices.sort((left, right) => left.name.localeCompare(right.name))
+  return choices
+}
+
+function groupsOf(farmers) {
+  const groups = []
+  const byKey = new Map()
+  for (const farmer of farmers) {
+    const key = farmer.lead_member
+      ? `member:${farmer.lead_member}`
+      : (farmer.lead_farmer_name ? `name:${farmer.lead_farmer_name}` : 'none')
+    let group = byKey.get(key)
+    if (!group) {
+      group = {
+        key,
+        label: farmer.lead_farmer_name || 'No lead farmer',
+        cluster: farmer.cluster_name || '',
+        rows: [],
+      }
+      byKey.set(key, group)
+      groups.push(group)
+    }
+    if (!group.cluster && farmer.cluster_name) group.cluster = farmer.cluster_name
+    group.rows.push(farmer)
+  }
+  groups.sort((left, right) => {
+    if (left.key === 'none') return 1
+    if (right.key === 'none') return -1
+    return left.label.localeCompare(right.label)
+  })
+  return groups
+}
+
+async function loadClusters() {
+  const records = []
+  let page = 1
+  while (page <= 20) {
+    const response = await apiClient.get('/clusters/', { params: { page } })
+    records.push(...getListData(response.data))
+    if (!response.data?.next) break
+    page += 1
+  }
+  return records
+}
+
 function FarmersPage() {
   const { can, profile } = useAuth()
   const canCreate = can('farmers', 'create')
+  const canEdit = can('farmers', 'edit')
   const leadFarmer = profile?.role === 'lead_farmer'
   const [farmers, setFarmers] = useState([])
+  const [leads, setLeads] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [appliedSearch, setAppliedSearch] = useState('')
   const [status, setStatus] = useState('')
+  const [lead, setLead] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
   const [totalCount, setTotalCount] = useState(0)
   const hasInitializedSearch = useRef(false)
@@ -40,6 +103,19 @@ function FarmersPage() {
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE))
   const isFirstPage = currentPage <= 1
   const isLastPage = currentPage >= totalPages
+  const groups = useMemo(() => groupsOf(farmers), [farmers])
+
+  useEffect(() => {
+    let active = true
+    loadClusters()
+      .then((clusters) => {
+        if (active) setLeads(leadChoices(clusters))
+      })
+      .catch(() => {
+        if (active) setLeads([])
+      })
+    return () => { active = false }
+  }, [])
 
   useEffect(() => {
     if (!hasInitializedSearch.current) {
@@ -61,6 +137,7 @@ function FarmersPage() {
         const params = { page: currentPage, page_size: PAGE_SIZE }
         if (appliedSearch.trim()) params.search = appliedSearch.trim()
         if (status) params.verification_status = status
+        if (lead) params.lead_member = lead
         const response = await apiClient.get('/farmers/', { params })
         if (!active) return
         setFarmers(getListData(response.data))
@@ -79,7 +156,7 @@ function FarmersPage() {
       active = false
       clearTimeout(timer)
     }
-  }, [appliedSearch, currentPage, status])
+  }, [appliedSearch, currentPage, lead, status])
 
   return (
     <div className="page-card">
@@ -89,13 +166,34 @@ function FarmersPage() {
           <p>
             {leadFarmer
               ? `The farmers in ${profile?.cluster_name || 'your cluster'}. Register a farmer, then follow the registration until an administrator approves it.`
-              : 'The permanent register of members and applicants. Open a farmer to see farms, documents and history.'}
+              : 'Farmers are grouped by the lead farmer of their cluster. Open a record to see farms, documents and history.'}
           </p>
         </div>
         <div className="page-actions">
           <TabSearch value={search} onChange={setSearch} placeholder="Filter farmers..." />
           {canCreate ? <Link className="primary-btn" to="/farmers/register"><Icon name="plus" />Register farmer</Link> : null}
         </div>
+      </div>
+
+      <div className="farmers-filters">
+        <label className="form-field">
+          Lead farmer
+          <select
+            value={lead}
+            onChange={(event) => {
+              setCurrentPage(1)
+              setLead(event.target.value)
+            }}
+          >
+            <option value="">All lead farmers</option>
+            {leads.map((choice) => (
+              <option key={choice.id} value={choice.id}>
+                {choice.cluster ? `${choice.name} · ${choice.cluster}` : choice.name}
+              </option>
+            ))}
+            <option value="none">No lead farmer</option>
+          </select>
+        </label>
       </div>
 
       <div className="chip-row" role="group" aria-label="Registration status">
@@ -115,45 +213,28 @@ function FarmersPage() {
                 <tr>
                   <th>Membership No.</th>
                   <th>Farmer</th>
-                  <th>Province</th>
-                  <th>District</th>
-                  <th>Ward</th>
+                  <th>National ID</th>
+                  <th>Province / District</th>
                   <th>Cluster</th>
+                  <th>Lead farmer</th>
                   <th>Hectares</th>
                   <th>Registration</th>
-                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
-                {farmers.map((farmer) => {
-                  const [label, tone] = statusOf(farmer.verification_status)
-                  const canContinue = canCreate && EDITABLE.includes(farmer.verification_status) && Boolean(farmer.registered_by)
-                  return (
-                    <tr key={farmer.id}>
-                      <td>{farmer.membership_number || '—'}</td>
-                      <td><Link to={`/farmers/${farmer.id}`}>{farmer.full_name || `${farmer.first_name || ''} ${farmer.surname || ''}`.trim() || 'Unknown'}</Link></td>
-                      <td>{farmer.province_name || '—'}</td>
-                      <td>{farmer.district_name || '—'}</td>
-                      <td>{farmer.ward_name || '—'}</td>
-                      <td>{farmer.cluster_name || '—'}</td>
-                      <td>{formatDisplay('farm_hectares', farmer.farm_hectares) ?? '—'}</td>
-                      <td>
-                        <Pill tone={tone}>{label}</Pill>
-                        {farmer.review_remarks && EDITABLE.includes(farmer.verification_status) ? <small>{farmer.review_remarks}</small> : null}
-                      </td>
-                      <td>
-                        {canContinue
-                          ? <Link className="ghost-btn small" to={`/farmers/${farmer.id}/edit`}>{farmer.verification_status === 'DRAFT' ? 'Continue' : 'Correct'}</Link>
-                          : <Link className="ghost-btn small" to={`/farmers/${farmer.id}`}>Open</Link>}
-                      </td>
-                    </tr>
-                  )
-                })}
+                {groups.map((group) => (
+                  <GroupRows
+                    key={group.key}
+                    group={group}
+                    canEdit={canEdit}
+                    leadFarmer={leadFarmer}
+                  />
+                ))}
               </tbody>
             </table>
           ) : (
             <EmptyState icon="users" title="No farmers found">
-              {status || appliedSearch ? 'Change the filter or search.' : canCreate ? 'Register the first farmer to get started.' : 'Farmers appear here once they are registered.'}
+              {status || appliedSearch || lead ? 'Change the filter or search.' : canCreate ? 'Register the first farmer to get started.' : 'Farmers appear here once they are registered.'}
             </EmptyState>
           )}
 
@@ -170,6 +251,58 @@ function FarmersPage() {
         </div>
       )}
     </div>
+  )
+}
+
+function GroupRows({ group, canEdit, leadFarmer }) {
+  return (
+    <>
+      <tr className="lead-group">
+        <td colSpan={COLUMNS}>
+          {group.label}
+          {group.key !== 'none' && group.cluster ? <span>{group.cluster}</span> : null}
+        </td>
+      </tr>
+      {group.rows.map((farmer) => {
+        const name = farmerName(farmer)
+        const [label, tone] = statusOf(farmer.verification_status)
+        const registrationOpen = EDITABLE.includes(farmer.verification_status)
+        const showPencil = canEdit && (!leadFarmer || registrationOpen)
+        const place = [farmer.province_name, farmer.district_name].filter(Boolean).join(' · ')
+        return (
+          <tr key={farmer.id}>
+            <td>{farmer.membership_number || '—'}</td>
+            <td>
+              <span className="farmer-row-name">
+                <Link to={`/farmers/${farmer.id}`}>{name}</Link>
+                <Link className="icon-btn" to={`/farmers/${farmer.id}`} aria-label={`View ${name}`} title="View details">
+                  <Icon name="eye" />
+                </Link>
+                {showPencil ? (
+                  <Link
+                    className="icon-btn"
+                    to={registrationOpen ? `/farmers/${farmer.id}/edit` : `/farmers/${farmer.id}#farms`}
+                    aria-label={`Edit ${name}`}
+                    title={registrationOpen ? 'Edit registration' : 'Edit farms'}
+                  >
+                    <Icon name="pencil" />
+                  </Link>
+                ) : null}
+              </span>
+            </td>
+            <td>{farmer.national_id || '—'}</td>
+            <td>{place || '—'}</td>
+            <td>{farmer.cluster_name || '—'}</td>
+            <td>{farmer.lead_farmer_name || '—'}</td>
+            <td>{formatDisplay('farm_hectares', farmer.farm_hectares) ?? '—'}</td>
+            <td>
+              <Pill tone={tone}>{label}</Pill>
+              {farmer.review_remarks && registrationOpen ? <small>{farmer.review_remarks}</small> : null}
+            </td>
+          </tr>
+        )
+      })}
+    </>
   )
 }
 

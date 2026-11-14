@@ -806,3 +806,64 @@ class MultipleFarmTests(TestCase):
         before = Farm.objects.filter(farmer_id=created.data["id"]).count()
         migration.copy_farm_geography(apps, None)
         self.assertEqual(Farm.objects.filter(farmer_id=created.data["id"]).count(), before)
+
+
+class FarmerLeadGroupingTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="lead-list@example.com",
+            username="lead-list-user",
+            password="StrongPass123!",
+            role=User.ROLE_VERIFICATION_OFFICER,
+        )
+        self.province = Province.objects.create(name="Mashonaland East", code="ME")
+        self.district = District.objects.create(province=self.province, name="Marondera")
+        self.leader = Farmer.objects.create(
+            first_name="J",
+            surname="Chigumba",
+            national_id="63-1111111-A-11",
+            province=self.province,
+            district=self.district,
+        )
+        from apps.clusters.models import Cluster
+
+        self.cluster = Cluster.objects.create(
+            name="Ruwa Springs",
+            province=self.province,
+            district=self.district,
+            lead_member=self.leader,
+        )
+        self.member = Farmer.objects.create(
+            first_name="Rudo",
+            surname="Moyo",
+            national_id="63-2222222-B-22",
+            province=self.province,
+            district=self.district,
+            cluster=self.cluster,
+        )
+        self.unled = Farmer.objects.create(
+            first_name="Tarirai",
+            surname="Dube",
+            national_id="63-3333333-C-33",
+            province=self.province,
+            district=self.district,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_list_names_the_cluster_lead_and_filters_by_them(self):
+        listed = self.client.get(reverse("farmer-list"))
+        self.assertEqual(listed.status_code, 200)
+        by_id = {row["id"]: row for row in listed.data["results"]}
+        self.assertEqual(by_id[self.member.id]["lead_member"], self.leader.id)
+        self.assertEqual(by_id[self.member.id]["lead_farmer_name"], "J Chigumba")
+        self.assertIsNone(by_id[self.unled.id]["lead_member"])
+        self.assertEqual(by_id[self.unled.id]["lead_farmer_name"], "")
+
+        filtered = self.client.get(reverse("farmer-list"), {"lead_member": self.leader.id})
+        self.assertEqual([row["id"] for row in filtered.data["results"]], [self.member.id])
+
+        none = self.client.get(reverse("farmer-list"), {"lead_member": "none"})
+        none_ids = {row["id"] for row in none.data["results"]}
+        self.assertIn(self.unled.id, none_ids)
+        self.assertNotIn(self.member.id, none_ids)
