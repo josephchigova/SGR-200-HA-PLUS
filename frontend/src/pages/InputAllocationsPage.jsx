@@ -3,10 +3,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
-import { DraftNotice } from '../components/ui'
+import { DraftNotice, Pill } from '../components/ui'
 import { useFormDraft } from '../drafts'
 
 const toList = (data) => (Array.isArray(data) ? data : data?.results || [])
+const ALLOCATION_STATUS = {
+  ALLOCATED: ['Allocated', 'good'],
+  PENDING: ['Pending farmer approval', 'warn'],
+  COLLECTED: ['Collected', 'good'],
+  CANCELLED: ['Cancelled', ''],
+}
 
 const getAllPages = async (path) => {
   const rows = []
@@ -296,7 +302,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
                 <td>{row.hectares}</td>
                 <td>{row.calculated_input_cost_per_hectare ?? '—'}</td>
                 <td>{row.total_input_cost ?? '—'}</td>
-                <td>{row.status}</td>
+                <td><Pill tone={(ALLOCATION_STATUS[row.status] || [row.status, ''])[1]}>{(ALLOCATION_STATUS[row.status] || [row.status || '—'])[0]}</Pill></td>
               </tr>
             ))}
             {!loading && visibleRows.length === 0 ? <tr><td colSpan={7}>No allocations for the selected period.</td></tr> : null}

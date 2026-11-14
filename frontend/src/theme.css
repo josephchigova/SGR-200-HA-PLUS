@@ -3058,3 +3058,217 @@ select.invalid,
   gap: 10px;
   margin-bottom: 16px;
 }
+
+/* Production ------------------------------------------------------------------ */
+.production-page {
+  display: grid;
+  gap: 16px;
+}
+
+.production-tabs button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.production-filters {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+  gap: 12px;
+  align-items: end;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.production-filters .form-field > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.production-filters .form-field svg {
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+
+.production-filters input[readonly] {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.production-refresh {
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border);
+}
+
+.production-stats {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.production-stats .stat-card {
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, var(--surface)), var(--surface));
+}
+
+.production-stats .stat-card.info {
+  border-color: color-mix(in srgb, var(--chart-3) 30%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--chart-3) 12%, var(--surface)), var(--surface));
+}
+
+.production-stats .stat-card.warn {
+  border-color: color-mix(in srgb, var(--warning) 30%, var(--border));
+  background: linear-gradient(135deg, color-mix(in srgb, var(--warning) 10%, var(--surface)), var(--surface));
+}
+
+.production-stats .stat-card small {
+  color: var(--text-muted);
+}
+
+.production-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 16px;
+}
+
+.production-lead-summary .card-head h3,
+.production-records-head h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.production-lead-summary .card-head svg,
+.production-records-head h3 svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.production-records {
+  display: grid;
+  gap: 12px;
+}
+
+.production-records-head {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.production-records-head .page-actions {
+  flex-wrap: wrap;
+}
+
+.production-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 240px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, var(--surface));
+}
+
+.production-search svg {
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+}
+
+.production-search input {
+  flex: 1;
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  outline: none;
+}
+
+.production-table th.num,
+.production-table td.num,
+.production-page .data-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sort-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-transform: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+
+@media (max-width: 1200px) {
+  .production-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .production-overview-grid .production-lead-summary {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 900px) {
+  .production-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .production-overview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .production-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .production-search {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+.production-table .table-actions {
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+.production-table td:nth-child(2),
+.production-table td:nth-child(3) {
+  white-space: nowrap;
+}
+
+@media (max-width: 1700px) {
+  .production-overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .production-overview-grid .production-lead-summary {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 900px) {
+  .production-overview-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+#production-form h4 {
+  margin: 18px 0 8px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+#production-form h4:first-of-type {
+  margin-top: 0;
+}

@@ -170,7 +170,11 @@ class LeadClusterRegistrationTests(TestCase):
         )
         # The executive captured this record and checked its KYC documents in person, so nothing is uploaded.
         self.assertEqual(kyc.required_codes_for(Farmer.objects.get(pk=farmer_id)), [])
-        self.assertEqual(self.client_for(lead).post(f"/api/farmers/{farmer_id}/submit/").status_code, 403)
+        # Saving the farm already completed the executive's registration. Submitting only confirms it.
+        self.assertEqual(Farmer.objects.get(pk=farmer_id).verification_status, Farmer.STATUS_VERIFIED)
+        confirmed = self.client_for(lead).post(f"/api/farmers/{farmer_id}/submit/")
+        self.assertEqual(confirmed.status_code, 200)
+        self.assertEqual(confirmed.data["verification_status"], Farmer.STATUS_VERIFIED)
         self.assertEqual(client.post(f"/api/farmers/{farmer_id}/submit/").status_code, 200)
         admin = User.objects.create_user(email="root@example.com", username="root@example.com", password="StrongPass123!", role=User.ROLE_SUPER_ADMIN)
         reviewer = self.client_for(admin)

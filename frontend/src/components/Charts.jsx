@@ -14,7 +14,7 @@ function monthLabel(value) {
 
 function formatMeasure(value, unit) {
   const number = Number(value) || 0
-  const digits = unit === 'USD' || unit === 'ha' || unit === 't' ? 2 : 0
+  const digits = unit === 'USD' || unit === 'ha' || unit === 't' || unit === 't/ha' ? 2 : 0
   const text = number.toLocaleString('en-US', { minimumFractionDigits: unit === 'USD' ? 2 : 0, maximumFractionDigits: digits })
   if (unit === 'USD') return `USD ${text}`
   if (unit === 'ha') return `${text} ha`

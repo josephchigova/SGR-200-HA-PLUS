@@ -71,11 +71,13 @@ class InputIssue(models.Model):
 
 class InputAllocation(models.Model):
     STATUS_PENDING = "PENDING"
+    STATUS_ALLOCATED = "ALLOCATED"
     STATUS_COLLECTED = "COLLECTED"
     STATUS_CANCELLED = "CANCELLED"
 
     STATUS_CHOICES: ClassVar[list[tuple[str, str]]] = [
         (STATUS_PENDING, "Pending"),
+        (STATUS_ALLOCATED, "Allocated"),
         (STATUS_COLLECTED, "Collected"),
         (STATUS_CANCELLED, "Cancelled"),
     ]

@@ -27,6 +27,7 @@ import LeadFarmersPage from './pages/LeadFarmersPage'
 import FarmerDetailsPage from './pages/FarmerDetailsPage'
 import FarmersPage from './pages/FarmersPage'
 import InputAllocationsPage from './pages/InputAllocationsPage'
+import ProductionPage from './pages/ProductionPage'
 import InputDebtPage from './pages/InputDebtPage'
 import LoginPage from './pages/LoginPage'
 import { ForgotPasswordPage, ResetPasswordPage } from './pages/PasswordPages'
@@ -465,7 +466,7 @@ function Workspace() {
             <Route path="/programmes" element={<Guard module="programmes"><WorkflowPage {...workflowPages.programmes} {...period} module="programmes" /></Guard>} />
             <Route path="/arda-requests" element={<Guard module="arda"><WorkflowPage {...workflowPages.arda} {...period} module="arda" /></Guard>} />
             <Route path="/input-allocations" element={<Guard module="allocations"><InputAllocationsPage {...period} /></Guard>} />
-            <Route path="/production" element={<Guard module="production"><WorkflowPage {...workflowPages.production} {...period} module="production" /></Guard>} />
+            <Route path="/production" element={<Guard module="production"><ProductionPage {...period} /></Guard>} />
             <Route path="/seasonal-planting" element={<Guard module="planting"><WorkflowPage {...workflowPages.seasonalPlanting} {...period} module="planting" /></Guard>} />
             <Route path="/deliveries" element={<Guard module="deliveries"><WorkflowPage {...workflowPages.deliveries} {...period} module="deliveries" /></Guard>} />
             <Route path="/recovery" element={<Guard module="recovery"><InputDebtPage {...period} /></Guard>} />

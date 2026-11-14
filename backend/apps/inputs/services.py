@@ -303,12 +303,21 @@ class InputAllocationService:
             "total_input_cost": calculation["total_input_cost"],
             **extra,
         }
+        # Pending means the farmer is not approved yet. An approved farmer's allocation is allocated.
+        open_status = (
+            InputAllocation.STATUS_ALLOCATED
+            if farmer.verification_status in {"VERIFIED", "APPROVED"}
+            else InputAllocation.STATUS_PENDING
+        )
         if allocation_id is None:
+            values["status"] = open_status
             allocation = InputAllocation.objects.create(**values)
         else:
             allocation = InputAllocation.objects.select_for_update().get(pk=allocation_id)
             for field, value in values.items():
                 setattr(allocation, field, value)
+            if allocation.status in {InputAllocation.STATUS_PENDING, InputAllocation.STATUS_ALLOCATED}:
+                allocation.status = open_status
             allocation.save()
 
         allocation.calculation_lines.all().delete()

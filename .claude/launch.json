@@ -4,14 +4,38 @@
     {
       "name": "sgr-preview-api",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-c", "cd backend && DJANGO_SETTINGS_MODULE=preview_settings PYTHONPATH=/tmp/claude-1000/-home-joseph-Desktop-SGR-200HA--FARMER---INPUT-MANAGEMENT-SYSTEM/a8b0ef7e-d44d-4d0e-a21c-41f6c3f3b699/scratchpad/preview .venv/bin/python manage.py runserver 127.0.0.1:8000 --noreload"],
+      "runtimeArgs": [
+        "-c",
+        "cd backend && DJANGO_SETTINGS_MODULE=preview_settings PYTHONPATH=/tmp/claude-1000/-home-joseph-Desktop-SGR-200HA--FARMER---INPUT-MANAGEMENT-SYSTEM/a8b0ef7e-d44d-4d0e-a21c-41f6c3f3b699/scratchpad/preview .venv/bin/python manage.py runserver 127.0.0.1:8000 --noreload"
+      ],
       "port": 8000
     },
     {
       "name": "sgr-frontend",
       "runtimeExecutable": "bash",
-      "runtimeArgs": ["-c", "cd frontend && npx vite --port 5175 --strictPort"],
+      "runtimeArgs": [
+        "-c",
+        "cd frontend && npx vite --port 5175 --strictPort"
+      ],
       "port": 5175
+    },
+    {
+      "name": "sgr-preview-api-8001",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd backend && DJANGO_SETTINGS_MODULE=preview_settings PYTHONPATH=/tmp/claude-1000/-home-joseph-Desktop-SGR-200HA--FARMER---INPUT-MANAGEMENT-SYSTEM/a8b0ef7e-d44d-4d0e-a21c-41f6c3f3b699/scratchpad/preview .venv/bin/python manage.py runserver 127.0.0.1:8001 --noreload"
+      ],
+      "port": 8001
+    },
+    {
+      "name": "sgr-frontend-8001",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd frontend && VITE_API_URL=http://localhost:8001/api npx vite --port 5176 --strictPort"
+      ],
+      "port": 5176
     }
   ]
 }

@@ -1,8 +1,12 @@
+from decimal import Decimal
+
 from django.db import transaction
+from django.db.models import Q
 from apps.accounts.scoping import scope_by_farmer
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from apps.accounts.permissions import ProgrammeWorkflowPermission, RecoveryWorkflowPermission
@@ -46,20 +50,226 @@ class ProductionPlanViewSet(viewsets.ModelViewSet):
         return queryset
 
 
+class ProductionPagination(PageNumberPagination):
+    page_size = 25
+    page_size_query_param = "page_size"
+    max_page_size = 500
+
+
+PLANTED_STATES = {FarmerProduction.STATUS_PLANTED, FarmerProduction.STATUS_HARVESTED, FarmerProduction.STATUS_COMPLETED}
+ORDERING = {
+    "farmer": "farmer__full_name", "crop": "crop", "season": "season__name", "status": "status",
+    "registered": "contracted_hectares", "planted": "planted_hectares", "created": "created_at",
+}
+TWO = Decimal("0.01")
+
+
+def _money_free(value):
+    return f"{Decimal(value or 0).quantize(TWO)}"
+
+
+def _irrigated(row):
+    """Irrigated land under this crop: the farm's irrigated land, up to the crop's hectares."""
+    if row.farm_id is None:
+        return Decimal("0.00")
+    return min(Decimal(row.farm.irrigated_hectares or 0), Decimal(row.contracted_hectares or 0))
+
+
+def _summarise(rows):
+    """Totals, per-crop, per-lead and per-status figures for a set of production records."""
+    registered = planted = irrigated = estimated = actual = Decimal("0.00")
+    farmers_planted, crops, farmers = set(), set(), set()
+    by_crop, by_lead, by_status = {}, {}, {}
+    for row in rows:
+        contracted = Decimal(row.contracted_hectares or 0)
+        planted_ha = Decimal(row.planted_hectares or 0)
+        irrigated_ha = _irrigated(row)
+        est = Decimal(row.estimated_production or 0)
+        act = Decimal(row.actual_production or 0)
+        name = row.crop or "Crop"
+        registered += contracted
+        planted += planted_ha
+        irrigated += irrigated_ha
+        estimated += est
+        actual += act
+        crops.add(name)
+        farmers.add(row.farmer_id)
+        is_planted = planted_ha > 0 or row.status in PLANTED_STATES
+        if is_planted:
+            farmers_planted.add(row.farmer_id)
+        crop = by_crop.setdefault(name, {
+            "crop": name, "farmers": set(), "records": 0, "hectares": Decimal("0.00"), "planted_hectares": Decimal("0.00"),
+            "irrigated_hectares": Decimal("0.00"), "estimated_production": Decimal("0.00"), "actual_production": Decimal("0.00"),
+        })
+        crop["farmers"].add(row.farmer_id)
+        crop["records"] += 1
+        crop["hectares"] += contracted
+        crop["planted_hectares"] += planted_ha
+        crop["irrigated_hectares"] += irrigated_ha
+        crop["estimated_production"] += est
+        crop["actual_production"] += act
+        lead_name, district = _lead_place(row.farmer)
+        lead = by_lead.setdefault(lead_name, {
+            "lead_farmer": lead_name, "district": district, "farmers": set(), "registered_hectares": Decimal("0.00"),
+            "planted_hectares": Decimal("0.00"), "irrigated_hectares": Decimal("0.00"),
+            "estimated_production": Decimal("0.00"), "actual_production": Decimal("0.00"),
+        })
+        lead["farmers"].add(row.farmer_id)
+        lead["registered_hectares"] += contracted
+        lead["planted_hectares"] += planted_ha
+        lead["irrigated_hectares"] += irrigated_ha
+        lead["estimated_production"] += est
+        lead["actual_production"] += act
+        status = by_status.setdefault(row.status, {"status": row.status, "label": row.get_status_display(), "records": 0, "hectares": Decimal("0.00")})
+        status["records"] += 1
+        status["hectares"] += contracted
+
+    def yield_of(produced, area):
+        return _money_free(produced / area) if area else "0.00"
+
+    crop_rows = [
+        {
+            "crop": bucket["crop"], "farmers": len(bucket["farmers"]), "records": bucket["records"],
+            "hectares": _money_free(bucket["hectares"]),
+            "share": int(round(bucket["hectares"] / registered * 100)) if registered else 0,
+            "planted_hectares": _money_free(bucket["planted_hectares"]),
+            "irrigated_hectares": _money_free(bucket["irrigated_hectares"]),
+            "estimated_production": _money_free(bucket["estimated_production"]),
+            "actual_production": _money_free(bucket["actual_production"]),
+            "yield_per_hectare": yield_of(bucket["actual_production"], bucket["planted_hectares"]),
+            "planting_progress": round(bucket["planted_hectares"] / bucket["hectares"] * 100) if bucket["hectares"] else 0,
+        }
+        for bucket in sorted(by_crop.values(), key=lambda item: (-item["hectares"], item["crop"]))
+    ]
+    lead_rows = [
+        {
+            "lead_farmer": bucket["lead_farmer"], "district": bucket["district"], "farmers": len(bucket["farmers"]),
+            "registered_hectares": _money_free(bucket["registered_hectares"]),
+            "planted_hectares": _money_free(bucket["planted_hectares"]),
+            "irrigated_hectares": _money_free(bucket["irrigated_hectares"]),
+            "estimated_production": _money_free(bucket["estimated_production"]),
+            "actual_production": _money_free(bucket["actual_production"]),
+            "yield_per_hectare": yield_of(bucket["actual_production"], bucket["planted_hectares"]),
+            "planting_progress": round(bucket["planted_hectares"] / bucket["registered_hectares"] * 100) if bucket["registered_hectares"] else 0,
+        }
+        for bucket in sorted(by_lead.values(), key=lambda item: (-item["registered_hectares"], item["lead_farmer"]))
+    ]
+    order = [code for code, _ in FarmerProduction.STATUS_CHOICES]
+    status_rows = [
+        {**bucket, "hectares": _money_free(bucket["hectares"])}
+        for bucket in sorted(by_status.values(), key=lambda item: order.index(item["status"]) if item["status"] in order else 99)
+    ]
+    return {
+        "records": len(rows),
+        "farmers": len(farmers),
+        "registered_hectares": _money_free(registered),
+        "planted_hectares": _money_free(planted),
+        "irrigated_hectares": _money_free(irrigated),
+        "farmers_planted": len(farmers_planted),
+        "crops": len(crops),
+        "estimated_production": _money_free(estimated),
+        "actual_production": _money_free(actual),
+        "by_crop": crop_rows,
+        "by_lead": lead_rows,
+        "by_status": status_rows,
+    }
+
+
 class FarmerProductionViewSet(viewsets.ModelViewSet):
-    queryset = FarmerProduction.objects.select_related("farmer", "farm", "season").all()
+    queryset = FarmerProduction.objects.select_related(
+        "farmer__province", "farmer__district", "farmer__cluster__lead_member", "farmer__cluster__lead_farmer", "farm", "season",
+    ).all()
     serializer_class = FarmerProductionSerializer
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
+    pagination_class = ProductionPagination
+
+    def _filtered(self, queryset):
+        """Every filter except the agricultural year, so last year can use the same ones."""
+        params = self.request.query_params
+        crop_season = parse_crop_season(params.get("crop_season"))
+        if crop_season:
+            queryset = filter_by_crop_name(queryset, crop_season, "crop")
+        if params.get("crop"):
+            queryset = queryset.filter(crop__iexact=params["crop"])
+        if params.get("province"):
+            queryset = queryset.filter(farmer__province_id=params["province"])
+        if params.get("district"):
+            queryset = queryset.filter(farmer__district_id=params["district"])
+        if params.get("lead_member"):
+            queryset = queryset.filter(farmer__cluster__lead_member_id=params["lead_member"])
+        if params.get("status"):
+            queryset = queryset.filter(status__in=[code.strip().upper() for code in params["status"].split(",") if code.strip()])
+        search = (params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(farmer__full_name__icontains=search) | Q(farmer__membership_number__icontains=search)
+                | Q(farmer__national_id__icontains=search) | Q(crop__icontains=search)
+                | Q(farmer__cluster__name__icontains=search)
+            )
+        ordering = params.get("ordering", "")
+        field = ORDERING.get(ordering.lstrip("-"))
+        if field:
+            queryset = queryset.order_by(f"-{field}" if ordering.startswith("-") else field, "id")
+        else:
+            queryset = queryset.order_by("farmer__full_name", "crop", "id")
+        return queryset
 
     def get_queryset(self):
         queryset = scope_by_farmer(super().get_queryset(), self.request.user)
         season = self.request.query_params.get("season")
         season_name = self.request.query_params.get("season_name")
         queryset = filter_by_agricultural_year(queryset, season, season_name, relation="season")
-        crop_season = parse_crop_season(self.request.query_params.get("crop_season"))
-        if crop_season:
-            queryset = filter_by_crop_name(queryset, crop_season, "crop")
-        return queryset
+        return self._filtered(queryset)
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["crop_categories"] = {name.lower(): category for name, category in Crop.objects.values_list("name", "category")}
+        return context
+
+    def _previous_season(self):
+        from apps.programmes.models import Season
+
+        params = self.request.query_params
+        season = params.get("season")
+        current = None
+        if season and str(season).isdigit():
+            current = Season.objects.filter(pk=int(season)).first()
+        elif params.get("season_name") or season:
+            current = Season.objects.filter(name__iexact=params.get("season_name") or season).first()
+        if current is None:
+            return None
+        return Season.objects.filter(start_date__lt=current.start_date).order_by("-start_date").first()
+
+    @action(detail=False, methods=["get"], url_path="overview")
+    def overview(self, request):
+        """Hectares, yields, crop, lead-farmer and status totals for the selected period."""
+        summary = _summarise(list(self.get_queryset()))
+        previous_season = self._previous_season()
+        summary["previous"] = None
+        if previous_season is not None:
+            base = scope_by_farmer(FarmerProduction.objects.select_related(
+                "farmer__district", "farmer__cluster__lead_member", "farmer__cluster__lead_farmer", "farm", "season",
+            ).filter(season=previous_season), request.user)
+            earlier = _summarise(list(self._filtered(base)))
+            if earlier["records"]:
+                summary["previous"] = {
+                    "season": previous_season.name,
+                    **{key: earlier[key] for key in ("registered_hectares", "planted_hectares", "irrigated_hectares", "farmers_planted", "crops", "estimated_production", "actual_production")},
+                }
+        return Response(summary)
+
+
+def _lead_place(farmer):
+    cluster = farmer.cluster
+    if cluster is not None and cluster.lead_member_id:
+        name = cluster.lead_member.full_name
+    elif cluster is not None and cluster.lead_farmer_id:
+        user = cluster.lead_farmer
+        name = f"{user.first_name} {user.last_name}".strip() or user.email
+    else:
+        name = "No lead farmer"
+    district = farmer.district.name if farmer.district_id else ""
+    return name, district
 
 
 class GMBDeliveryViewSet(viewsets.ModelViewSet):

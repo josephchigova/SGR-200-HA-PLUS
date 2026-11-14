@@ -50,6 +50,84 @@ class FarmerProductionTests(TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
+    def test_overview_sums_hectares_by_crop_and_lead_farmer(self):
+        from apps.clusters.models import Cluster
+        from apps.production.models import FarmerProduction
+
+        self.farmer.verification_status = Farmer.STATUS_VERIFIED
+        self.farmer.is_lead = True
+        self.farmer.save(update_fields=["verification_status", "is_lead"])
+        cluster = Cluster.objects.create(name="Tendai Moyo", province=self.farmer.province, district=self.farmer.district, lead_member=self.farmer)
+        self.farmer.cluster = cluster
+        self.farmer.save(update_fields=["cluster"])
+        self.farm.irrigated_hectares = "5.00"
+        self.farm.save(update_fields=["irrigated_hectares"])
+        FarmerProduction.objects.create(
+            farmer=self.farmer, farm=self.farm, season=self.season, crop="Maize",
+            contracted_hectares="6.00", planted_hectares="5.00", estimated_production="12.00", actual_production="4.00",
+            status=FarmerProduction.STATUS_PLANTED,
+        )
+        response = self.client.get(reverse("farmer-production-overview"), {"season": self.season.pk, "season_name": self.season.name})
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["registered_hectares"], "6.00")
+        self.assertEqual(response.data["planted_hectares"], "5.00")
+        self.assertEqual(response.data["irrigated_hectares"], "5.00")
+        self.assertEqual(response.data["farmers_planted"], 1)
+        self.assertEqual(response.data["crops"], 1)
+        self.assertEqual(response.data["actual_production"], "4.00")
+        maize = response.data["by_crop"][0]
+        self.assertEqual((maize["crop"], maize["hectares"], maize["share"], maize["farmers"]), ("Maize", "6.00", 100, 1))
+        self.assertEqual((maize["planted_hectares"], maize["irrigated_hectares"], maize["yield_per_hectare"], maize["planting_progress"]), ("5.00", "5.00", "0.80", 83))
+        self.assertEqual(response.data["by_lead"][0]["irrigated_hectares"], "5.00")
+        self.assertEqual(response.data["by_status"], [{"status": "PLANTED", "label": "Planted", "records": 1, "hectares": "6.00"}])
+        self.assertIsNone(response.data["previous"])
+        self.assertEqual(response.data["by_lead"][0]["lead_farmer"], "Tendai Moyo")
+        self.assertEqual(response.data["by_lead"][0]["farmers"], 1)
+
+    def test_records_filter_search_and_compare_with_last_season(self):
+        from apps.production.models import FarmerProduction
+        from apps.programmes.models import Crop
+
+        Crop.objects.create(name="Maize", category=Crop.CATEGORY_SUMMER)
+        Crop.objects.create(name="Wheat", category=Crop.CATEGORY_WINTER)
+        last = Season.objects.create(name="Production 2025/26", start_date="2025-10-01", end_date="2026-09-30")
+        FarmerProduction.objects.create(farmer=self.farmer, farm=self.farm, season=last, crop="Maize", contracted_hectares="4.00")
+        FarmerProduction.objects.create(farmer=self.farmer, farm=self.farm, season=self.season, crop="Maize", contracted_hectares="6.00", status="PLANTED")
+        FarmerProduction.objects.create(farmer=self.farmer, farm=self.farm, season=self.season, crop="Wheat", contracted_hectares="2.00")
+        url = reverse("farmer-production-list")
+        period = {"season": self.season.pk, "season_name": self.season.name}
+
+        rows = self.client.get(url, {**period, "page_size": 100}).data["results"]
+        self.assertEqual(len(rows), 2)
+        maize = next(row for row in rows if row["crop"] == "Maize")
+        self.assertEqual((maize["crop_season"], maize["status_label"], maize["district_name"]), ("SUMMER", "Planted", "Harare"))
+        self.assertEqual(self.client.get(url, {**period, "crop": "wheat"}).data["count"], 1)
+        self.assertEqual(self.client.get(url, {**period, "status": "PLANTED"}).data["count"], 1)
+        self.assertEqual(self.client.get(url, {**period, "crop_season": "WINTER"}).data["count"], 1)
+        self.assertEqual(self.client.get(url, {**period, "search": "moyo"}).data["count"], 2)
+        self.assertEqual(self.client.get(url, {**period, "district": self.farmer.district_id + 999}).data["count"], 0)
+        ordered = self.client.get(url, {**period, "ordering": "-registered"}).data["results"]
+        self.assertEqual([row["crop"] for row in ordered], ["Maize", "Wheat"])
+
+        overview = self.client.get(reverse("farmer-production-overview"), {**period, "crop": "Maize"}).data
+        self.assertEqual(overview["registered_hectares"], "6.00")
+        self.assertEqual(overview["previous"]["season"], "Production 2025/26")
+        self.assertEqual(overview["previous"]["registered_hectares"], "4.00")
+
+    def test_moving_a_record_on_does_not_recheck_unchanged_land(self):
+        """Records published from approved registrations have no input request behind them."""
+        from apps.production.models import FarmerProduction
+
+        record = FarmerProduction.objects.create(farmer=self.farmer, farm=self.farm, season=self.season, crop="Maize", contracted_hectares="6.00")
+        url = reverse("farmer-production-detail", args=[record.pk])
+        moved = self.client.patch(url, {"status": "PLANTED", "planted_hectares": "6.00"}, format="json")
+        self.assertEqual(moved.status_code, 200, moved.data)
+        too_much = self.client.patch(url, {"planted_hectares": "7.00"}, format="json")
+        self.assertEqual(too_much.status_code, 400)
+        bigger = self.client.patch(url, {"contracted_hectares": "8.00"}, format="json")
+        self.assertEqual(bigger.status_code, 400)
+        self.assertIn("ARDA", str(bigger.data))
+
     def test_production_accepts_valid_planted_hectares(self):
         response = self.client.post(
             reverse("farmer-production-list"),

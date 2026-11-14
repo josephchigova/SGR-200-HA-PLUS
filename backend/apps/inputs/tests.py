@@ -223,6 +223,7 @@ class InputAllocationCatalogueFlowTests(TestCase):
         )
         self.assertEqual(response.status_code, 201, response.data)
         allocation = InputAllocation.objects.get(pk=response.data["id"])
+        self.assertEqual(allocation.status, InputAllocation.STATUS_ALLOCATED)
         self.assertEqual(allocation.total_input_cost, 57200)
         self.assertEqual(allocation.calculation_lines.count(), 3)
 

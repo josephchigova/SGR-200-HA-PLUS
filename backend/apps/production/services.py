@@ -6,7 +6,7 @@ from apps.farmers.models import Farm
 
 class FarmerProductionService:
     @staticmethod
-    def validate(production):
+    def validate(production, check_allocation=True):
         farm = production.get("farm")
         farmer = production.get("farmer")
         if farm is None and farmer is not None:
@@ -24,6 +24,8 @@ class FarmerProductionService:
         if contracted > farm.arable_hectares:
             raise ValueError("Contracted hectares exceed the farm's arable hectares.")
 
+        if not check_allocation:
+            return production
         batch_statuses = [ARDARequestBatch.STATUS_PENDING, ARDARequestBatch.STATUS_SUBMITTED, ARDARequestBatch.STATUS_APPROVED]
         approved_hectares = sum(
             ARDAFarmerRequest.objects.filter(

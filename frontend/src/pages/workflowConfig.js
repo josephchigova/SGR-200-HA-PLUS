@@ -98,7 +98,8 @@ export const workflowPages = {
       { key: 'farmer_name', label: 'Farmer' }, { key: 'season_name', label: 'Season' }, { key: 'crop', label: 'Crop' },
       { key: 'contracted_hectares', label: 'Contracted ha' }, { key: 'planted_hectares', label: 'Planted ha' },
       { key: 'expected_yield', label: 'Expected yield' }, { key: 'actual_production', label: 'Actual production' },
-      { key: 'crop_stage', label: 'Stage' }, { key: 'status', label: 'Status' },
+      { key: 'crop_stage', label: 'Stage' },
+      { key: 'status', label: 'Status', render: (row) => ({ PENDING: 'Planned', PLANTED: 'Growing', HARVESTED: 'Harvested', COMPLETED: 'Completed' }[row.status] || row.status || '—') },
     ],
     forms: [{ key: 'production', title: 'Record production', fields: [
       farmer(), farm(),
