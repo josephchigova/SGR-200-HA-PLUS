@@ -40,12 +40,13 @@
   --info: #1d5fa8;
   --info-bg: #e6f0fb;
 
-  --side-bg: #ffffff;
-  --side-text: #3d4b42;
-  --side-muted: #7c8a80;
-  --side-hover: #f1f5f0;
-  --side-active-bg: #e3f1e6;
-  --side-active-text: #1f6b40;
+  --side-bg: #1b4d32;
+  --side-text: #e7f4ec;
+  --side-muted: #b7d4c3;
+  --side-hover: rgba(255, 255, 255, 0.1);
+  --side-active-bg: #2f7d4e;
+  --side-active-text: #ffffff;
+  --side-border: rgba(255, 255, 255, 0.14);
 
   --chart-1: #2b7a4b;
   --chart-2: #0f766e;
@@ -98,12 +99,7 @@
   --info: #8cbcf5;
   --info-bg: #14263b;
 
-  --side-bg: #111815;
-  --side-text: #c4cfc7;
-  --side-muted: #76847a;
-  --side-hover: #19221d;
-  --side-active-bg: #1f2e22;
-  --side-active-text: #9bd68c;
+  /* Sidebar colours are not overridden: the bar stays brand green in dark mode. */
 
   --chart-1: #7fc98a;
   --chart-2: #4fc3b5;
@@ -210,7 +206,7 @@ button, input, select, textarea {
   flex-direction: column;
   height: 100vh;
   background: var(--side-bg);
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--side-border);
   color: var(--side-text);
 }
 
@@ -230,8 +226,8 @@ button, input, select, textarea {
   height: 34px;
   flex: none;
   border-radius: 10px;
-  background: var(--accent);
-  color: var(--on-accent);
+  background: #ffffff;
+  color: #1b4d32;
 }
 
 .brand-logo .icon {
@@ -243,7 +239,7 @@ button, input, select, textarea {
   display: block;
   font-size: 0.95rem;
   line-height: 1.2;
-  color: var(--text);
+  color: #ffffff;
 }
 
 .side-brand small {
@@ -286,7 +282,7 @@ button, input, select, textarea {
 
 .side-link:hover {
   background: var(--side-hover);
-  color: var(--text);
+  color: #ffffff;
 }
 
 .side-link.active {
@@ -298,7 +294,7 @@ button, input, select, textarea {
 .side-foot {
   flex: none;
   padding: 10px 12px 14px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--side-border);
   position: relative;
 }
 
@@ -333,7 +329,7 @@ button, input, select, textarea {
 
 .side-user strong {
   font-size: 0.86rem;
-  color: var(--text);
+  color: #ffffff;
 }
 
 .side-user small {
@@ -348,8 +344,8 @@ button, input, select, textarea {
   height: 34px;
   flex: none;
   border-radius: 50%;
-  background: var(--surface-3);
-  color: var(--text);
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
   font-size: 0.74rem;
   font-weight: 700;
 }
@@ -376,7 +372,7 @@ button, input, select, textarea {
 .shell.is-collapsed .side-nav > div + div {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--side-border);
 }
 
 .shell-main {
@@ -2833,6 +2829,68 @@ select.invalid,
 
   .perf-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Laptops and short displays (1366×768, 1440×900). Large desktops keep the roomier scale. */
+@media (min-width: 1024px) and (max-width: 1440px),
+       (min-width: 1024px) and (max-height: 860px) {
+  :root {
+    --side-width: 220px;
+    --topbar-height: 52px;
+    --control-height: 34px;
+  }
+
+  body {
+    font-size: 13px;
+  }
+
+  .content {
+    padding: 16px 18px 28px;
+  }
+
+  .page-card,
+  .workflow-page,
+  .dashboard-page {
+    gap: 12px;
+  }
+
+  .page-head h2,
+  .page-card > .section-head h3,
+  .workflow-page > .workflow-heading h3 {
+    font-size: 1.35rem;
+  }
+
+  .card,
+  .workflow-form,
+  .farmer-form,
+  .asset-form,
+  .asset-detail,
+  .asset-categories,
+  .ops-card,
+  .activity-card {
+    padding: 14px;
+  }
+
+  .card-head {
+    margin-bottom: 10px;
+  }
+
+  .stepper {
+    gap: 8px;
+  }
+
+  .stepper button {
+    min-height: 46px;
+    padding: 8px 10px;
+  }
+
+  .notice-strip {
+    padding: 10px 14px;
+  }
+
+  .form-grid {
+    gap: 12px;
   }
 }
 
