@@ -10,8 +10,7 @@ function AuthLayout({ children, back = null }) {
     <div className="auth-page">
       <section className="auth-brand" aria-label="SGR 200HA+">
         <div className="auth-brand-top">
-          <span className="brand-logo"><Icon name="wheat" /></span>
-          <span>Strategic Grain Reserve</span>
+          <img className="auth-logo" src={`${import.meta.env.BASE_URL}sgr-logo.jpg`} alt="Strategic Grain Reserve, 200ha+ Club Zimbabwe" width="120" height="120" />
         </div>
         <div>
           <span className="eyebrow">200HA+ Club Zimbabwe</span>

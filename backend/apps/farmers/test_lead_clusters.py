@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 from apps.clusters.models import Cluster
 from apps.farmers import kyc
 from apps.farmers.models import Farmer
-from apps.geography.models import District, Province
+from apps.geography.models import District, Province, Ward
 from apps.production.models import FarmerProduction
 from apps.programmes.models import Crop, Season
 
@@ -26,6 +26,9 @@ class LeadClusterRegistrationTests(TestCase):
         )
         self.season = Season.objects.create(name="2026/2027 Summer", start_date=date(2026, 5, 1), end_date=date(2026, 10, 31), status=Season.STATUS_ACTIVE)
         self.crop = Crop.objects.create(name="Maize", category=Crop.CATEGORY_SUMMER)
+        # Wards come from the official register. A typed ward must match one of these.
+        for number in (2, 4, 9):
+            Ward.objects.create(district=self.district, name=f"Ward {number}")
 
     def client_for(self, user):
         client = APIClient()
@@ -41,6 +44,17 @@ class LeadClusterRegistrationTests(TestCase):
         }
         data.update(changes)
         return data
+
+    def test_an_administrator_registers_a_lead_farmer_only(self):
+        admin = User.objects.create_user(
+            email="root@example.com", username="root@example.com", password="StrongPass123!", role=User.ROLE_SUPER_ADMIN,
+        )
+        client = self.client_for(admin)
+        refused = client.post("/api/farmers/", {**self.lead_payload(), "as_lead": False}, format="json")
+        self.assertEqual(refused.status_code, 403)
+        created = client.post("/api/farmers/", self.lead_payload(national_id="63-9999999E99"), format="json")
+        self.assertEqual(created.status_code, 201, created.content)
+        self.assertTrue(created.data["is_lead"])
 
     def test_one_province_can_hold_two_lead_farmers_each_with_their_own_cluster(self):
         client = self.client_for(self.executive)

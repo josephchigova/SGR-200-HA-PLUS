@@ -349,3 +349,26 @@ class ManagementReadPermission(permissions.BasePermission):
         if request.method in permissions.SAFE_METHODS:
             return user.role in self.read_roles
         return user.role in self.write_roles
+
+
+class LeadFarmerPermission(permissions.BasePermission):
+    """Administrators register and manage lead farmers. Oversight roles may read."""
+
+    read_roles = {
+        User.ROLE_SUPER_ADMIN,
+        User.ROLE_SGR_EXECUTIVE,
+        User.ROLE_AUDITOR,
+        User.ROLE_MEMBERSHIP_OFFICER,
+        User.ROLE_VERIFICATION_OFFICER,
+    }
+    write_roles = {User.ROLE_SUPER_ADMIN, User.ROLE_SGR_EXECUTIVE}
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.is_superuser:
+            return True
+        if request.method in permissions.SAFE_METHODS:
+            return user.role in self.read_roles
+        return user.role in self.write_roles

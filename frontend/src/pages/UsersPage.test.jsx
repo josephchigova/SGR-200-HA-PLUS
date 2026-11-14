@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import apiClient from '../api/client'
@@ -8,24 +9,18 @@ vi.mock('../api/client', () => ({
   default: { get: vi.fn(), post: vi.fn(), patch: vi.fn() },
 }))
 
-const rudo = {
-  id: 7,
-  first_name: 'Rudo',
-  surname: 'Chikafu',
-  full_name: 'Rudo Chikafu',
-  province: 10,
-  province_name: 'Mashonaland West',
-  registered_province_ids: [10],
-  email: 'rudo@example.com',
-  phone_primary: '0771111111',
-  national_id: '11-111111-A-11',
-  membership_number: 'SGR-MW-000001',
+const leadAccount = {
+  id: 9, email: 'john@example.com', first_name: 'JOHN', last_name: 'MOYO', role: 'lead_farmer', role_label: 'Lead Farmer / Cluster Leader',
+  is_active: true, assigned_cluster: 3, cluster_name: 'JOHN MOYO', farmer: 7, last_login: null,
 }
 
-describe('UsersPage lead farmer accounts', () => {
+const renderPage = () => render(<UsersPage />, { wrapper: MemoryRouter })
+
+describe('UsersPage and lead farmer logins', () => {
   beforeEach(() => {
+    apiClient.patch.mockReset()
     apiClient.get.mockImplementation((url) => {
-      if (String(url).startsWith('/auth/users/')) return Promise.resolve({ data: { results: [], count: 0 } })
+      if (String(url).startsWith('/auth/users/')) return Promise.resolve({ data: { results: [leadAccount], count: 1 } })
       if (String(url).startsWith('/auth/roles/')) {
         return Promise.resolve({
           data: {
@@ -39,45 +34,33 @@ describe('UsersPage lead farmer accounts', () => {
           },
         })
       }
-      if (String(url).startsWith('/clusters/')) {
-        return Promise.resolve({
-          data: [
-            { id: 1, name: 'Chinhoyi Cluster', province: 10, province_name: 'Mashonaland West', lead_member: null },
-            { id: 2, name: 'Mutare Cluster', province: 20, province_name: 'Manicaland', lead_member: null },
-          ],
-        })
-      }
-      if (String(url).startsWith('/farmers/7')) return Promise.resolve({ data: rudo })
-      if (String(url).startsWith('/farmers/')) return Promise.resolve({ data: { results: [rudo], next: null } })
       return Promise.resolve({ data: [] })
     })
   })
 
-  it('asks for a registered farmer and only offers clusters in that province', async () => {
-    render(<UsersPage />)
+  it('does not offer the lead farmer role for a new account and points to the Lead farmers page', async () => {
+    renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Add account' }))
-    expect(screen.getByRole('textbox', { name: 'First name' })).toBeTruthy()
-    expect(screen.queryByRole('combobox', { name: 'Registered farmer' })).toBeNull()
+    const role = screen.getByRole('combobox', { name: 'Role' })
+    expect(within(role).queryByRole('option', { name: 'Lead Farmer / Cluster Leader' })).toBeNull()
+    expect(within(role).getByRole('option', { name: 'Membership Officer' })).toBeTruthy()
+    expect(role.disabled).toBe(false)
+    expect(screen.getByRole('link', { name: 'Lead farmers' }).getAttribute('href')).toBe('/clusters')
+    expect(screen.queryByRole('combobox', { name: 'Cluster' })).toBeNull()
+  })
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'lead_farmer' } })
-
-    expect(screen.queryByRole('textbox', { name: 'First name' })).toBeNull()
-    expect(screen.getByText(/only for someone already on the farmer register/)).toBeTruthy()
-    const cluster = screen.getByRole('combobox', { name: 'Cluster' })
-    expect(cluster.disabled).toBe(true)
-    expect(screen.queryByRole('option', { name: /Chinhoyi Cluster/ })).toBeNull()
-    expect(screen.queryByRole('option', { name: /Mutare Cluster/ })).toBeNull()
-
-    const farmer = screen.getByRole('combobox', { name: 'Registered farmer' })
-    fireEvent.change(farmer, { target: { value: 'Rudo' } })
-    fireEvent.click(await screen.findByRole('option', { name: /Rudo Chikafu/ }))
-
-    expect(screen.getByRole('textbox', { name: 'Email address' }).value).toBe('rudo@example.com')
-    expect(screen.getByRole('option', { name: /Chinhoyi Cluster/ })).toBeTruthy()
-    expect(screen.queryByRole('option', { name: /Mutare Cluster/ })).toBeNull()
-
-    fireEvent.change(screen.getByRole('combobox', { name: 'Role' }), { target: { value: 'membership_officer' } })
-    expect(screen.queryByRole('combobox', { name: 'Registered farmer' })).toBeNull()
-    expect(screen.getByRole('textbox', { name: 'First name' })).toBeTruthy()
+  it('keeps a lead farmer login tied to its cluster and never sends the cluster', async () => {
+    apiClient.patch.mockResolvedValue({ data: leadAccount })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit john@example.com' }))
+    expect(screen.getByRole('combobox', { name: 'Role' }).disabled).toBe(true)
+    expect(screen.getByText(/Cluster: JOHN MOYO/)).toBeTruthy()
+    expect(screen.queryByRole('combobox', { name: 'Cluster' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
+    await waitFor(() => expect(apiClient.patch).toHaveBeenCalled())
+    const [, payload] = apiClient.patch.mock.calls[0]
+    expect(payload).not.toHaveProperty('assigned_cluster')
+    expect(payload).not.toHaveProperty('farmer')
+    expect(payload).not.toHaveProperty('role')
   })
 })

@@ -3,6 +3,7 @@ from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 
+from apps.farmers.models import Farmer
 from apps.geography.models import District, Province, Ward
 from apps.programmes.models import Crop, CropInputRequirement, CropSellingPrice, Season
 
@@ -20,6 +21,15 @@ class GoldenPathSystemTest(TestCase):
         self.district = District.objects.create(province=self.province, name="Golden District")
         self.ward = Ward.objects.create(district=self.district, name="Golden Ward")
         self.client = APIClient()
+        # Ordinary farmers are registered by their lead farmer.
+        from apps.farmers.services import open_lead_cluster
+
+        leader = Farmer.objects.create(first_name="GOLDEN", surname="LEAD", national_id="63-9000000L90", province=self.province, district=self.district)
+        cluster = open_lead_cluster(leader)
+        self.lead_user = User.objects.create_user(
+            email="lead@example.test", username="lead-user", password="StrongPass123!", role=User.ROLE_LEAD_FARMER,
+            farmer=leader, assigned_cluster=cluster,
+        )
 
     @staticmethod
     def make_user(prefix, role):
@@ -34,13 +44,13 @@ class GoldenPathSystemTest(TestCase):
         self.client.force_authenticate(user=user)
 
     def test_golden_path_from_farmer_registration_to_dashboard_recovery(self):
-        self.authenticate_as(self.verification_user)
+        self.authenticate_as(self.lead_user)
         farmer_response = self.client.post(
             reverse("farmer-list"),
             {
                 "first_name": "Golden",
                 "surname": "Farmer",
-                "national_id": "63-1111111-X-01",
+                "national_id": "63-1111111X01",
                 "phone_primary": "0771111111",
                 "province": self.province.pk,
                 "district": self.district.pk,
@@ -53,6 +63,26 @@ class GoldenPathSystemTest(TestCase):
         self.assertEqual(farmer_response.status_code, 201, farmer_response.data)
         farmer_id = farmer_response.data["id"]
         farm_id = farmer_response.data["farms"][0]
+
+        # The lead farmer uploads the KYC documents and submits the registration.
+        from django.core.files.uploadedfile import SimpleUploadedFile
+
+        from apps.farmers import kyc
+
+        for code in kyc.required_codes_for(Farmer.objects.get(pk=farmer_id)):
+            upload = self.client.post(
+                "/api/farmer-documents/",
+                {"farmer": farmer_id, "document_type": code, "file": SimpleUploadedFile(f"{code}.pdf", b"%PDF-1.4 golden")},
+                format="multipart",
+            )
+            self.assertEqual(upload.status_code, 201, upload.data)
+        self.assertEqual(self.client.post(f"/api/farmers/{farmer_id}/submit/").status_code, 200)
+
+        # The officer checks each document before the decision.
+        self.authenticate_as(self.verification_user)
+        for document in Farmer.objects.get(pk=farmer_id).documents.all():
+            reviewed = self.client.post(f"/api/farmer-documents/{document.pk}/review/", {"review_status": "VERIFIED"}, format="json")
+            self.assertEqual(reviewed.status_code, 200, reviewed.data)
 
         verification_response = self.client.post(
             reverse("farmer-verify", kwargs={"pk": farmer_id}),
@@ -199,7 +229,8 @@ class GoldenPathSystemTest(TestCase):
         self.authenticate_as(self.dashboard_user)
         dashboard_response = self.client.get(reverse("dashboard-summary"))
         self.assertEqual(dashboard_response.status_code, 200, dashboard_response.data)
-        self.assertEqual(dashboard_response.data["registered_farmers"], 1)
+        # The lead farmer is on the register too, so the register holds two people.
+        self.assertEqual(dashboard_response.data["registered_farmers"], 2)
         self.assertEqual(float(dashboard_response.data["total_hectares"]), 12.5)
         self.assertEqual(float(dashboard_response.data["arda_requested_hectares"]), 10.0)
         self.assertNotIn("arda_approved_hectares", dashboard_response.data)

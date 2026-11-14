@@ -136,68 +136,38 @@ class AccessControlTests(TestCase):
         self.assertNotIn("password", created.json())
         self.assertTrue(User.objects.get(email="new@example.com").must_change_password)
 
-    def test_lead_farmer_account_requires_a_registered_farmer_in_that_province(self):
-        other_province = Province.objects.create(name="Manicaland", code="MN")
+    def test_lead_farmer_logins_are_not_created_on_the_team_page(self):
+        # A lead farmer's login is created with their register record and cluster on the Lead farmers page.
         home = Cluster.objects.create(name="Rudo Cluster", province=self.province)
-        away = Cluster.objects.create(name="Mutare Cluster", province=other_province)
-        plain = Cluster.objects.create(name="Plain Cluster", province=self.province)
-        blank = Farmer.objects.create(first_name="No", surname="Province", national_id="55-555555-E-55")
         client = self.client_for(self.admin)
-        base = {"password": "AnotherStrong123!", "role": User.ROLE_LEAD_FARMER}
-
-        missing = client.post("/api/auth/users/", {**base, "email": "typed@example.com", "assigned_cluster": home.id, "first_name": "Typed", "last_name": "Person"}, format="json")
-        self.assertEqual(missing.status_code, 400)
-        self.assertIn("farmer", missing.json())
-
-        no_province = client.post("/api/auth/users/", {**base, "email": "blank@example.com", "farmer": blank.id, "assigned_cluster": plain.id}, format="json")
-        self.assertEqual(no_province.status_code, 400)
-        self.assertIn("farmer", no_province.json())
-
-        wrong = client.post("/api/auth/users/", {**base, "email": "lead-new@example.com", "farmer": self.my_farmer.id, "assigned_cluster": away.id}, format="json")
-        self.assertEqual(wrong.status_code, 400)
-        self.assertIn("assigned_cluster", wrong.json())
+        refused = client.post("/api/auth/users/", {
+            "password": "AnotherStrong123!", "role": User.ROLE_LEAD_FARMER, "email": "lead-new@example.com",
+            "farmer": self.my_farmer.id, "assigned_cluster": home.id,
+        }, format="json")
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("role", refused.json())
         self.assertFalse(User.objects.filter(email="lead-new@example.com").exists())
-
-        created = client.post("/api/auth/users/", {**base, "email": "lead-new@example.com", "farmer": self.my_farmer.id, "assigned_cluster": home.id, "first_name": "Typed", "last_name": "Person"}, format="json")
-        self.assertEqual(created.status_code, 201, created.content)
-        account = User.objects.get(email="lead-new@example.com")
-        self.assertEqual(account.farmer_id, self.my_farmer.id)
-        self.assertEqual(account.first_name, "Rudo")
-        self.assertEqual(account.last_name, "Chikafu")
-        self.assertEqual(account.province_id, self.province.id)
-        home.refresh_from_db()
-        self.assertEqual(home.lead_farmer_id, account.id)
-
-        duplicate = client.post("/api/auth/users/", {**base, "email": "second@example.com", "farmer": self.my_farmer.id, "assigned_cluster": plain.id}, format="json")
-        self.assertEqual(duplicate.status_code, 400)
-        self.assertIn("farmer", duplicate.json())
-
-        Farm.objects.create(farmer=self.other_farmer, farm_name="East plot", province=other_province, total_hectares=1)
-        elsewhere = Cluster.objects.create(name="East Cluster", province=other_province)
-        farm_lead = client.post("/api/auth/users/", {**base, "email": "tatenda@example.com", "farmer": self.other_farmer.id, "assigned_cluster": elsewhere.id}, format="json")
-        self.assertEqual(farm_lead.status_code, 201, farm_lead.content)
-
-        officer = client.post("/api/auth/users/", {"email": "officer@example.com", "first_name": "A", "last_name": "B", "role": User.ROLE_MEMBERSHIP_OFFICER, "password": "AnotherStrong123!"}, format="json")
-        self.assertEqual(officer.status_code, 201, officer.content)
-        self.assertIsNone(User.objects.get(email="officer@example.com").farmer_id)
 
     def test_scoped_roles_need_their_assignment_and_admins_cannot_lock_themselves_out(self):
         client = self.client_for(self.admin)
-        missing = client.post("/api/auth/users/", {"email": "l@example.com", "role": User.ROLE_LEAD_FARMER, "password": "AnotherStrong123!"}, format="json")
+        missing = client.post("/api/auth/users/", {"email": "l@example.com", "role": User.ROLE_DISTRICT_COORDINATOR, "password": "AnotherStrong123!"}, format="json")
         self.assertEqual(missing.status_code, 400)
-        self.assertIn("assigned_cluster", missing.json())
+        self.assertIn("district", missing.json())
         self.assertEqual(client.patch(f"/api/auth/users/{self.admin.id}/", {"is_active": False}, format="json").status_code, 400)
         self.assertEqual(client.delete(f"/api/auth/users/{self.finance.id}/").status_code, 405)
 
     def test_profile_carries_the_permission_matrix(self):
         lead = self.client_for(self.lead).get("/api/auth/me/").json()
         self.assertTrue(lead["permissions"]["farmers"]["create"])
+        self.assertFalse(lead["permissions"]["lead_registration"]["create"])
         self.assertFalse(lead["permissions"]["farmers"]["delete"])
         self.assertFalse(lead["permissions"]["finance"]["view"])
         self.assertFalse(lead["permissions"]["users"]["view"])
         self.assertEqual(lead["cluster_name"], "Chinhoyi Cluster")
         admin = self.client_for(self.admin).get("/api/auth/me/").json()
         self.assertTrue(all(admin["permissions"][module]["view"] for module in admin["permissions"]))
+        self.assertFalse(admin["permissions"]["farmers"]["create"])
+        self.assertTrue(admin["permissions"]["lead_registration"]["create"])
         self.assertEqual(self.client_for(self.lead).patch("/api/auth/me/", {"role": "super_admin", "first_name": "Lead"}, format="json").status_code, 200)
         self.lead.refresh_from_db()
         self.assertEqual(self.lead.role, User.ROLE_LEAD_FARMER)

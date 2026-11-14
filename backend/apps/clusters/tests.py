@@ -1,9 +1,9 @@
 from django.contrib.auth import get_user_model
 from django.test import TestCase
-from django.urls import reverse
 from rest_framework.test import APIClient
 
 from apps.farmers.models import Farmer
+from apps.farmers.services import open_lead_cluster
 from apps.geography.models import District, Province
 
 from .models import Cluster
@@ -12,67 +12,33 @@ User = get_user_model()
 
 
 class ClusterLeadFarmerTests(TestCase):
+    """A cluster exists only as a lead farmer's group. It is never created on its own."""
+
     def setUp(self):
         self.user = User.objects.create_user(
-            email="clusters@example.com",
-            username="cluster-officer",
-            password="StrongPass123!",
-            role=User.ROLE_PROGRAMME_OFFICER,
+            email="clusters@example.com", username="cluster-officer", password="StrongPass123!", role=User.ROLE_SUPER_ADMIN,
         )
         self.client = APIClient()
         self.client.force_authenticate(self.user)
         self.province = Province.objects.create(name="Midlands", code="MD")
-        self.other = Province.objects.create(name="Manicaland", code="MN")
         self.district = District.objects.create(province=self.province, name="Gweru")
         self.leader = Farmer.objects.create(
-            first_name="Lead",
-            surname="Farmer",
-            national_id="63-2000001-A-00",
-            phone_primary="0772000001",
-            province=self.province,
-            district=self.district,
-        )
-        self.outsider = Farmer.objects.create(
-            first_name="Other",
-            surname="Province",
-            national_id="63-2000002-A-00",
-            phone_primary="0772000002",
-            province=self.other,
+            first_name="LEAD", surname="FARMER", national_id="63-2000001A00", phone_primary="0772000001",
+            province=self.province, district=self.district,
         )
 
-    def test_cluster_can_be_created_with_a_registered_lead_and_no_members(self):
-        response = self.client.post(reverse("cluster-list"), {
-            "name": "Gweru Central",
-            "province": self.province.pk,
-            "district": self.district.pk,
-            "lead_member": self.leader.pk,
-            "active": True,
-        }, format="json")
-        self.assertEqual(response.status_code, 201, response.data)
-        self.assertEqual(response.data["lead_farmer_name"], self.leader.full_name)
-        self.assertEqual(response.data["member_count"], 0)
-        self.assertEqual(Cluster.objects.get(name="Gweru Central").farmers.count(), 0)
+    def test_the_cluster_api_cannot_create_a_cluster(self):
+        response = self.client.post("/api/clusters/", {"name": "Midlands North", "province": self.province.pk, "lead_member": self.leader.pk}, format="json")
+        self.assertEqual(response.status_code, 405)
+        self.assertFalse(Cluster.objects.exists())
 
-    def test_lead_farmer_must_belong_to_the_cluster_province(self):
-        response = self.client.post(reverse("cluster-list"), {
-            "name": "Wrong Province",
-            "province": self.province.pk,
-            "lead_member": self.outsider.pk,
-        }, format="json")
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("lead_member", response.data)
-
-    def test_one_farmer_cannot_lead_two_active_clusters(self):
-        first = self.client.post(reverse("cluster-list"), {
-            "name": "Cluster A",
-            "province": self.province.pk,
-            "lead_member": self.leader.pk,
-        }, format="json")
-        self.assertEqual(first.status_code, 201, first.data)
-        second = self.client.post(reverse("cluster-list"), {
-            "name": "Cluster B",
-            "province": self.province.pk,
-            "lead_member": self.leader.pk,
-        }, format="json")
-        self.assertEqual(second.status_code, 400)
-        self.assertIn("lead_member", second.data)
+    def test_a_lead_farmer_opens_exactly_one_cluster_named_after_them(self):
+        first = open_lead_cluster(self.leader)
+        again = open_lead_cluster(self.leader)
+        self.assertEqual(first.pk, again.pk)
+        self.assertEqual(first.name, "LEAD FARMER")
+        self.assertEqual(first.lead_member, self.leader)
+        self.assertEqual(first.province, self.province)
+        listed = self.client.get("/api/clusters/").json()
+        rows = listed["results"] if isinstance(listed, dict) else listed
+        self.assertEqual([row["lead_farmer_name"] for row in rows], ["LEAD FARMER"])

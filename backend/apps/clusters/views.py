@@ -8,8 +8,11 @@ from .serializers import ClusterSerializer
 
 
 class ClusterViewSet(viewsets.ModelViewSet):
+    """Read-only. A cluster is created, named and changed only through its lead farmer (/api/lead-farmers/)."""
+
     serializer_class = ClusterSerializer
     permission_classes = [LocationReferencePermission]
+    http_method_names = ["get", "head", "options"]
 
     def get_queryset(self):
         queryset = Cluster.objects.select_related(

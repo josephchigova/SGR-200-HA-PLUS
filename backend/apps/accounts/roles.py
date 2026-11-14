@@ -13,6 +13,7 @@ from .permissions import (
     AuditReadPermission,
     FarmerWorkflowPermission,
     FinanceAccessPermission,
+    LeadFarmerPermission,
     LocationReferencePermission,
     ProgrammeWorkflowPermission,
     RecoveryWorkflowPermission,
@@ -30,15 +31,16 @@ MATRIX = {
     "dashboard": (ALL_ROLES, set(), set(), set(), set(), set()),
     "farmers": (
         FarmerWorkflowPermission.read_roles,
-        {User.ROLE_SUPER_ADMIN, User.ROLE_LEAD_FARMER},
+        # Ordinary farmers are registered by their lead farmer. Administrators register lead farmers.
+        {User.ROLE_LEAD_FARMER},
         FarmerWorkflowPermission.write_roles,
         FarmerWorkflowPermission.delete_roles,
         VerificationPermission.allowed_roles,
         FarmerWorkflowPermission.read_roles,
     ),
     "lead_registration": (
-        {User.ROLE_SUPER_ADMIN, User.ROLE_SGR_EXECUTIVE, User.ROLE_MEMBERSHIP_OFFICER},
-        {User.ROLE_SUPER_ADMIN, User.ROLE_SGR_EXECUTIVE, User.ROLE_MEMBERSHIP_OFFICER},
+        LeadFarmerPermission.write_roles,
+        LeadFarmerPermission.write_roles,
         set(), set(), set(), set(),
     ),
     "verification": (
@@ -47,12 +49,14 @@ MATRIX = {
         VerificationPermission.allowed_roles,
         VerificationPermission.allowed_roles | {User.ROLE_AUDITOR},
     ),
+    # Clusters are managed through lead farmers. A lead farmer sees only their own cluster on the dashboard.
     "clusters": (
-        # A lead farmer is tied to one cluster, so there is nothing to choose or manage here.
-        ALL_ROLES - {User.ROLE_PROCUREMENT_OFFICER, User.ROLE_STORES_OFFICER, User.ROLE_LEAD_FARMER},
-        LocationReferencePermission.write_roles,
-        LocationReferencePermission.write_roles,
-        ADMIN, set(), set(),
+        LeadFarmerPermission.read_roles,
+        LeadFarmerPermission.write_roles,
+        LeadFarmerPermission.write_roles,
+        set(),
+        LeadFarmerPermission.write_roles,
+        LeadFarmerPermission.read_roles,
     ),
     "subscriptions": (
         SubscriptionWorkflowPermission.read_roles,

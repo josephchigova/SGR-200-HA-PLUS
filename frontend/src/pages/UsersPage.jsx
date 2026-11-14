@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { Link } from 'react-router-dom'
+
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
-import FarmerAutocomplete from '../components/FarmerAutocomplete'
 import Icon from '../components/Icon'
 import { EmptyState, Modal, PageHead, Pill, Skeleton, errorMessage } from '../components/ui'
 
@@ -38,7 +39,6 @@ function UsersPage() {
   const [saving, setSaving] = useState(false)
   const [temporary, setTemporary] = useState(null)
   const [confirmReset, setConfirmReset] = useState(null)
-  const [selectedFarmer, setSelectedFarmer] = useState(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -62,15 +62,6 @@ function UsersPage() {
   }, [load])
 
   useEffect(() => {
-    if (form.role !== 'lead_farmer' || !form.farmer) return undefined
-    let active = true
-    apiClient.get(`/farmers/${form.farmer}/`).then((response) => {
-      if (active) setSelectedFarmer(response.data)
-    }).catch(() => {})
-    return () => { active = false }
-  }, [form.farmer, form.role])
-
-  useEffect(() => {
     apiClient.get('/auth/roles/').then((response) => setMatrix(response.data)).catch(() => {})
     Promise.all([
       apiClient.get('/clusters/?page_size=200'),
@@ -85,7 +76,6 @@ function UsersPage() {
 
   const openCreate = () => {
     setForm(EMPTY)
-    setSelectedFarmer(null)
     setFormError('')
     setEditing('new')
   }
@@ -96,7 +86,6 @@ function UsersPage() {
       role: user.role, is_active: user.is_active, assigned_cluster: user.assigned_cluster || '', district: user.district || '', province: user.province || '',
       farmer: user.farmer || '', password: '',
     })
-    setSelectedFarmer(null)
     setFormError('')
     setEditing(user)
   }
@@ -112,43 +101,29 @@ function UsersPage() {
       district: role === 'district_coordinator' ? current.district : '',
       province: role === 'provincial_coordinator' ? current.province : '',
     }))
-    if (role !== 'lead_farmer') setSelectedFarmer(null)
   }
 
-  const chooseLeadFarmer = (farmer) => {
-    setSelectedFarmer(farmer)
-    const provinceIds = new Set((farmer?.registered_province_ids || (farmer?.province ? [farmer.province] : [])).map(String))
-    const led = farmer
-      ? options.clusters.find((cluster) => String(cluster.lead_member) === String(farmer.id) && provinceIds.has(String(cluster.province)))
-      : null
-    setForm((current) => ({
-      ...current,
-      farmer: farmer ? String(farmer.id) : '',
-      first_name: farmer?.first_name || '',
-      last_name: farmer?.surname || '',
-      phone_number: farmer?.phone_primary || '',
-      email: farmer ? (farmer.email || '') : '',
-      province: farmer?.province ? String(farmer.province) : '',
-      assigned_cluster: led ? String(led.id) : '',
-    }))
-  }
+  const isLeadAccount = editing !== null && editing !== 'new' && editing?.role === 'lead_farmer'
 
   const save = async (event) => {
     event.preventDefault()
-    if (form.role === 'lead_farmer' && !form.farmer) {
-      setFormError('Choose a registered farmer. A lead farmer account is only for someone already on the register.')
-      return
-    }
     setSaving(true)
     setFormError('')
     const payload = {
       ...form,
-      farmer: form.role === 'lead_farmer' ? Number(form.farmer) : null,
-      assigned_cluster: form.assigned_cluster || null,
+      assigned_cluster: null,
       district: form.district || null,
       province: form.province || null,
     }
     if (!payload.password) delete payload.password
+    delete payload.farmer
+    if (isLeadAccount) {
+      // Who the lead farmer is and which cluster they own are fixed. Only contact details and access change here.
+      delete payload.assigned_cluster
+      delete payload.role
+      delete payload.first_name
+      delete payload.last_name
+    }
     try {
       if (editing === 'new') {
         await apiClient.post('/auth/users/', payload)
@@ -188,10 +163,6 @@ function UsersPage() {
   }
 
   const pages = Math.max(Math.ceil(count / 25), 1)
-  const leadProvinceIds = new Set((selectedFarmer?.registered_province_ids || (selectedFarmer?.province ? [selectedFarmer.province] : form.province ? [form.province] : [])).map(String))
-  const leadClusters = form.role === 'lead_farmer' && form.farmer
-    ? options.clusters.filter((cluster) => leadProvinceIds.has(String(cluster.province)))
-    : []
 
   return (
     <div className="page-card">
@@ -309,53 +280,33 @@ function UsersPage() {
           )}
         >
           <form id="user-form" className="form-grid" onSubmit={save}>
+            <div className="form-field">
             <label>Role
-              <select value={form.role} disabled={editing !== 'new' && editing.id === profile?.id} onChange={(event) => changeRole(event.target.value)}>
-                {roles.map((role) => <option key={role.role} value={role.role}>{role.label}</option>)}
+              <select value={form.role} disabled={(editing !== 'new' && editing.id === profile?.id) || isLeadAccount} onChange={(event) => changeRole(event.target.value)}>
+                {roles.filter((role) => role.role !== 'lead_farmer' || isLeadAccount).map((role) => <option key={role.role} value={role.role}>{role.label}</option>)}
               </select>
             </label>
-            {form.role === 'lead_farmer' ? (
-              <div className="full-width">
-                <FarmerAutocomplete label="Registered farmer" required value={form.farmer} onChange={chooseLeadFarmer} />
-                <span className="field-hint">A lead farmer account is only for someone already on the farmer register. Other accounts are not.</span>
-              </div>
+              {isLeadAccount
+                ? <span className="field-hint">A lead farmer login keeps its role, because the cluster belongs to it.</span>
+                : <span className="field-hint">Lead farmers are registered on the <Link to="/clusters">Lead farmers</Link> page, with their cluster.</span>}
+            </div>
+            {isLeadAccount ? (
+              <p className="field-hint full-width">
+                {form.first_name} {form.last_name} · Cluster: {editing.cluster_name || '—'}. The name follows the lead farmer’s register record.
+                {' '}<Link to="/clusters">Manage on the Lead farmers page</Link>.
+              </p>
             ) : (
               <>
                 <label>First name<input required value={form.first_name} onChange={(event) => setForm({ ...form, first_name: event.target.value })} /></label>
                 <label>Last name<input required value={form.last_name} onChange={(event) => setForm({ ...form, last_name: event.target.value })} /></label>
               </>
             )}
-            {form.role === 'lead_farmer' && form.first_name ? (
-              <p className="field-hint full-width">{form.first_name} {form.last_name}{selectedFarmer?.province_name ? ` · ${selectedFarmer.province_name}` : ''}</p>
-            ) : null}
             <div>
               <label>Email address
                 <input type="email" required value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} />
               </label>
-              {form.role === 'lead_farmer' ? <span className="field-hint">Sign-in address. Filled from the register when the farmer has one.</span> : null}
             </div>
             <label>Phone number<input type="tel" value={form.phone_number} onChange={(event) => setForm({ ...form, phone_number: event.target.value })} /></label>
-            {form.role === 'lead_farmer' ? (
-              <div>
-                {options.clusters.some((cluster) => String(cluster.lead_member) === String(form.farmer)) ? (
-                  <p className="field-hint">Cluster: {options.clusters.find((cluster) => String(cluster.lead_member) === String(form.farmer))?.name}. The cluster is this lead farmer. It is assigned automatically.</p>
-                ) : (
-                  <>
-                    <label>Cluster
-                      <select required disabled={!form.farmer} value={form.assigned_cluster} onChange={(event) => setForm({ ...form, assigned_cluster: event.target.value })}>
-                        <option value="">{form.farmer ? 'Select a cluster in their province' : 'Choose a registered farmer first'}</option>
-                        {leadClusters.map((cluster) => <option key={cluster.id} value={cluster.id}>{cluster.name}{cluster.province_name ? ` (${cluster.province_name})` : ''}</option>)}
-                      </select>
-                    </label>
-                    <span className="field-hint">
-                      {form.farmer && !leadClusters.length
-                        ? 'Register this person as a lead farmer first. Their cluster is created from that registration.'
-                        : 'A lead farmer can only lead a cluster in their own province, and only sees farmers in that cluster.'}
-                    </span>
-                  </>
-                )}
-              </div>
-            ) : null}
             {form.role === 'district_coordinator' ? (
               <label>District
                 <select required value={form.district} onChange={(event) => setForm({ ...form, district: event.target.value })}>

@@ -15,6 +15,38 @@ class OptionalCoordinateField(serializers.DecimalField):
         return super().to_internal_value(data)
 
 
+def _registered_ward(district, typed):
+    """Find the ward the user meant: "Ward 5", "5" or "ward 05" all mean ward 5."""
+    import re as _re
+
+    from apps.geography.models import Ward
+
+    wards = list(Ward.objects.filter(district=district, active=True))
+    wanted = " ".join(typed.split()).casefold()
+    for ward in wards:
+        if ward.name.casefold() == wanted:
+            return ward
+    number = _re.search(r"\d+", typed)
+    if number:
+        for ward in wards:
+            found = _re.search(r"\d+", ward.name)
+            if found and int(found.group()) == int(number.group()):
+                return ward
+    raise serializers.ValidationError({"ward": [f"{typed} is not a ward of {district.name} on the official register. Choose a ward from the list."]})
+
+
+def _follow_lead_name(farmer):
+    """A lead farmer's cluster and login carry the lead farmer's current name."""
+    from apps.accounts.models import User
+    from apps.clusters.models import Cluster
+
+    from .services import sync_cluster_name
+
+    for cluster in Cluster.objects.filter(lead_member=farmer):
+        sync_cluster_name(cluster)
+    User.objects.filter(farmer=farmer).update(first_name=farmer.first_name, last_name=farmer.surname)
+
+
 def validate_geographic_scope(serializer, *, province=None, district=None, cluster=None):
     request = serializer.context.get("request")
     user = getattr(request, "user", None)
@@ -191,6 +223,9 @@ class FarmSerializer(serializers.ModelSerializer):
         province = attrs.get("province", getattr(instance, "province", None))
         district = attrs.get("district", getattr(instance, "district", None))
         ward = attrs.get("ward", getattr(instance, "ward", None))
+        if owner is not None:
+            # A farm belongs to its farmer's lead farmer. It is never moved to another cluster on its own.
+            attrs["cluster"] = owner.cluster
         cluster = attrs.get("cluster", getattr(instance, "cluster", None))
         if district and province and district.province_id != province.pk:
             raise serializers.ValidationError({"district": ["District does not belong to the selected province."]})
@@ -374,6 +409,10 @@ class FarmerSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"district": [f"You can only register farmers in {cluster.district.name}."]})
             if self.instance is not None and self.instance.verification_status not in EDITABLE_BY_REGISTRAR:
                 raise serializers.ValidationError({"detail": ["This registration is with the administrator. It can be changed only if corrections are requested."]})
+        else:
+            # Nobody else picks a cluster. A farmer joins a cluster when its lead farmer registers them,
+            # and moves only through the administrator's audited reassignment.
+            attrs.pop("cluster", None)
         strict = attrs.get("as_draft") or lead
         if strict:
             # New registrations use capital letters and the national ID format 63-2330173E58.
@@ -388,11 +427,9 @@ class FarmerSerializer(serializers.ModelSerializer):
             district = attrs.get("district", getattr(self.instance, "district", None))
             if typed_ward:
                 if district is None:
-                    raise serializers.ValidationError({"ward_text": ["Choose the district before entering the ward."]})
-                from apps.geography.models import Ward
-
-                ward, _created = Ward.objects.get_or_create(district=district, name=typed_ward)
-                attrs["ward"] = ward
+                    raise serializers.ValidationError({"ward_text": ["Choose the district before the ward."]})
+                # Wards come from the official register only. A typed value must match one of them.
+                attrs["ward"] = _registered_ward(district, typed_ward)
             else:
                 attrs.pop("ward_text", None)
             ward = attrs.get("ward", getattr(self.instance, "ward", None))
@@ -556,6 +593,8 @@ class FarmerSerializer(serializers.ModelSerializer):
             from .services import open_lead_cluster
 
             open_lead_cluster(farmer)
+        if farmer.is_lead:
+            _follow_lead_name(farmer)
         if crop_rows is not None:
             self._save_crops(farmer, crop_rows)
         return farmer

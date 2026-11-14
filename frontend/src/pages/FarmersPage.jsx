@@ -106,6 +106,7 @@ function FarmersPage() {
   const groups = useMemo(() => groupsOf(farmers), [farmers])
 
   useEffect(() => {
+    if (leadFarmer) return undefined
     let active = true
     loadClusters()
       .then((clusters) => {
@@ -115,7 +116,7 @@ function FarmersPage() {
         if (active) setLeads([])
       })
     return () => { active = false }
-  }, [])
+  }, [leadFarmer])
 
   useEffect(() => {
     if (!hasInitializedSearch.current) {
@@ -175,26 +176,28 @@ function FarmersPage() {
         </div>
       </div>
 
-      <div className="farmers-filters">
-        <label className="form-field">
-          Lead farmer
-          <select
-            value={lead}
-            onChange={(event) => {
-              setCurrentPage(1)
-              setLead(event.target.value)
-            }}
-          >
-            <option value="">All lead farmers</option>
-            {leads.map((choice) => (
-              <option key={choice.id} value={choice.id}>
-                {choice.cluster ? `${choice.name} · ${choice.cluster}` : choice.name}
-              </option>
-            ))}
-            <option value="none">No lead farmer</option>
-          </select>
-        </label>
-      </div>
+      {leadFarmer ? null : (
+        <div className="farmers-filters">
+          <label className="form-field">
+            Lead farmer
+            <select
+              value={lead}
+              onChange={(event) => {
+                setCurrentPage(1)
+                setLead(event.target.value)
+              }}
+            >
+              <option value="">All lead farmers</option>
+              {leads.map((choice) => (
+                <option key={choice.id} value={choice.id}>
+                  {choice.cluster ? `${choice.name} · ${choice.cluster}` : choice.name}
+                </option>
+              ))}
+              <option value="none">No lead farmer</option>
+            </select>
+          </label>
+        </div>
+      )}
 
       <div className="chip-row" role="group" aria-label="Registration status">
         {FILTERS.map(([value, label]) => (

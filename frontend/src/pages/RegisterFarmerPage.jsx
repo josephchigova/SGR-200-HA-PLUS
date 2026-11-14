@@ -156,7 +156,7 @@ function RegisterFarmerPage() {
             email: record.email || '', gender: record.gender || '',
             farmer_type: record.farmer_type || 'EXISTING',
             province: String(record.province || next.province || ''), district: String(record.district || next.district || ''),
-            ward: record.ward_name || '', cluster: String(record.cluster || next.cluster || ''),
+            ward: String(record.ward || ''), cluster: String(record.cluster || next.cluster || ''),
             total_hectares: farm.total_hectares ? String(Number(farm.total_hectares)) : '',
             irrigated_hectares: String(irrigated), dryland_hectares: String(Math.max(arable - irrigated, 0)),
             irrigation_type: IRRIGATION.some(([code]) => code === farm.irrigation_type) ? farm.irrigation_type : 'CENTRE_PIVOT',
@@ -194,6 +194,22 @@ function RegisterFarmerPage() {
     })
     return () => { active = false }
   }, [form.province, locked])
+
+  // Wards follow the district, from the official ward register.
+  useEffect(() => {
+    if (!form.district) return undefined
+    let active = true
+    setLoadingOptions((current) => ({ ...current, wards: true }))
+    loadAll(`/wards/?district=${form.district}&page_size=200`).then((wards) => {
+      const number = (ward) => Number(String(ward.name).replace(/\D/g, '')) || 0
+      if (active) setOptions((current) => ({ ...current, wards: wards.sort((a, b) => number(a) - number(b) || a.name.localeCompare(b.name)) }))
+    }).catch(() => {
+      if (active) setError('The wards could not be loaded. Check your connection and choose the district again.')
+    }).finally(() => {
+      if (active) setLoadingOptions((current) => ({ ...current, wards: false }))
+    })
+    return () => { active = false }
+  }, [form.district])
 
   const errorsOne = useMemo(() => personalErrors(form), [form])
   const errorsTwo = useMemo(() => farmErrors(form), [form])
@@ -234,7 +250,7 @@ function RegisterFarmerPage() {
     first_name: form.first_name.trim(), middle_name: form.middle_name.trim(), surname: form.surname.trim(),
     national_id: form.national_id, farm_name: form.farm_name.trim(), phone_primary: phoneDigits(form.phone_primary),
     email: form.email.trim(), gender: form.gender,
-    province: form.province, district: form.district, ward_text: form.ward.trim(),
+    province: form.province, district: form.district, ward: form.ward,
     farmer_type: form.farmer_type || 'EXISTING',
     ...(asLead ? { as_lead: true } : {}),
     total_hectares: form.total_hectares, arable_hectares: String(arable), irrigated_hectares: form.irrigated_hectares || '0',
@@ -486,7 +502,7 @@ function RegisterFarmerPage() {
 
       {step === 1 && !reviewing ? (
         <section className="card">
-          <div className="card-head"><div><p className="eyebrow">Step 2 of 4</p><h3>Farm details</h3><p className="card-sub">Choose the province and district, then type the ward.</p></div></div>
+          <div className="card-head"><div><p className="eyebrow">Step 2 of 4</p><h3>Farm details</h3><p className="card-sub">Choose the province, district and ward from the official lists, then record the land.</p></div></div>
           <div className="form-grid three">
             <SearchSelect
               label="Province" required value={form.province} disabled={locked}
@@ -501,7 +517,13 @@ function RegisterFarmerPage() {
               onChange={(value) => change('district', value)} placeholder={form.province ? 'Choose district' : 'Choose a province first'}
               error={touched.district ? errorsTwo.district : ''} hint={locked && context.district ? 'Set by your cluster.' : ''}
             />
-            <Field label="Ward" name="ward" errors={errorsTwo} required disabled={!form.district} autoComplete="off" maxLength={120} placeholder={form.district ? 'Type the ward' : 'Choose a district first'} hint="Type the ward. It is not chosen from a list." {...fieldProps} />
+            <SearchSelect
+              label="Ward" required value={form.ward} disabled={!form.district} loading={loadingOptions.wards}
+              options={form.district ? options.wards.map((item) => ({ value: item.id, label: item.name })) : []}
+              onChange={(value) => change('ward', value)} placeholder={form.district ? 'Choose ward' : 'Choose a district first'}
+              error={touched.ward ? errorsTwo.ward : ''}
+              emptyText="No wards are recorded for this district. Ask an administrator to load the official ward list."
+            />
             <Field label="Total farm size (ha)" name="total_hectares" errors={errorsTwo} required type="number" min="0" step="0.01" inputMode="decimal" {...fieldProps} />
             <Field label="Arable irrigated (ha)" name="irrigated_hectares" errors={errorsTwo} required type="number" min="0" step="0.01" inputMode="decimal" {...fieldProps} />
             <Field label="Arable dryland (ha)" name="dryland_hectares" errors={errorsTwo} required type="number" min="0" step="0.01" inputMode="decimal" {...fieldProps} />
@@ -604,7 +626,7 @@ function RegisterFarmerPage() {
               ['Name', fullName], ['National ID', form.national_id], ['Farmer type', form.farmer_type === 'NEW' ? 'New farmer' : 'Existing farmer'], ['Phone', form.phone_primary], ['Email', form.email || '—'], ['Farm name', form.farm_name],
             ]} />
             <ReviewBlock title="Farm" onEdit={() => goTo(1)} rows={[
-              ['Province', nameOf(options.provinces, form.province)], ['District', nameOf(options.districts, form.district)], ['Ward', form.ward || '—'],
+              ['Province', nameOf(options.provinces, form.province)], ['District', nameOf(options.districts, form.district)], ['Ward', nameOf(options.wards, form.ward)],
               ['Cluster', context.cluster?.name || (asLead ? 'Created from the lead farmer’s name' : '—')],
               ['Total farm size', `${form.total_hectares} ha`], ['Arable irrigated', `${form.irrigated_hectares} ha`], ['Arable dryland', `${form.dryland_hectares} ha`],
               ['Coordinates', form.latitude !== '' ? `${form.latitude}, ${form.longitude}` : 'Not recorded'],

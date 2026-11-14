@@ -44,6 +44,38 @@ def _lead_name(farmer):
     return f"{user.first_name} {user.last_name}".strip() or user.email
 
 
+def normalize_national_id(value):
+    """63-2330173E58, 632330173e58 and 63 2330173 E 58 are the same person."""
+    return re.sub(r"[^0-9A-Z]", "", str(value or "").upper())
+
+
+def find_registered_farmer(national_id, exclude_pk=None):
+    """The farmer already holding this national ID, whatever its punctuation."""
+    from django.db.models import Value
+    from django.db.models.functions import Replace, Upper
+
+    key = normalize_national_id(national_id)
+    if not key:
+        return None
+    stripped = Upper("national_id")
+    for character in ("-", " ", "/", "."):
+        stripped = Replace(stripped, Value(character), Value(""))
+    queryset = Farmer.objects.annotate(_national_key=stripped).filter(_national_key=key)
+    if exclude_pk:
+        queryset = queryset.exclude(pk=exclude_pk)
+    return queryset.select_related("cluster__lead_member", "cluster__lead_farmer").order_by("pk").first()
+
+
+def duplicate_message(existing):
+    """Names the owning lead farmer and nothing else about the person."""
+    if existing.is_lead:
+        return "This person is already registered as a lead farmer. Please contact the Administrator."
+    leader = _lead_name(existing)
+    if leader:
+        return f"This farmer is already registered under Lead Farmer {leader}. Please contact the Administrator if reassignment is required."
+    return "This farmer is already on the register. Please contact the Administrator if they should join a cluster."
+
+
 class FarmerRegistrationService:
     @staticmethod
     def validate(data, farmer_id=None):
@@ -77,18 +109,10 @@ class FarmerRegistrationService:
             errors["national_id"] = ["National ID is required."]
         elif not re.fullmatch(r"[A-Za-z0-9/-]{5,30}", national_id):
             errors["national_id"] = ["Enter 5-30 letters or digits; hyphens and slashes are allowed."]
-        elif Farmer.objects.filter(national_id=national_id).exclude(pk=farmer_id).exists():
-            existing = (
-                Farmer.objects.filter(national_id=national_id)
-                .exclude(pk=farmer_id)
-                .select_related("cluster__lead_member", "cluster__lead_farmer")
-                .first()
-            )
-            leader = _lead_name(existing)
-            errors["national_id"] = [
-                f"This farmer is already registered. {leader} is the lead farmer for this farmer."
-                if leader else "This farmer is already registered."
-            ]
+        else:
+            existing = find_registered_farmer(national_id, exclude_pk=farmer_id)
+            if existing is not None:
+                errors["national_id"] = [duplicate_message(existing)]
 
         if not phone_primary:
             errors["phone_primary"] = ["Phone number is required."]
@@ -265,6 +289,36 @@ class FarmerApprovalEligibilityService:
         )
 
 
+def cluster_name_for(farmer, exclude_pk=None):
+    """A cluster is called after its lead farmer. Two leads with the same name are told apart by membership number."""
+    from apps.clusters.models import Cluster
+
+    name = (farmer.full_name or f"Lead farmer {farmer.pk}").strip()
+    taken = Cluster.objects.filter(name=name)
+    if exclude_pk:
+        taken = taken.exclude(pk=exclude_pk)
+    if not taken.exists():
+        return name
+    name = f"{name} ({farmer.membership_number or farmer.pk})"
+    suffix = 2
+    base = name
+    while Cluster.objects.filter(name=name).exclude(pk=exclude_pk or 0).exists():
+        name = f"{base} {suffix}"
+        suffix += 1
+    return name
+
+
+def sync_cluster_name(cluster):
+    """Keep the cluster's stored name equal to its lead farmer's current name."""
+    if cluster is None or not cluster.lead_member_id:
+        return cluster
+    name = cluster_name_for(cluster.lead_member, exclude_pk=cluster.pk)
+    if cluster.name != name:
+        cluster.name = name
+        cluster.save(update_fields=["name", "updated_at"])
+    return cluster
+
+
 def open_lead_cluster(farmer):
     """The lead farmer is the cluster. The cluster name is the lead farmer's name."""
     from apps.clusters.models import Cluster
@@ -272,21 +326,52 @@ def open_lead_cluster(farmer):
     farmer.is_lead = True
     existing = Cluster.objects.filter(lead_member=farmer, active=True).first()
     if existing is None:
-        name = farmer.full_name or f"Lead farmer {farmer.pk}"
-        base = name
-        suffix = 2
-        while Cluster.objects.filter(name=name).exists():
-            name = f"{base} ({suffix})"
-            suffix += 1
         existing = Cluster.objects.create(
-            name=name,
+            name=cluster_name_for(farmer),
             province=farmer.province,
             district=None,
             lead_member=farmer,
         )
+    else:
+        sync_cluster_name(existing)
     farmer.cluster = existing
     farmer.save(update_fields=["is_lead", "cluster", "updated_at"])
     return existing
+
+
+def reassign_farmer(farmer, target_cluster, actor, reason):
+    """Move a farmer to another lead farmer. Only an administrator calls this, and it is always recorded."""
+    from django.db import transaction
+
+    from apps.accounts import audit
+    from apps.accounts.models import AuditLog
+
+    from .kyc import record_event
+    from .models import FarmerReviewEvent
+
+    reason = " ".join(str(reason or "").split())
+    if not reason:
+        raise ValueError("Give the reason for moving this farmer.")
+    if farmer.is_lead:
+        raise ValueError("A lead farmer cannot be moved into another cluster.")
+    if target_cluster is None or not target_cluster.lead_member_id:
+        raise ValueError("Choose the lead farmer who will take over this farmer.")
+    if not target_cluster.active:
+        raise ValueError("That lead farmer's cluster is not active.")
+    if farmer.cluster_id == target_cluster.pk:
+        raise ValueError("The farmer already belongs to that lead farmer.")
+    if farmer.province_id and target_cluster.province_id and farmer.province_id != target_cluster.province_id:
+        raise ValueError("A lead farmer can only hold farmers in their own province.")
+    previous = _lead_name(farmer) or "no lead farmer"
+    with transaction.atomic():
+        locked = Farmer.objects.select_for_update().get(pk=farmer.pk)
+        locked.cluster = target_cluster
+        locked.save(update_fields=["cluster", "updated_at"])
+        locked.farms.update(cluster=target_cluster)
+        summary = f"From {previous} to {target_cluster.lead_member.full_name}. Reason: {reason}"
+        record_event(locked, FarmerReviewEvent.REASSIGNED, actor, summary)
+        audit.record(user=actor, action=AuditLog.ACTION_UPDATE, module="lead-farmers", object_id=locked.pk, summary=f"Reassigned farmer #{locked.pk}. {summary}"[:255])
+    return locked
 
 
 def replace_crop_allocations(farmer, rows):

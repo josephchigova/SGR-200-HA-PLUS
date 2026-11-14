@@ -29,6 +29,16 @@ class FarmerVerificationActionTests(TestCase):
         self.province = Province.objects.create(name="Mashonaland Central", code="MC")
         self.district = District.objects.create(province=self.province, name="Bindura")
         self.ward = Ward.objects.create(district=self.district, name="Ward 1")
+        # Only a lead farmer registers farmers, so registration checks run as one.
+        from apps.farmers.services import open_lead_cluster
+
+        leader = Farmer.objects.create(first_name="BINDURA", surname="LEAD", national_id="63-7000000B70", province=self.province)
+        self.lead_user = User.objects.create_user(
+            email="lead-bindura@example.com", username="lead-bindura", password="StrongPass123!",
+            role=User.ROLE_LEAD_FARMER, farmer=leader, assigned_cluster=open_lead_cluster(leader),
+        )
+        self.lead_client = APIClient()
+        self.lead_client.force_authenticate(user=self.lead_user)
         self.farmer = Farmer.objects.create(
             first_name="Tapiwa",
             surname="Moyo",
@@ -70,10 +80,10 @@ class FarmerVerificationActionTests(TestCase):
         self.assertEqual(self.farm.verified_by, self.user)
 
     def test_farmer_registration_creates_submitted_farmer_and_farm(self):
-        response = self.client.post(
+        response = self.lead_client.post(
             reverse("farmer-list"),
             {
-                "first_name": "Kundai", "surname": "Moyo", "national_id": "63-3456789-X-01",
+                "first_name": "Kundai", "surname": "Moyo", "national_id": "63-3456789X01",
                 "phone_primary": "0771234568", "province": self.province.pk, "district": self.district.pk,
                 "ward": self.ward.pk, "farm_name": "Kundai Farm", "total_hectares": "6.25",
                 "arable_hectares": "4.75", "irrigated_hectares": "2.25",
@@ -83,16 +93,18 @@ class FarmerVerificationActionTests(TestCase):
 
         self.assertEqual(response.status_code, 201, response.data)
         registered = Farmer.objects.get(pk=response.data["id"])
-        self.assertEqual(registered.verification_status, Farmer.STATUS_SUBMITTED)
+        # A lead farmer's registration is a draft until its KYC documents are uploaded and it is submitted.
+        self.assertEqual(registered.verification_status, Farmer.STATUS_DRAFT)
+        self.assertEqual(registered.registered_by, self.lead_user)
         self.assertEqual(registered.farms.get().total_hectares, 6.25)
         self.assertEqual(registered.farms.get().arable_hectares, 4.75)
         self.assertEqual(registered.farms.get().irrigated_hectares, 2.25)
 
     def test_farmer_registration_rejects_arable_hectares_above_total(self):
-        response = self.client.post(
+        response = self.lead_client.post(
             reverse("farmer-list"),
             {
-                "first_name": "Area", "surname": "Farmer", "national_id": "63-8888888-X-01",
+                "first_name": "Area", "surname": "Farmer", "national_id": "63-8888888X01",
                 "phone_primary": "0778888888", "province": self.province.pk, "district": self.district.pk,
                 "ward": self.ward.pk, "total_hectares": "10.00", "arable_hectares": "10.01",
             },
@@ -102,10 +114,10 @@ class FarmerVerificationActionTests(TestCase):
         self.assertIn("arable_hectares", response.data)
 
     def test_farmer_registration_rejects_irrigated_hectares_above_arable(self):
-        response = self.client.post(
+        response = self.lead_client.post(
             reverse("farmer-list"),
             {
-                "first_name": "Irrigated", "surname": "Farmer", "national_id": "63-8888888-X-02",
+                "first_name": "Irrigated", "surname": "Farmer", "national_id": "63-8888888X02",
                 "phone_primary": "0778888889", "province": self.province.pk, "district": self.district.pk,
                 "ward": self.ward.pk, "total_hectares": "10.00", "arable_hectares": "5.00",
                 "irrigated_hectares": "5.01",
@@ -140,7 +152,7 @@ class FarmerVerificationActionTests(TestCase):
         self.assertEqual(delete_response.status_code, 204)
 
     def test_farmer_registration_rejects_duplicate_national_id(self):
-        response = self.client.post(
+        response = self.lead_client.post(
             reverse("farmer-list"),
             {
                 "first_name": "Another", "surname": "Farmer", "national_id": self.farmer.national_id,
@@ -155,15 +167,15 @@ class FarmerVerificationActionTests(TestCase):
 
     def test_farmer_registration_hectare_equivalence_partitions(self):
         base_payload = {
-            "first_name": "Partition", "surname": "Farmer", "national_id": "63-4444444-X-01",
+            "first_name": "Partition", "surname": "Farmer", "national_id": "63-4444444X01",
             "phone_primary": "0771234511", "province": self.province.pk, "district": self.district.pk,
             "ward": self.ward.pk,
         }
         for index, amount in enumerate(("0", "-1", "not-a-number")):
             with self.subTest(amount=amount):
-                response = self.client.post(
+                response = self.lead_client.post(
                     reverse("farmer-list"),
-                    {**base_payload, "national_id": f"63-4444444-X-{index + 1:02d}", "total_hectares": amount},
+                    {**base_payload, "national_id": f"63-4444444X{index + 1:02d}", "total_hectares": amount},
                     format="json",
                 )
                 self.assertEqual(response.status_code, 400)
@@ -172,7 +184,7 @@ class FarmerVerificationActionTests(TestCase):
         valid_payload = {
             "first_name": "Valid",
             "surname": "Farmer",
-            "national_id": "63-1111111-X-01",
+            "national_id": "63-1111111X01",
             "phone_primary": "0771234567",
             "province": self.province.pk,
             "district": self.district.pk,
@@ -198,17 +210,17 @@ class FarmerVerificationActionTests(TestCase):
 
         for index, (field, value) in enumerate(invalid_cases):
             with self.subTest(field=field):
-                payload = {**valid_payload, "national_id": f"63-1111111-X-{index + 2:02d}", field: value}
-                response = self.client.post(reverse("farmer-list"), payload, format="json")
+                payload = {**valid_payload, "national_id": f"63-1111111X{index + 2:02d}", field: value}
+                response = self.lead_client.post(reverse("farmer-list"), payload, format="json")
                 self.assertEqual(response.status_code, 400, response.data)
 
     def test_farmer_registration_rejects_district_from_another_province(self):
         other_province = Province.objects.create(name="Bulawayo", code="BU")
         other_district = District.objects.create(province=other_province, name="Bulawayo Central")
-        response = self.client.post(
+        response = self.lead_client.post(
             reverse("farmer-list"),
             {
-                "first_name": "Valid", "surname": "Farmer", "national_id": "63-5555555-X-77",
+                "first_name": "Valid", "surname": "Farmer", "national_id": "63-5555555X77",
                 "phone_primary": "0775555555", "province": self.province.pk,
                 "district": other_district.pk, "ward": self.ward.pk, "total_hectares": "5.00",
             },
@@ -265,13 +277,13 @@ class FarmerVerificationActionTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.data["results"]), 1)
         self.assertEqual(response.data["results"][0]["id"], self.farmer.pk)
-        other_farmer = Farmer.objects.exclude(pk=self.farmer.pk).get()
+        other_farmer = Farmer.objects.exclude(pk=self.farmer.pk).exclude(is_lead=True).get()
         detail_response = self.client.get(reverse("farmer-detail", kwargs={"pk": other_farmer.pk}))
         self.assertEqual(detail_response.status_code, 404)
-        create_response = self.client.post(
+        create_response = self.lead_client.post(
             reverse("farmer-list"),
             {
-                "first_name": "Outside", "surname": "District", "national_id": "63-9876543-Z-92",
+                "first_name": "Outside", "surname": "District", "national_id": "63-9876543Z92",
                 "phone_primary": "0771999001", "province": other_province.pk, "district": other_district.pk,
                 "ward": other_ward.pk, "total_hectares": "5.00",
             },
@@ -286,7 +298,8 @@ class FarmerVerificationActionTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("registered_farmers", response.data)
-        self.assertEqual(response.data["registered_farmers"], 1)
+        # The test farmer and the lead farmer who registers farmers in this province.
+        self.assertEqual(response.data["registered_farmers"], 2)
         self.assertEqual(response.data["verified_farmers"], 0)
         self.assertEqual(response.data["total_hectares"], 12.5)
 
@@ -689,19 +702,23 @@ class FarmerPaginationAndVerificationQueueTests(TestCase):
 
 class FarmCoordinateTests(TestCase):
     def setUp(self):
-        self.user = User.objects.create_user(
-            email="coordinates@example.com", username="coordinates-user", password="StrongPass123!",
-            role=User.ROLE_VERIFICATION_OFFICER,
-        )
-        self.client = APIClient()
-        self.client.force_authenticate(user=self.user)
         self.province = Province.objects.create(name="Masvingo", code="MV-COORD")
         self.district = District.objects.create(province=self.province, name="Gutu")
         self.ward = Ward.objects.create(district=self.district, name="Ward 4")
+        # Farmers are registered by their lead farmer.
+        from apps.farmers.services import open_lead_cluster
+
+        leader = Farmer.objects.create(first_name="MAP", surname="LEAD", national_id="63-8000000M80", province=self.province)
+        self.user = User.objects.create_user(
+            email="coordinates@example.com", username="coordinates-user", password="StrongPass123!",
+            role=User.ROLE_LEAD_FARMER, farmer=leader, assigned_cluster=open_lead_cluster(leader),
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
 
     def _payload(self, **extra):
         payload = {
-            "first_name": "Map", "surname": "Farmer", "national_id": "63-COORD-1",
+            "first_name": "Map", "surname": "Farmer", "national_id": "63-1234567C01",
             "phone_primary": "0773000001", "province": self.province.pk, "district": self.district.pk,
             "ward": self.ward.pk, "farm_name": "Mapped Farm", "total_hectares": "8.00",
             "arable_hectares": "6.00", "irrigated_hectares": "1.00",
@@ -747,7 +764,7 @@ class FarmCoordinateTests(TestCase):
             with self.subTest(coordinates=coordinates):
                 response = self.client.post(
                     reverse("farmer-list"),
-                    self._payload(national_id=f"63-COORD-{index:02d}", phone_primary=f"07730000{index:02d}", **coordinates),
+                    self._payload(national_id=f"63-12340{index:02d}C01", phone_primary=f"07730000{index:02d}", **coordinates),
                     format="json",
                 )
                 self.assertEqual(response.status_code, expected, response.data)
@@ -760,13 +777,19 @@ class MultipleFarmTests(TestCase):
     def setUp(self):
         self.user = User.objects.create_user(
             email="farms@example.com", username="farms-user", password="StrongPass123!",
-            role=User.ROLE_VERIFICATION_OFFICER,
+            role=User.ROLE_LEAD_FARMER,
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
         self.province = Province.objects.create(name="Midlands", code="MD-FARM")
         self.district = District.objects.create(province=self.province, name="Gweru")
         self.ward = Ward.objects.create(district=self.district, name="Ward 1")
+        from apps.farmers.services import open_lead_cluster
+
+        leader = Farmer.objects.create(first_name="GWERU", surname="LEAD", national_id="63-3000000G00", province=self.province)
+        self.user.farmer = leader
+        self.user.assigned_cluster = open_lead_cluster(leader)
+        self.user.save(update_fields=["farmer", "assigned_cluster"])
 
     def test_one_farmer_can_hold_several_farms_and_backfill_does_not_duplicate_them(self):
         import importlib
@@ -776,7 +799,7 @@ class MultipleFarmTests(TestCase):
         migration = importlib.import_module("apps.farmers.migrations.0005_farm_cluster_and_active")
 
         created = self.client.post(reverse("farmer-list"), {
-            "first_name": "Yusufu", "surname": "Banda", "national_id": "63-FARM-1",
+            "first_name": "Yusufu", "surname": "Banda", "national_id": "63-3000001F01",
             "phone_primary": "0774111111", "province": self.province.pk, "district": self.district.pk,
             "ward": self.ward.pk, "farm_name": "Victoria", "total_hectares": "8.00",
             "arable_hectares": "6.00", "irrigated_hectares": "1.00",

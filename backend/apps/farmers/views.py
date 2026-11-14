@@ -15,7 +15,7 @@ from apps.recovery.models import InputDebt
 from . import kyc
 from .models import Farmer, Farm, FarmerDocument, FarmerReviewEvent
 from .serializers import EligibleFarmerSerializer, FarmerDocumentSerializer, FarmerSerializer, FarmSerializer
-from .services import FarmerApprovalEligibilityService
+from .services import FarmerApprovalEligibilityService, duplicate_message, find_registered_farmer
 
 
 def _truthy(value):
@@ -23,11 +23,11 @@ def _truthy(value):
 
 
 def _registers_leads(user):
+    from apps.accounts.permissions import LeadFarmerPermission
+
     if not user or not getattr(user, "is_authenticated", False):
         return False
-    return user.is_superuser or user.role in {
-        user.ROLE_SUPER_ADMIN, user.ROLE_SGR_EXECUTIVE, user.ROLE_MEMBERSHIP_OFFICER,
-    }
+    return user.is_superuser or user.role in LeadFarmerPermission.write_roles
 
 
 def _may_register(request):
@@ -35,14 +35,10 @@ def _may_register(request):
     user = request.user
     if not user or not user.is_authenticated:
         return False
-    if user.is_superuser or user.role == user.ROLE_SUPER_ADMIN:
-        return True
     if _truthy(request.data.get("as_lead")):
-        return user.role in {user.ROLE_SGR_EXECUTIVE, user.ROLE_MEMBERSHIP_OFFICER}
-    if user.role == user.ROLE_LEAD_FARMER:
-        return True
-    # A verification officer can still capture a record while checking the register.
-    return user.role == user.ROLE_VERIFICATION_OFFICER
+        return _registers_leads(user)
+    # Only a lead farmer registers ordinary farmers, so every farmer has a lead farmer.
+    return not user.is_superuser and user.role == user.ROLE_LEAD_FARMER
 
 
 class FarmerSearchPagination(PageNumberPagination):
@@ -334,7 +330,16 @@ class FarmerViewSet(viewsets.ModelViewSet):
                 {"detail": "Administrators register lead farmers. A lead farmer registers the farmers in their own cluster."},
                 status=403,
             )
-        return super().create(request, *args, **kwargs)
+        from django.db import IntegrityError, transaction
+
+        try:
+            with transaction.atomic():
+                return super().create(request, *args, **kwargs)
+        except IntegrityError:
+            # A second click, or another lead farmer, saved the same national ID a moment earlier.
+            existing = find_registered_farmer(request.data.get("national_id"))
+            message = duplicate_message(existing) if existing is not None else "This farmer was registered a moment ago. Refresh the list."
+            return Response({"national_id": [message]}, status=400)
 
     @action(detail=False, methods=["get"], url_path="registration-context")
     def registration_context(self, request):

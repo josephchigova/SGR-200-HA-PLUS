@@ -142,8 +142,16 @@ class ManagedUserSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         instance = self.instance
         role = attrs.get("role", getattr(instance, "role", User.ROLE_VIEWER))
+        if instance is not None and instance.role == User.ROLE_LEAD_FARMER and role != User.ROLE_LEAD_FARMER:
+            raise serializers.ValidationError({"role": ["A lead farmer's login keeps its role, because the cluster belongs to it. Deactivate the login instead."]})
         if role == User.ROLE_LEAD_FARMER:
-            self._validate_lead_farmer(attrs, instance)
+            if instance is None or instance.role != User.ROLE_LEAD_FARMER:
+                raise serializers.ValidationError({"role": [
+                    "Lead farmers are registered on the Lead farmers page. That creates their register record, their cluster and their login together."
+                ]})
+            # Who the lead farmer is, and which cluster they own, never change here.
+            attrs.pop("farmer", None)
+            attrs.pop("assigned_cluster", None)
         else:
             scoped = SCOPED_ROLE_FIELDS.get(role)
             if scoped:

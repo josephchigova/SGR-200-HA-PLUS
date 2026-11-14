@@ -218,6 +218,7 @@ class FarmerReviewEvent(models.Model):
     DOCUMENT_VERIFIED = "DOCUMENT_VERIFIED"
     DOCUMENT_REJECTED = "DOCUMENT_REJECTED"
     UPDATED = "UPDATED"
+    REASSIGNED = "REASSIGNED"
     ACTION_CHOICES = [
         (SUBMITTED, "Submitted for approval"),
         (RESUBMITTED, "Resubmitted after changes"),
@@ -228,6 +229,7 @@ class FarmerReviewEvent(models.Model):
         (DOCUMENT_VERIFIED, "Document verified"),
         (DOCUMENT_REJECTED, "Document rejected"),
         (UPDATED, "Details changed"),
+        (REASSIGNED, "Moved to another lead farmer"),
     ]
 
     farmer = models.ForeignKey(Farmer, on_delete=models.CASCADE, related_name="review_events")

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import './App.css'
 import './theme.css'
 import apiClient from './api/client'
@@ -23,7 +23,7 @@ import DashboardPage from './pages/DashboardPage'
 import FinancePage from './pages/FinancePage'
 import CropCataloguePage from './pages/CropCataloguePage'
 import ClusterDashboard from './pages/ClusterDashboard'
-import ClustersPage from './pages/ClustersPage'
+import LeadFarmersPage from './pages/LeadFarmersPage'
 import FarmerDetailsPage from './pages/FarmerDetailsPage'
 import FarmersPage from './pages/FarmersPage'
 import InputAllocationsPage from './pages/InputAllocationsPage'
@@ -49,9 +49,8 @@ const navGroups = [
       { label: 'Overview', to: '/dashboard', icon: 'grid', module: 'dashboard' },
       { label: 'Farmers', to: '/farmers', icon: 'users', module: 'farmers', end: true },
       { label: 'Register farmer', to: '/farmers/register', icon: 'plus', module: 'farmers', action: 'create' },
-      { label: 'Register lead farmer', to: '/farmers/register?as=lead', icon: 'userCheck', module: 'lead_registration', action: 'create' },
       { label: 'Approvals', to: '/verification', icon: 'shield', module: 'verification' },
-      { label: 'Clusters', to: '/clusters', icon: 'layers', module: 'clusters' },
+      { label: 'Lead farmers', to: '/clusters', icon: 'layers', module: 'clusters' },
       { label: 'Subscriptions', to: '/subscriptions', icon: 'dollar', module: 'subscriptions' },
     ],
   },
@@ -101,8 +100,10 @@ async function fetchAllSeasons() {
   return records
 }
 
-function pageTitle(pathname) {
-  if (pathname === '/farmers/register') return 'Register a farmer'
+function pageTitle(pathname, search = '') {
+  if (pathname === '/farmers/register') {
+    return new URLSearchParams(search).get('as') === 'lead' ? 'Register a lead farmer' : 'Register a farmer'
+  }
   if (pathname.endsWith('/edit')) return 'Continue registration'
   if (pathname.startsWith('/farmers/')) return 'Farmer profile'
   const item = allItems.find((entry) => pathname === entry.to)
@@ -154,6 +155,30 @@ function Guard({ module, action = 'view', children }) {
   if (!profile && error) return <div className="form-message error" role="alert">{error}</div>
   if (!can(module, action)) return <AccessDenied />
   return children
+}
+
+function RegisterRoute() {
+  const { loading, profile, can, error } = useAuth()
+  const [params] = useSearchParams()
+  if (loading) return <Skeleton kind="block" />
+  if (!profile && error) return <div className="form-message error" role="alert">{error}</div>
+  const asLead = params.get('as') === 'lead'
+  const lead = can('lead_registration', 'create')
+  const member = can('farmers', 'create')
+  // Lead farmers are registered in one step on the Lead farmers page, with their cluster and login.
+  if (asLead && lead) return <Navigate to="/clusters?register=1" replace />
+  if (!asLead && member) return <RegisterFarmerPage key="member" />
+  if (lead) return <Navigate to="/clusters?register=1" replace />
+  if (member) return <Navigate to="/farmers/register" replace />
+  return <AccessDenied />
+}
+
+function sideLinkActive(item, isActive, location) {
+  if (!item.to.startsWith('/farmers/register')) return isActive
+  const wantsLead = item.to.includes('as=lead')
+  const onRegister = location.pathname === '/farmers/register'
+  const isLead = new URLSearchParams(location.search).get('as') === 'lead'
+  return onRegister && wantsLead === isLead
 }
 
 function Workspace() {
@@ -285,7 +310,7 @@ function Workspace() {
       {navOpen ? <button type="button" className="side-backdrop" aria-label="Close navigation" onClick={() => setNavOpen(false)} /> : null}
       <aside id="primary-navigation" className={navOpen ? 'side is-open' : 'side'}>
         <div className="side-brand">
-          <span className="brand-logo"><Icon name="wheat" /></span>
+          <img className="brand-logo-image" src={`${import.meta.env.BASE_URL}sgr-mark.png`} alt="" width="40" height="40" />
           <div>
             <strong>SGR 200HA+</strong>
             <small>Farmer &amp; Input Management</small>
@@ -301,7 +326,7 @@ function Workspace() {
                   to={item.to}
                   end={Boolean(item.end)}
                   title={collapsed ? item.label : undefined}
-                  className={({ isActive }) => (isActive ? 'side-link active' : 'side-link')}
+                  className={({ isActive }) => (sideLinkActive(item, isActive, location) ? 'side-link active' : 'side-link')}
                   onClick={() => setNavOpen(false)}
                 >
                   <Icon name={item.icon} />
@@ -344,7 +369,7 @@ function Workspace() {
           <button type="button" className="icon-btn desktop-only" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'} aria-pressed={collapsed} onClick={toggleCollapsed}>
             <Icon name="panel" />
           </button>
-          <span className="topbar-title">{pageTitle(location.pathname)}</span>
+          <span className="topbar-title">{pageTitle(location.pathname, location.search)}</span>
 
           {usesPeriod ? (
             <div className="topbar-period" aria-label="Reporting period">
@@ -428,10 +453,11 @@ function Workspace() {
             <Route path="/" element={<Navigate to="/dashboard" replace />} />
             <Route path="/dashboard" element={<Guard module="dashboard">{profile?.role === 'lead_farmer' ? <ClusterDashboard {...period} /> : <DashboardPage {...period} />}</Guard>} />
             <Route path="/farmers" element={<Guard module="farmers"><FarmersPage /></Guard>} />
-            <Route path="/farmers/register" element={<Guard module="farmers" action="create"><RegisterFarmerPage key="new" /></Guard>} />
+            <Route path="/farmers/register" element={<RegisterRoute />} />
             <Route path="/farmers/:id/edit" element={<Guard module="farmers" action="edit"><RegisterFarmerPage /></Guard>} />
             <Route path="/farmers/:id" element={<Guard module="farmers"><FarmerDetailsPage /></Guard>} />
-            <Route path="/clusters" element={<Guard module="clusters"><ClustersPage /></Guard>} />
+            <Route path="/clusters" element={<Guard module="clusters"><LeadFarmersPage selectedSeason={selectedSeason} /></Guard>} />
+            <Route path="/lead-farmers" element={<Navigate to="/clusters" replace />} />
             <Route path="/verification" element={<Guard module="verification"><VerificationPage /></Guard>} />
             <Route path="/subscriptions" element={<Guard module="subscriptions"><SubscriptionsPage selectedSeason={selectedSeason} /></Guard>} />
             <Route path="/crops" element={<Guard module="crops"><CropCataloguePage /></Guard>} />

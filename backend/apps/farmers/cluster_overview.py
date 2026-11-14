@@ -11,15 +11,16 @@ from apps.subscriptions.models import FarmerSubscription
 from apps.subscriptions.services import SubscriptionPaymentService
 
 from . import kyc
-from .models import Farm, Farmer, FarmerDocument
+from .models import Farm, Farmer, FarmerDocument, RegistrationCropAllocation
 
 
 def _percent(part, whole):
     return int(round(part / whole * 100)) if whole else 0
 
 
-def build_cluster_overview(farmers, user, season_name):
-    farmers = farmers.select_related("district", "ward", "cluster")
+def build_cluster_overview(farmers, user, season_name, cluster=None):
+    # The lead farmer's own record is the cluster, not one of its members.
+    farmers = farmers.exclude(is_lead=True).select_related("district", "ward", "cluster")
     rows = list(farmers.order_by("surname", "first_name"))
     ids = [farmer.pk for farmer in rows]
     approved = [farmer for farmer in rows if farmer.verification_status in kyc.APPROVED_STATES]
@@ -40,6 +41,10 @@ def build_cluster_overview(farmers, user, season_name):
         InputAllocation.objects.filter(farmer_id__in=ids, programme__season__name__iexact=season_name)
         .exclude(status=InputAllocation.STATUS_CANCELLED).values_list("farmer_id", flat=True)
     ) if season_name else set()
+
+    crops = {}
+    for allocation in RegistrationCropAllocation.objects.filter(farmer_id__in=ids).select_related("crop", "season"):
+        crops.setdefault(allocation.farmer_id, []).append(f"{allocation.crop.name} {allocation.hectares.normalize():f} ha ({allocation.season.name})")
 
     documents = {}
     for document in FarmerDocument.objects.filter(farmer_id__in=ids, document_type__in=kyc.REQUIRED_CODES):
@@ -62,6 +67,9 @@ def build_cluster_overview(farmers, user, season_name):
             "id": farmer.pk,
             "name": farmer.full_name,
             "membership_number": farmer.membership_number,
+            "registration_date": farmer.registration_date.isoformat() if farmer.registration_date else "",
+            "crops": crops.get(farmer.pk, []),
+            "crop_allocated": farmer.pk in crops,
             "district": farmer.district.name if farmer.district_id else "",
             "ward": farmer.ward.name if farmer.ward_id else "",
             "verification_status": farmer.verification_status,
@@ -81,9 +89,14 @@ def build_cluster_overview(farmers, user, season_name):
     awaiting = count(*kyc.AWAITING_REVIEW)
     kyc_complete = sum(1 for entry in documents.values() if len(entry["verified"]) >= required)
     participating = len((planting | producing) & approved_ids)
-    cluster = getattr(user, "assigned_cluster", None) if not user.is_superuser and user.role == user.ROLE_LEAD_FARMER else None
+    if cluster is None and not user.is_superuser and user.role == user.ROLE_LEAD_FARMER:
+        cluster = getattr(user, "assigned_cluster", None)
     return {
-        "cluster": {"id": cluster.id, "name": cluster.name, "province": cluster.province.name, "district": cluster.district.name if cluster.district_id else ""} if cluster else None,
+        "cluster": {
+            "id": cluster.id, "name": cluster.name, "province": cluster.province.name,
+            "district": cluster.district.name if cluster.district_id else "",
+            "lead_farmer": cluster.lead_member.full_name if cluster.lead_member_id else "",
+        } if cluster else None,
         "season": season_name,
         "counts": {
             "total": total,
@@ -104,6 +117,7 @@ def build_cluster_overview(farmers, user, season_name):
             "participation": _percent(participating, len(approved)),
             "seasonal_cropping": _percent(len(planting & approved_ids), len(approved)),
             "input_allocation": _percent(len(allocated & approved_ids), len(approved)),
+            "crop_allocation": _percent(len(set(crops) & set(ids)), total),
         },
         "farmers": farmer_rows,
         "by_district": _places(farmer_rows, "district"),
@@ -115,8 +129,10 @@ def _places(rows, field):
     groups = {}
     for row in rows:
         label = row.get(field) or "Not recorded"
-        bucket = groups.setdefault(label, {"label": label, "farmers": 0, "approved": 0, "pending": 0, "compliance": [], "participating": 0})
+        bucket = groups.setdefault(label, {"label": label, "farmers": 0, "approved": 0, "pending": 0, "compliance": [], "participating": 0, "with_crops": 0})
         bucket["farmers"] += 1
+        if row.get("crop_allocated"):
+            bucket["with_crops"] += 1
         if row["verification_status"] in kyc.APPROVED_STATES:
             bucket["approved"] += 1
             if row["subscription_compliance"] is not None:
@@ -131,7 +147,7 @@ def _places(rows, field):
         approved = bucket["approved"]
         bucket["subscription_compliance"] = int(round(sum(values) / len(values))) if values else 0
         bucket["agricultural_participation"] = _percent(bucket.pop("participating"), approved)
-        bucket["crop_allocation"] = bucket["agricultural_participation"]
+        bucket["crop_allocation"] = _percent(bucket.pop("with_crops"), bucket["farmers"])
         result.append(bucket)
     result.sort(key=lambda item: (-item["farmers"], item["label"]))
     return result

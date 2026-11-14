@@ -17,7 +17,7 @@ const AWAITING = ['SUBMITTED', 'UNDER_REVIEW', 'PENDING']
 const APPROVED = ['VERIFIED', 'APPROVED']
 const ACTION = ['DRAFT', 'CORRECTIONS_REQUESTED', 'REJECTED']
 
-function PlaceTable({ title, rows }) {
+export function PlaceTable({ title, rows }) {
   return (
     <div className="table-wrap" style={{ marginTop: 12 }}>
       <table className="data-table">
@@ -124,6 +124,7 @@ function ClusterDashboard({ selectedSeason = null, periodStatus = 'ready' }) {
             <StatCard label="Farmers in cluster" value={counts.total} hint="Every registration you have captured" icon="users" />
             <StatCard label="Approved farmers" value={counts.approved} hint="Active SGR members" icon="shield" tone="good" />
             <StatCard label="Awaiting approval" value={counts.awaiting_approval} hint="With the administrator" icon="history" />
+            <StatCard label="Rejected registrations" value={counts.rejected || 0} hint="Open one to see the reason" icon="alert" tone={counts.rejected ? 'bad' : ''} />
             <StatCard label="Incomplete registrations" value={needsAction} hint={counts.corrections_requested ? `${counts.corrections_requested} need corrections` : 'Drafts to finish'} icon="clipboard" tone={needsAction ? 'warn' : ''} />
             <StatCard label="Subscription compliance" value={`${performance.subscription_compliance || 0}%`} hint={`${performance.subscription_complete || 0} of ${counts.approved || 0} approved farmers complete`} icon="chart" />
           </section>
@@ -159,6 +160,7 @@ function ClusterDashboard({ selectedSeason = null, periodStatus = 'ready' }) {
               <Progress label="Subscription compliance" value={performance.subscription_compliance || 0} detail={`${performance.subscription_in_progress || 0} in progress · ${performance.subscription_not_started || 0} not started`} />
               <Progress label="Agricultural participation" value={performance.participation || 0} detail="Approved farmers with planting or production this year" />
               <Progress label="Seasonal cropping recorded" value={performance.seasonal_cropping || 0} detail="Approved farmers with a planting plan" />
+              <Progress label="Crop allocation recorded" value={performance.crop_allocation || 0} detail="Farmers whose planned crops were captured at registration" />
               <Progress label="Inputs allocated" value={performance.input_allocation || 0} detail="Approved farmers with an input allocation" />
             </div>
           </section>
