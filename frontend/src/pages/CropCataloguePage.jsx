@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import apiClient from '../api/client'
+import Icon from '../components/Icon'
 import { useAuth } from '../auth'
 import { addDecimal, multiplyDecimal } from '../decimal'
 
@@ -328,7 +329,7 @@ function CropCataloguePage() {
                 <td>{formatCatalogueMoney(crop.input_cost_per_hectare || 0)}</td>
                 <td>{crop.inputs_count ?? 0}</td>
                 <td>{crop.active ? 'Active' : 'Inactive'}</td>
-                <td><button type="button" className="ghost-btn small" onClick={() => setSelectedCropId(String(crop.id))}>View / Edit</button></td>
+                <td><button type="button" className="icon-btn" title="View and edit" aria-label={`View ${crop.name}`} onClick={() => setSelectedCropId(String(crop.id))}><Icon name="pencil" /></button></td>
               </tr>
             ))}
             {!loading && crops.length === 0 ? <tr><td colSpan={5}>No crops are configured. Run the reference-data load on the server, then refresh. Maize, sorghum and wheat are not typed into this page.</td></tr> : null}
@@ -392,9 +393,9 @@ function CropCataloguePage() {
                 <td>{row.active ? 'Active' : 'Inactive'}</td>
                 <td>
                   {readOnly ? "View only" : null}
-                  <button type="button" className="ghost-btn small" hidden={readOnly} onClick={() => editRequirement(row)}>Edit</button>
+                  <button type="button" className="icon-btn" hidden={readOnly} title="Edit" aria-label={`Edit ${row.item_name}`} onClick={() => editRequirement(row)}><Icon name="pencil" /></button>
                   <button type="button" className="ghost-btn small" hidden={readOnly} onClick={() => toggleActive(row)}>{row.active ? 'Deactivate' : 'Activate'}</button>
-                  <button type="button" className="ghost-btn small" hidden={readOnly} onClick={() => setPendingDelete({ kind: 'requirement', url: `/crop-input-requirements/${row.id}/`, label: row.item_name })}>Delete</button>
+                  <button type="button" className="icon-btn danger" hidden={readOnly} title="Delete" aria-label={`Delete ${row.item_name}`} onClick={() => setPendingDelete({ kind: 'requirement', url: `/crop-input-requirements/${row.id}/`, label: row.item_name })}><Icon name="trash" /></button>
                 </td>
               </tr>
             ))}
@@ -449,9 +450,9 @@ function CropCataloguePage() {
                 <td>{row.active ? 'Active' : 'Inactive'}</td>
                 <td>
                   {readOnly ? "View only" : null}
-                  <button type="button" className="ghost-btn small" hidden={readOnly} onClick={() => { setEditingPriceId(row.id); setPriceForm({ season: row.season ? String(row.season) : '', price_per_tonne: formatCatalogueMoney(row.price_per_tonne), currency: row.currency || 'USD', active: row.active }) }}>Edit</button>
+                  <button type="button" className="icon-btn" hidden={readOnly} title="Edit" aria-label="Edit selling price" onClick={() => { setEditingPriceId(row.id); setPriceForm({ season: row.season ? String(row.season) : '', price_per_tonne: formatCatalogueMoney(row.price_per_tonne), currency: row.currency || 'USD', active: row.active }) }}><Icon name="pencil" /></button>
                   <button type="button" className="ghost-btn small" hidden={readOnly} onClick={async () => { try { await apiClient.patch(`/crop-selling-prices/${row.id}/`, { active: !row.active }); await loadPrices(selectedCropId) } catch { setError('Unable to update the selling price.') } }}>{row.active ? 'Deactivate' : 'Activate'}</button>
-                  <button type="button" className="ghost-btn small" hidden={readOnly} onClick={() => setPendingDelete({ kind: 'price', url: `/crop-selling-prices/${row.id}/`, label: `${row.crop_name || selectedCrop?.name || 'Crop'} ${row.season_name || ''} price` })}>Delete</button>
+                  <button type="button" className="icon-btn danger" hidden={readOnly} title="Delete" aria-label="Delete selling price" onClick={() => setPendingDelete({ kind: 'price', url: `/crop-selling-prices/${row.id}/`, label: `${row.crop_name || selectedCrop?.name || 'Crop'} ${row.season_name || ''} price` })}><Icon name="trash" /></button>
                 </td>
               </tr>
             ))}

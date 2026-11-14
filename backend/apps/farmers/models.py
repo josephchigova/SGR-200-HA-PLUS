@@ -22,6 +22,13 @@ class Farmer(models.Model):
     MEMBERSHIP_INACTIVE = "INACTIVE"
     MEMBERSHIP_ARCHIVED = "ARCHIVED"
 
+    TYPE_NEW = "NEW"
+    TYPE_EXISTING = "EXISTING"
+    FARMER_TYPE_CHOICES = [
+        (TYPE_NEW, "New farmer"),
+        (TYPE_EXISTING, "Existing farmer"),
+    ]
+
     VERIFICATION_CHOICES = [
         (STATUS_DRAFT, "Draft"),
         (STATUS_PENDING, "Pending"),
@@ -73,6 +80,8 @@ class Farmer(models.Model):
     review_remarks = models.TextField(blank=True)
     registered_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="registered_farmers")
     submitted_at = models.DateTimeField(null=True, blank=True)
+    farmer_type = models.CharField(max_length=20, choices=FARMER_TYPE_CHOICES, default=TYPE_EXISTING)
+    is_lead = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -233,3 +242,23 @@ class FarmerReviewEvent(models.Model):
 
     def __str__(self):
         return f"{self.farmer_id} {self.action}"
+
+
+class RegistrationCropAllocation(models.Model):
+    """Crops the registrar captured for this farmer. Approval copies them into production."""
+
+    farmer = models.ForeignKey(Farmer, on_delete=models.CASCADE, related_name="crop_allocations")
+    crop = models.ForeignKey("programmes.Crop", on_delete=models.PROTECT, related_name="registration_allocations")
+    season = models.ForeignKey("programmes.Season", on_delete=models.PROTECT, related_name="registration_allocations")
+    hectares = models.DecimalField(max_digits=12, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["season_id", "crop__name"]
+        constraints = [
+            models.UniqueConstraint(fields=["farmer", "crop", "season"], name="unique_registration_crop_season"),
+        ]
+
+    def __str__(self):
+        return f"{self.farmer_id} {self.crop_id} {self.hectares}"

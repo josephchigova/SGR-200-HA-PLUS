@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import { ColumnChart, DoughnutChart, ExpenseAnalysis, GroupedBarChart, HorizontalBarChart, TrendChart } from '../components/Charts'
+import ClusterPerformance from './ClusterPerformance'
 import Icon from '../components/Icon'
 import { EmptyState, PageHead, Pill, Skeleton, StatCard } from '../components/ui'
 
@@ -274,7 +275,7 @@ function DashboardPage({ selectedSeason = null, cropSeason = '', periodStatus = 
           <section className="kpi-grid" aria-label="Summary">
             {cards.map(([label, value, hint, icon]) => <StatCard key={label} label={label} value={value} hint={hint} icon={icon} />)}
           </section>
-          {leadFarmer ? <Portfolio rows={portfolio.rows} total={portfolio.total} /> : null}
+          {leadFarmer ? <Portfolio rows={portfolio.rows} total={portfolio.total} /> : <ClusterPerformance seasonName={selectedSeason?.name || ''} />}
           <DashboardCharts charts={summary.charts} scoped={scoped} />
           {profile ? <PendingTasks items={tasks} /> : null}
           <RecentActivity rows={summary.charts?.recent || []} />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import apiClient from '../api/client'
+import Icon from '../components/Icon'
 import RegistrationReview, { DocumentList, HistoryList, useRegistration } from '../components/RegistrationReview'
 import { Pill } from '../components/ui'
 import { statusOf } from '../registration'
@@ -169,7 +170,7 @@ function FarmerDetailsPage() {
       <div className="table-wrap"><table className="data-table"><thead><tr><th>Farm</th><th>Province</th><th>District</th><th>Cluster</th><th>Total ha</th><th>Arable ha</th><th>Irrigated ha</th><th>Farm coordinates</th><th>Status</th><th>Actions</th></tr></thead><tbody>
         {farms.map((farm) => {
           const mapsUrl = googleMapsUrl(farm.latitude, farm.longitude)
-          return <tr key={farm.id}><td>{farm.farm_name}</td><td>{farm.province_name || '—'}</td><td>{farm.district_name || '—'}</td><td>{farm.cluster_name || '—'}</td><td>{formatDisplay('total_hectares', farm.total_hectares)}</td><td>{formatDisplay('arable_hectares', farm.arable_hectares)}</td><td>{formatDisplay('irrigated_hectares', farm.irrigated_hectares)}</td><td>{mapsUrl ? <><span>{farm.latitude}, {farm.longitude}</span> <a href={mapsUrl} target="_blank" rel="noopener noreferrer">View on Google Maps</a></> : '—'}</td><td>{farm.is_active ? farm.verification_status : 'Inactive'}</td><td>{canEdit ? <span className="table-actions"><button type="button" className="ghost-btn small" onClick={() => startFarmEdit(farm)}>Edit</button> <button type="button" className="ghost-btn small" onClick={() => setFarmActive(farm, !farm.is_active)}>{farm.is_active ? 'Deactivate' : 'Activate'}</button> {canRemoveFarm ? <button type="button" className="ghost-btn small danger" onClick={() => deleteFarm(farm.id)}>Delete</button> : null}</span> : 'View only'}</td></tr>
+          return <tr key={farm.id}><td>{farm.farm_name}</td><td>{farm.province_name || '—'}</td><td>{farm.district_name || '—'}</td><td>{farm.cluster_name || '—'}</td><td>{formatDisplay('total_hectares', farm.total_hectares)}</td><td>{formatDisplay('arable_hectares', farm.arable_hectares)}</td><td>{formatDisplay('irrigated_hectares', farm.irrigated_hectares)}</td><td>{mapsUrl ? <><span>{farm.latitude}, {farm.longitude}</span> <a href={mapsUrl} target="_blank" rel="noopener noreferrer">View on Google Maps</a></> : '—'}</td><td>{farm.is_active ? farm.verification_status : 'Inactive'}</td><td>{canEdit ? <span className="table-actions"><button type="button" className="icon-btn" title="Edit farm" aria-label={`Edit ${farm.farm_name}`} onClick={() => startFarmEdit(farm)}><Icon name="pencil" /></button> <button type="button" className="ghost-btn small" title={farm.is_active ? 'Deactivate keeps this farm record' : 'Activate this farm'} onClick={() => setFarmActive(farm, !farm.is_active)}>{farm.is_active ? 'Deactivate' : 'Activate'}</button> {canRemoveFarm ? <button type="button" className="icon-btn danger" title="Delete farm" aria-label={`Delete ${farm.farm_name}`} onClick={() => deleteFarm(farm.id)}><Icon name="trash" /></button> : null}</span> : 'View only'}</td></tr>
         })}
         {!farms.length ? <tr><td colSpan="10">No farm records.</td></tr> : null}
       </tbody></table></div>

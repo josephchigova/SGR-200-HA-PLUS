@@ -5,6 +5,7 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from apps.clusters.models import Cluster
+from apps.farmers import kyc
 from apps.farmers.models import Farmer, FarmerDocument, FarmerReviewEvent
 from apps.geography.models import District, Province, Ward
 from apps.subscriptions.models import FarmerSubscription
@@ -60,8 +61,8 @@ class RegistrationWorkflowTests(TestCase):
         )
 
     def upload_required(self, farmer):
-        for code in ("NATIONAL_ID", "PROOF_OF_LAND", "MEMBERSHIP_FORM"):
-            self.assertEqual(self.upload(farmer, code).status_code, 201)
+        for code in kyc.REQUIRED_CODES:
+            self.assertEqual(self.upload(farmer, code).status_code, 201, code)
 
     # Registration ---------------------------------------------------------------------
 
@@ -103,7 +104,8 @@ class RegistrationWorkflowTests(TestCase):
         self.assertTrue(context["locked"])
         self.assertEqual(context["cluster"]["id"], self.cluster.id)
         self.assertEqual(context["province"]["id"], self.province.id)
-        self.assertEqual([item["code"] for item in context["documents"] if item["required"]], ["NATIONAL_ID", "PROOF_OF_LAND", "MEMBERSHIP_FORM"])
+        self.assertEqual([item["code"] for item in context["documents"] if item["required"]], kyc.REQUIRED_CODES)
+        self.assertEqual([item["code"] for item in context["documents"] if item.get("when") == "NEW"], ["DAEO_LETTER"])
         self.assertFalse(self.client_for(self.admin).get("/api/farmers/registration-context/").json()["locked"])
 
     # Documents ------------------------------------------------------------------------
@@ -115,8 +117,7 @@ class RegistrationWorkflowTests(TestCase):
         refused = client.post(f"/api/farmers/{farmer.id}/submit/")
         self.assertEqual(refused.status_code, 400)
         self.assertIn("Proof of land", refused.json()["detail"])
-        self.upload(farmer, "PROOF_OF_LAND")
-        self.upload(farmer, "MEMBERSHIP_FORM")
+        self.upload_required(farmer)
         self.assertEqual(client.post(f"/api/farmers/{farmer.id}/submit/").status_code, 200)
         farmer.refresh_from_db()
         self.assertEqual(farmer.verification_status, Farmer.STATUS_SUBMITTED)

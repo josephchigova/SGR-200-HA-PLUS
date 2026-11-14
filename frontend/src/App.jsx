@@ -49,6 +49,7 @@ const navGroups = [
       { label: 'Overview', to: '/dashboard', icon: 'grid', module: 'dashboard' },
       { label: 'Farmers', to: '/farmers', icon: 'users', module: 'farmers', end: true },
       { label: 'Register farmer', to: '/farmers/register', icon: 'plus', module: 'farmers', action: 'create' },
+      { label: 'Register lead farmer', to: '/farmers/register?as=lead', icon: 'userCheck', module: 'lead_registration', action: 'create' },
       { label: 'Approvals', to: '/verification', icon: 'shield', module: 'verification' },
       { label: 'Clusters', to: '/clusters', icon: 'layers', module: 'clusters' },
       { label: 'Subscriptions', to: '/subscriptions', icon: 'dollar', module: 'subscriptions' },

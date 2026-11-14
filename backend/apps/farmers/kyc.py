@@ -1,7 +1,7 @@
 """KYC documents and the registration approval workflow.
 
-The three mandatory documents are the ones the registration screen asks for. The
-optional ones come from the SGR 200HA+ KYC and supporting documents checklist.
+Every document on the SGR checklist is mandatory. The DAEO letter is the only
+conditional document: a new farmer must upload it, and an existing farmer must not.
 """
 
 import re
@@ -19,17 +19,25 @@ DOCUMENT_TYPES = [
     {"code": "NATIONAL_ID", "label": "National ID copy", "required": True, "hint": "National ID of the applicant, or passport for an entity director."},
     {"code": "PROOF_OF_LAND", "label": "Proof of land", "required": True, "hint": "Offer letter, lease agreement, title deed or approved joint venture agreement showing the land."},
     {"code": "MEMBERSHIP_FORM", "label": "Signed membership form", "required": True, "hint": "The completed and signed SGR membership application form."},
-    {"code": "PLEDGE_FORM", "label": "Membership pledge form", "required": False, "hint": "Only when the farmer applies under the post-harvest pledge arrangement."},
-    {"code": "JV_ASSESSMENT_FORM", "label": "Joint venture assessment form", "required": False, "hint": "The completed SGR joint venture programme assessment form."},
-    {"code": "ZESA_BILL", "label": "ZESA bill", "required": False, "hint": "Dated within the past 30 days."},
-    {"code": "ZINWA_BILL", "label": "ZINWA bill", "required": False, "hint": "Dated within the past 30 days."},
-    {"code": "REFERENCE_LETTER", "label": "Reference letter", "required": False, "hint": "From a current paid-up SGR member."},
-    {"code": "DAEO_LETTER", "label": "DAEO letter", "required": False, "hint": "New farmers: letter from the District Agriculture Extension Officer."},
-    {"code": "GUARANTEE_AGREEMENT", "label": "Signed guarantee agreement", "required": False, "hint": "New farmers only."},
+    {"code": "PLEDGE_FORM", "label": "Membership pledge form", "required": True, "hint": "The membership pledge form for the post-harvest pledge arrangement."},
+    {"code": "JV_ASSESSMENT_FORM", "label": "Joint venture assessment form", "required": True, "hint": "The completed SGR joint venture programme assessment form."},
+    {"code": "ZESA_BILL", "label": "ZESA bill", "required": True, "hint": "Dated within the past 30 days."},
+    {"code": "ZINWA_BILL", "label": "ZINWA bill", "required": True, "hint": "Dated within the past 30 days."},
+    {"code": "REFERENCE_LETTER", "label": "Reference letter", "required": True, "hint": "From a current paid-up SGR member."},
+    {"code": "DAEO_LETTER", "label": "DAEO letter", "required": False, "when": "NEW", "hint": "Required for a new farmer: letter from the District Agriculture Extension Officer."},
+    {"code": "GUARANTEE_AGREEMENT", "label": "Signed guarantee agreement", "required": True, "hint": "The signed guarantee agreement."},
 ]
 DOCUMENT_CODES = {item["code"] for item in DOCUMENT_TYPES}
 REQUIRED_CODES = [item["code"] for item in DOCUMENT_TYPES if item["required"]]
 DOCUMENT_LABELS = {item["code"]: item["label"] for item in DOCUMENT_TYPES}
+
+
+def required_codes_for(farmer):
+    """Documents this farmer must upload. DAEO is required only for a new farmer."""
+    codes = list(REQUIRED_CODES)
+    if getattr(farmer, "farmer_type", "") == "NEW":
+        codes.append("DAEO_LETTER")
+    return codes
 
 # A registration can be changed by the person who captured it only in these states.
 EDITABLE_BY_REGISTRAR = {Farmer.STATUS_DRAFT, Farmer.STATUS_CORRECTIONS, Farmer.STATUS_REJECTED}
@@ -39,7 +47,7 @@ APPROVED_STATES = {Farmer.STATUS_VERIFIED, Farmer.STATUS_APPROVED}
 
 def missing_required_documents(farmer):
     present = set(farmer.documents.values_list("document_type", flat=True))
-    return [DOCUMENT_LABELS[code] for code in REQUIRED_CODES if code not in present]
+    return [DOCUMENT_LABELS[code] for code in required_codes_for(farmer) if code not in present]
 
 
 def unverified_documents(farmer):

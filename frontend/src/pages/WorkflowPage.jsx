@@ -4,6 +4,7 @@ import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import { formatDisplay } from '../formatNumbers'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
+import Icon from '../components/Icon'
 
 const listData = (data) => (Array.isArray(data) ? data : data?.results || [])
 
@@ -553,8 +554,8 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
                 {columns.map((column) => <td key={column.key}>{column.render ? column.render(row) : formatDisplay(column.key, row[column.key]) ?? '—'}</td>)}
                 {showActions ? <td>
                   {approveAction && canApprove && row.status === 'PENDING' ? <button className="primary-btn small" type="button" onClick={() => approve(row)}>Approve</button> : null}
-                  {editAction && canEdit && !seasonReadOnly ? <button className="ghost-btn small" type="button" onClick={() => startEditing(row)}>{editButtonLabel}</button> : null}
-                  {deleteAction && canDelete && !seasonReadOnly ? <button className="ghost-btn small" type="button" onClick={() => setPendingDelete(row)}>Delete</button> : null}
+                  {editAction && canEdit && !seasonReadOnly ? <button className="icon-btn" type="button" title={editButtonLabel || 'Edit'} aria-label={editButtonLabel || 'Edit'} onClick={() => startEditing(row)}><Icon name="pencil" /></button> : null}
+                  {deleteAction && canDelete && !seasonReadOnly ? <button className="icon-btn danger" type="button" title="Delete" aria-label="Delete" onClick={() => setPendingDelete(row)}><Icon name="trash" /></button> : null}
                   {approveAction && (row.status !== 'PENDING' || !canApprove) ? row.status : null}
                   {editAction && (seasonReadOnly || !canEdit) ? 'Read-only' : null}
                 </td> : null}

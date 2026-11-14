@@ -18,6 +18,33 @@ from .serializers import EligibleFarmerSerializer, FarmerDocumentSerializer, Far
 from .services import FarmerApprovalEligibilityService
 
 
+def _truthy(value):
+    return str(value).lower() in {"1", "true", "yes"}
+
+
+def _registers_leads(user):
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+    return user.is_superuser or user.role in {
+        user.ROLE_SUPER_ADMIN, user.ROLE_SGR_EXECUTIVE, user.ROLE_MEMBERSHIP_OFFICER,
+    }
+
+
+def _may_register(request):
+    """Lead farmers register members. Administrators register lead farmers only."""
+    user = request.user
+    if not user or not user.is_authenticated:
+        return False
+    if user.is_superuser or user.role == user.ROLE_SUPER_ADMIN:
+        return True
+    if _truthy(request.data.get("as_lead")):
+        return user.role in {user.ROLE_SGR_EXECUTIVE, user.ROLE_MEMBERSHIP_OFFICER}
+    if user.role == user.ROLE_LEAD_FARMER:
+        return True
+    # A verification officer can still capture a record while checking the register.
+    return user.role == user.ROLE_VERIFICATION_OFFICER
+
+
 class FarmerSearchPagination(PageNumberPagination):
     page_size = 25
     page_size_query_param = "page_size"
@@ -27,7 +54,7 @@ class FarmerSearchPagination(PageNumberPagination):
 class FarmerViewSet(viewsets.ModelViewSet):
     queryset = Farmer.objects.select_related(
         "province", "district", "ward", "cluster", "cluster__lead_member", "cluster__lead_farmer", "verified_by", "registered_by",
-    ).prefetch_related("farms", "documents").all()
+    ).prefetch_related("farms", "documents", "crop_allocations__crop", "crop_allocations__season").all()
     serializer_class = FarmerSerializer
     pagination_class = FarmerSearchPagination
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
@@ -248,6 +275,9 @@ class FarmerViewSet(viewsets.ModelViewSet):
         if verification_status in kyc.APPROVED_STATES:
             # Only an approved registration becomes an active member.
             farmer.membership_status = Farmer.MEMBERSHIP_ACTIVE
+            from .services import publish_registration_crops
+
+            publish_registration_crops(farmer)
         elif verification_status in {Farmer.STATUS_REJECTED, Farmer.STATUS_CORRECTIONS}:
             farmer.membership_status = Farmer.MEMBERSHIP_INACTIVE
         farmer.save(update_fields=["verification_status", "verified_by", "verification_date", "rejection_reason", "review_remarks", "membership_status", "updated_at"])
@@ -298,12 +328,21 @@ class FarmerViewSet(viewsets.ModelViewSet):
             for event in farmer.review_events.all()[:100]
         ])
 
+    def create(self, request, *args, **kwargs):
+        if not _may_register(request):
+            return Response(
+                {"detail": "Administrators register lead farmers. A lead farmer registers the farmers in their own cluster."},
+                status=403,
+            )
+        return super().create(request, *args, **kwargs)
+
     @action(detail=False, methods=["get"], url_path="registration-context")
     def registration_context(self, request):
         """Where this user may register farmers. A lead farmer is fixed to the assigned cluster."""
         user = request.user
         data = {"locked": False, "cluster": None, "province": None, "district": None, "documents": kyc.DOCUMENT_TYPES,
-                "max_upload_mb": kyc.MAX_UPLOAD_BYTES // (1024 * 1024), "national_id_pattern": kyc.NATIONAL_ID_PATTERN.pattern}
+                "max_upload_mb": kyc.MAX_UPLOAD_BYTES // (1024 * 1024), "national_id_pattern": kyc.NATIONAL_ID_PATTERN.pattern,
+                "registers": "lead" if _registers_leads(request.user) and request.user.role != request.user.ROLE_LEAD_FARMER else "farmer"}
         if not user.is_superuser and user.role == user.ROLE_LEAD_FARMER:
             cluster = user.assigned_cluster
             data["locked"] = True
@@ -324,6 +363,13 @@ class FarmerViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(cluster_id=int(cluster_id))
         season_name = request.query_params.get("season_name") or ""
         return Response(build_cluster_overview(queryset, request.user, season_name))
+
+    @action(detail=False, methods=["get"], url_path="cluster-performance")
+    def cluster_performance(self, request):
+        from .performance import build_cluster_performance
+
+        queryset = scope_farmers(Farmer.objects.all(), request.user)
+        return Response(build_cluster_performance(queryset, request))
 
 
 class FarmViewSet(viewsets.ModelViewSet):

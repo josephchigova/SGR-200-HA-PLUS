@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
@@ -19,13 +19,15 @@ import {
 } from '../registration'
 
 const STEPS = [
-  { key: 'farmer', label: 'Farmer details', hint: 'Who is being registered' },
+  { key: 'farmer', label: 'Personal details', hint: 'Who is being registered' },
   { key: 'farm', label: 'Farm details', hint: 'Location and land' },
+  { key: 'crops', label: 'Crop allocation', hint: 'Planned crops' },
   { key: 'kyc', label: 'KYC documents', hint: 'Upload and submit' },
 ]
 
 const EMPTY = {
   first_name: '', middle_name: '', surname: '', national_id: '', farm_name: '', phone_primary: '', email: '', gender: '',
+  farmer_type: 'EXISTING',
   province: '', district: '', ward: '', cluster: '',
   total_hectares: '', irrigated_hectares: '0', dryland_hectares: '0', irrigation_type: 'CENTRE_PIVOT', latitude: '', longitude: '',
 }
@@ -48,7 +50,27 @@ async function loadAll(path) {
   return rows
 }
 
-const wardOrder = (a, b) => (Number(a.name.replace(/\D/g, '')) || 0) - (Number(b.name.replace(/\D/g, '')) || 0) || a.name.localeCompare(b.name)
+const arableLater = (form) => (Number(form.irrigated_hectares) || 0) + (Number(form.dryland_hectares) || 0)
+
+function cropProblemsFor(rows, limit) {
+  const problems = []
+  const seen = new Set()
+  const totals = {}
+  rows.forEach((row, index) => {
+    const hectares = Number(row.hectares)
+    if (!row.crop || !row.season || !(hectares > 0)) problems.push(`Row ${index + 1} needs a crop, a season and hectares.`)
+    const key = `${row.crop}:${row.season}`
+    if (row.crop && row.season) {
+      if (seen.has(key)) problems.push('Each crop can be entered once for a season.')
+      seen.add(key)
+      totals[row.season] = (totals[row.season] || 0) + (hectares > 0 ? hectares : 0)
+    }
+  })
+  Object.values(totals).forEach((total) => {
+    if (total > limit) problems.push(`Allocated hectares (${total} ha) exceed the ${limit} ha of arable land.`)
+  })
+  return problems
+}
 
 function Field({ label, name, form, errors, touched, onChange, onBlur, required = false, hint = '', ...input }) {
   const error = touched[name] ? errors[name] : ''
@@ -72,6 +94,8 @@ function Field({ label, name, form, errors, touched, onChange, onBlur, required 
 
 function RegisterFarmerPage() {
   const { id } = useParams()
+  const [searchParams] = useSearchParams()
+  const asLead = searchParams.get('as') === 'lead'
   const { profile } = useAuth()
   const [context, setContext] = useState(null)
   const [form, setForm] = useState(EMPTY)
@@ -81,7 +105,8 @@ function RegisterFarmerPage() {
   const [farmerId, setFarmerId] = useState(id || '')
   const [farmer, setFarmer] = useState(null)
   const [saved, setSaved] = useState('')
-  const [options, setOptions] = useState({ provinces: [], districts: [], wards: [], clusters: [] })
+  const [options, setOptions] = useState({ provinces: [], districts: [], wards: [], clusters: [], crops: [], seasons: [] })
+  const [allocations, setAllocations] = useState([])
   const [loadingOptions, setLoadingOptions] = useState({ districts: false, wards: false })
   const [documents, setDocuments] = useState([])
   const [uploads, setUploads] = useState({})
@@ -92,7 +117,7 @@ function RegisterFarmerPage() {
 
   const locked = Boolean(context?.locked)
   const requirements = useMemo(() => context?.documents || [], [context])
-  const required = requirements.filter((item) => item.required)
+  const required = requirements.filter((item) => item.required || (item.when && item.when === form.farmer_type))
 
   // Reference data and, when continuing, the saved registration.
   useEffect(() => {
@@ -100,14 +125,16 @@ function RegisterFarmerPage() {
     const load = async () => {
       setLoading(true)
       try {
-        const [contextResponse, provinces] = await Promise.all([
+        const [contextResponse, provinces, crops, seasons] = await Promise.all([
           apiClient.get('/farmers/registration-context/'),
           loadAll('/provinces/?official=1&page_size=50'),
+          loadAll('/crops/?page_size=100').catch(() => []),
+          loadAll('/seasons/?page_size=50').catch(() => []),
         ])
         if (!active) return
         const info = contextResponse.data
         setContext(info)
-        setOptions((current) => ({ ...current, provinces }))
+        setOptions((current) => ({ ...current, provinces, crops, seasons }))
         let next = { ...EMPTY }
         if (info.locked) {
           next = { ...next, province: String(info.province?.id || ''), district: String(info.district?.id || ''), cluster: String(info.cluster?.id || '') }
@@ -127,8 +154,9 @@ function RegisterFarmerPage() {
             first_name: record.first_name || '', middle_name: record.middle_name || '', surname: record.surname || '',
             national_id: record.national_id || '', farm_name: farm.farm_name || '', phone_primary: record.phone_primary || '',
             email: record.email || '', gender: record.gender || '',
+            farmer_type: record.farmer_type || 'EXISTING',
             province: String(record.province || next.province || ''), district: String(record.district || next.district || ''),
-            ward: String(record.ward || ''), cluster: String(record.cluster || next.cluster || ''),
+            ward: record.ward_name || '', cluster: String(record.cluster || next.cluster || ''),
             total_hectares: farm.total_hectares ? String(Number(farm.total_hectares)) : '',
             irrigated_hectares: String(irrigated), dryland_hectares: String(Math.max(arable - irrigated, 0)),
             irrigation_type: IRRIGATION.some(([code]) => code === farm.irrigation_type) ? farm.irrigation_type : 'CENTRE_PIVOT',
@@ -136,8 +164,9 @@ function RegisterFarmerPage() {
           }
           setFarmer(record)
           setDocuments(documentRows)
+          setAllocations((record.crop_allocations || []).map((row) => ({ crop: String(row.crop), season: String(row.season), hectares: String(Number(row.hectares)) })))
           setSaved(JSON.stringify(next))
-          setStep(2)
+          setStep(3)
         }
         setForm(next)
         setError('')
@@ -156,11 +185,8 @@ function RegisterFarmerPage() {
     if (!form.province) return undefined
     let active = true
     setLoadingOptions((current) => ({ ...current, districts: true }))
-    Promise.all([
-      loadAll(`/districts/?province=${form.province}&page_size=200`),
-      locked ? Promise.resolve([]) : loadAll(`/clusters/?province=${form.province}&page_size=200`).catch(() => []),
-    ]).then(([districts, clusters]) => {
-      if (active) setOptions((current) => ({ ...current, districts: districts.sort((a, b) => a.name.localeCompare(b.name)), clusters }))
+    loadAll(`/districts/?province=${form.province}&page_size=200`).then((districts) => {
+      if (active) setOptions((current) => ({ ...current, districts: districts.sort((a, b) => a.name.localeCompare(b.name)) }))
     }).catch(() => {
       if (active) setError('The districts could not be loaded. Check your connection and choose the province again.')
     }).finally(() => {
@@ -169,29 +195,18 @@ function RegisterFarmerPage() {
     return () => { active = false }
   }, [form.province, locked])
 
-  // Wards follow the district.
-  useEffect(() => {
-    if (!form.district) return undefined
-    let active = true
-    setLoadingOptions((current) => ({ ...current, wards: true }))
-    loadAll(`/wards/?district=${form.district}&page_size=200`).then((wards) => {
-      if (active) setOptions((current) => ({ ...current, wards: wards.sort(wardOrder) }))
-    }).catch(() => {
-      if (active) setError('The wards could not be loaded. Check your connection and choose the district again.')
-    }).finally(() => {
-      if (active) setLoadingOptions((current) => ({ ...current, wards: false }))
-    })
-    return () => { active = false }
-  }, [form.district])
-
   const errorsOne = useMemo(() => personalErrors(form), [form])
   const errorsTwo = useMemo(() => farmErrors(form), [form])
+  const cropProblems = useMemo(() => cropProblemsFor(allocations, arableLater(form)), [allocations, form])
   const uploadedCodes = new Set(documents.map((document) => document.document_type))
   const missing = required.filter((item) => !uploadedCodes.has(item.code))
-  const stepValid = [!Object.keys(errorsOne).length, !Object.keys(errorsTwo).length, !missing.length]
+  const stepValid = [!Object.keys(errorsOne).length, !Object.keys(errorsTwo).length, !cropProblems.length, !missing.length]
   const dirty = saved !== JSON.stringify(form)
   // A step opens only when every step before it is valid and saved.
-  const reachable = (index) => index === 0 || (index === 1 && stepValid[0]) || (index === 2 && stepValid[0] && stepValid[1] && Boolean(farmerId) && !dirty)
+  const reachable = (index) => index === 0 || (index === 1 && stepValid[0]) || (index === 2 && stepValid[0] && stepValid[1] && Boolean(farmerId) && !dirty) || (index === 3 && reachableCrops())
+  function reachableCrops() {
+    return stepValid[0] && stepValid[1] && stepValid[2] && Boolean(farmerId) && !dirty
+  }
   const editable = !farmer || EDITABLE.includes(farmer.verification_status)
   const arable = (Number(form.irrigated_hectares) || 0) + (Number(form.dryland_hectares) || 0)
 
@@ -219,8 +234,9 @@ function RegisterFarmerPage() {
     first_name: form.first_name.trim(), middle_name: form.middle_name.trim(), surname: form.surname.trim(),
     national_id: form.national_id, farm_name: form.farm_name.trim(), phone_primary: phoneDigits(form.phone_primary),
     email: form.email.trim(), gender: form.gender,
-    province: form.province, district: form.district, ward: form.ward,
-    ...(locked ? {} : { cluster: form.cluster || null }),
+    province: form.province, district: form.district, ward_text: form.ward.trim(),
+    farmer_type: form.farmer_type || 'EXISTING',
+    ...(asLead ? { as_lead: true } : {}),
     total_hectares: form.total_hectares, arable_hectares: String(arable), irrigated_hectares: form.irrigated_hectares || '0',
     irrigation_type: Number(form.irrigated_hectares) > 0
       ? (IRRIGATION.some(([code]) => code === form.irrigation_type) ? form.irrigation_type : 'CENTRE_PIVOT')
@@ -259,6 +275,27 @@ function RegisterFarmerPage() {
     if (!stepValid[1]) return
     if ((!farmerId || dirty) && !(await saveDraft())) return
     setStep(2)
+  }
+
+  const continueFromCrops = async () => {
+    if (!stepValid[2]) return
+    setBusy(true)
+    setError('')
+    try {
+      if (farmerId) {
+        const response = await apiClient.patch(`/farmers/${farmerId}/`, {
+          crop_allocations: allocations.filter((row) => row.crop && row.season).map((row) => ({
+            crop: Number(row.crop), season: Number(row.season), hectares: row.hectares,
+          })),
+        })
+        setFarmer(response.data)
+      }
+      setStep(3)
+    } catch (requestError) {
+      setError(errorMessage(requestError, 'The crop allocation could not be saved.'))
+    } finally {
+      setBusy(false)
+    }
   }
 
   const goTo = (index) => {
@@ -368,8 +405,10 @@ function RegisterFarmerPage() {
   return (
     <div className="page-card">
       <PageHead
-        title={id ? 'Continue registration' : 'Register a farmer'}
-        subtitle="Three steps: the farmer, the farm, then the KYC documents. An administrator approves the registration after you submit it."
+        title={id ? 'Continue registration' : asLead ? 'Register a lead farmer' : 'Register a farmer'}
+        subtitle={asLead
+          ? 'Four steps. The cluster is created from this lead farmer’s name. There is no cluster to choose.'
+          : 'Four steps: the farmer, the farm, the crop allocation, then the KYC documents. An administrator approves the registration after you submit it.'}
       >
         <Link className="ghost-btn" to="/farmers"><Icon name="arrowLeft" />Back to farmers</Link>
       </PageHead>
@@ -395,7 +434,7 @@ function RegisterFarmerPage() {
 
       <ol className="stepper" aria-label="Registration steps">
         {STEPS.map((item, index) => {
-          const state = index === step && !reviewing ? 'current' : stepValid[index] && (index < 2 ? reachable(index + 1) || index < step : true) ? 'done' : 'todo'
+          const state = index === step && !reviewing ? 'current' : stepValid[index] && (index < 3 ? reachable(index + 1) || index < step : true) ? 'done' : 'todo'
           return (
             <li key={item.key} className={state}>
               <button type="button" disabled={!reachable(index)} aria-current={state === 'current' ? 'step' : undefined} onClick={() => goTo(index)}>
@@ -411,7 +450,7 @@ function RegisterFarmerPage() {
 
       {step === 0 && !reviewing ? (
         <section className="card">
-          <div className="card-head"><div><p className="eyebrow">Step 1 of 3</p><h3>Farmer details</h3><p className="card-sub">Names and the farm name are written in capital letters automatically.</p></div></div>
+          <div className="card-head"><div><p className="eyebrow">Step 1 of 4</p><h3>Personal details</h3><p className="card-sub">Names and the farm name are written in capital letters automatically.</p></div></div>
           <div className="form-grid two">
             <Field label="First name" name="first_name" errors={errorsOne} required autoComplete="off" {...fieldProps} />
             <Field label="Middle name (optional)" name="middle_name" errors={errorsOne} autoComplete="off" {...fieldProps} />
@@ -420,6 +459,14 @@ function RegisterFarmerPage() {
             <Field label="Farm name" name="farm_name" errors={errorsOne} required autoComplete="off" maxLength={180} {...fieldProps} />
             <Field label="Phone number" name="phone_primary" errors={errorsOne} required type="tel" inputMode="tel" placeholder="0771234567" hint="9 to 12 digits." {...fieldProps} />
             <Field label="Email (optional)" name="email" errors={errorsOne} type="email" autoComplete="off" {...fieldProps} />
+            <label className="form-field">
+              <span>Farmer type<span className="req" aria-hidden="true"> *</span></span>
+              <select value={form.farmer_type} onChange={(event) => change('farmer_type', event.target.value)}>
+                <option value="EXISTING">Existing farmer</option>
+                <option value="NEW">New farmer</option>
+              </select>
+              <span className="field-hint">{form.farmer_type === 'NEW' ? 'A new farmer must also upload the DAEO letter.' : 'An existing farmer does not upload the DAEO letter.'}</span>
+            </label>
             <label className="form-field">
               <span>Gender (optional)</span>
               <select value={form.gender} onChange={(event) => change('gender', event.target.value)}>
@@ -439,7 +486,7 @@ function RegisterFarmerPage() {
 
       {step === 1 && !reviewing ? (
         <section className="card">
-          <div className="card-head"><div><p className="eyebrow">Step 2 of 3</p><h3>Farm details</h3><p className="card-sub">Choose the location from the lists, then record the land.</p></div></div>
+          <div className="card-head"><div><p className="eyebrow">Step 2 of 4</p><h3>Farm details</h3><p className="card-sub">Choose the province and district, then type the ward.</p></div></div>
           <div className="form-grid three">
             <SearchSelect
               label="Province" required value={form.province} disabled={locked}
@@ -454,22 +501,7 @@ function RegisterFarmerPage() {
               onChange={(value) => change('district', value)} placeholder={form.province ? 'Choose district' : 'Choose a province first'}
               error={touched.district ? errorsTwo.district : ''} hint={locked && context.district ? 'Set by your cluster.' : ''}
             />
-            <SearchSelect
-              label="Ward" required value={form.ward} disabled={!form.district} loading={loadingOptions.wards}
-              options={options.wards.map((item) => ({ value: item.id, label: item.name }))}
-              onChange={(value) => change('ward', value)} placeholder={form.district ? 'Choose ward' : 'Choose a district first'}
-              error={touched.ward ? errorsTwo.ward : ''}
-              emptyText="No wards are recorded for this district. Ask an administrator to add the ward."
-            />
-            {!locked ? (
-              <label className="form-field">
-                <span>Cluster (optional)</span>
-                <select value={form.cluster} disabled={!form.province} onChange={(event) => change('cluster', event.target.value)}>
-                  <option value="">No cluster yet</option>
-                  {options.clusters.map((cluster) => <option key={cluster.id} value={cluster.id}>{cluster.name}</option>)}
-                </select>
-              </label>
-            ) : null}
+            <Field label="Ward" name="ward" errors={errorsTwo} required disabled={!form.district} autoComplete="off" maxLength={120} placeholder={form.district ? 'Type the ward' : 'Choose a district first'} hint="Type the ward. It is not chosen from a list." {...fieldProps} />
             <Field label="Total farm size (ha)" name="total_hectares" errors={errorsTwo} required type="number" min="0" step="0.01" inputMode="decimal" {...fieldProps} />
             <Field label="Arable irrigated (ha)" name="irrigated_hectares" errors={errorsTwo} required type="number" min="0" step="0.01" inputMode="decimal" {...fieldProps} />
             <Field label="Arable dryland (ha)" name="dryland_hectares" errors={errorsTwo} required type="number" min="0" step="0.01" inputMode="decimal" {...fieldProps} />
@@ -504,22 +536,60 @@ function RegisterFarmerPage() {
       {step === 2 && !reviewing ? (
         <section className="card">
           <div className="card-head">
-            <div><p className="eyebrow">Step 3 of 3</p><h3>KYC documents</h3><p className="card-sub">PDF, JPG or PNG, up to {context.max_upload_mb} MB each. The registration is saved, so you can return and finish later.</p></div>
-            <Pill tone={missing.length ? 'warn' : 'good'}>{required.length - missing.length} of {required.length} required uploaded</Pill>
-          </div>
-          <h4 className="group-title">Required documents</h4>
-          <div className="upload-grid">
-            {required.map((item) => <UploadCard key={item.code} item={item} document={documents.find((document) => document.document_type === item.code)} state={uploads[item.code]} onFile={upload} />)}
-          </div>
-          <details className="report-note" style={{ marginTop: 16 }}>
-            <summary>Supporting documents (optional)</summary>
-            <p style={{ margin: '6px 0 12px' }}>From the SGR 200HA+ KYC checklist. Add the ones the farmer has.</p>
-            <div className="upload-grid">
-              {requirements.filter((item) => !item.required).map((item) => <UploadCard key={item.code} item={item} document={documents.find((document) => document.document_type === item.code)} state={uploads[item.code]} onFile={upload} />)}
+            <div>
+              <p className="eyebrow">Step 3 of 4</p>
+              <h3>Crop allocation</h3>
+              <p className="card-sub">Add the crops this farmer will grow, or leave the list empty for the administrator. Allocated hectares cannot exceed the {arable.toLocaleString('en-US', { maximumFractionDigits: 2 })} ha of arable land in a season.</p>
             </div>
-          </details>
+            <button type="button" className="ghost-btn small" onClick={() => setAllocations((current) => [...current, { crop: options.crops[0] ? String(options.crops[0].id) : '', season: options.seasons[0] ? String(options.seasons[0].id) : '', hectares: '' }])}><Icon name="plus" />Add crop</button>
+          </div>
+          {allocations.length ? (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead><tr><th>Crop</th><th>Season</th><th>Allocated hectares</th><th></th></tr></thead>
+                <tbody>
+                  {allocations.map((row, index) => (
+                    <tr key={`${index}-${row.crop}`}>
+                      <td>
+                        <select aria-label={`Crop ${index + 1}`} value={row.crop} onChange={(event) => setAllocations((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, crop: event.target.value } : item))}>
+                          <option value="">Choose crop</option>
+                          {options.crops.map((crop) => <option key={crop.id} value={crop.id}>{crop.name}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <select aria-label={`Season ${index + 1}`} value={row.season} onChange={(event) => setAllocations((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, season: event.target.value } : item))}>
+                          <option value="">Choose season</option>
+                          {options.seasons.map((season) => <option key={season.id} value={season.id}>{season.name}</option>)}
+                        </select>
+                      </td>
+                      <td><input aria-label={`Hectares ${index + 1}`} type="number" min="0.01" step="0.01" value={row.hectares} onChange={(event) => setAllocations((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, hectares: event.target.value } : item))} /></td>
+                      <td><button type="button" className="icon-btn danger" title="Remove crop" aria-label={`Remove crop ${index + 1}`} onClick={() => setAllocations((current) => current.filter((_, itemIndex) => itemIndex !== index))}><Icon name="trash" /></button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : <p className="card-sub">No crops yet. You can continue and add them later.</p>}
+          {cropProblems.length ? <div className="form-message error" role="alert">{cropProblems[0]}</div> : null}
+          <div className="total-strip"><span>Allocated this step</span><strong>{allocations.reduce((sum, row) => sum + (Number(row.hectares) || 0), 0).toLocaleString('en-US', { maximumFractionDigits: 2 })} ha</strong></div>
           <div className="wizard-actions">
             <button type="button" className="ghost-btn" onClick={() => setStep(1)}><Icon name="arrowLeft" />Back</button>
+            <button type="button" className="primary-btn" disabled={busy || Boolean(cropProblems.length)} onClick={continueFromCrops}>{busy ? 'Saving…' : 'Save and continue'}<Icon name="arrowRight" /></button>
+          </div>
+        </section>
+      ) : null}
+
+      {step === 3 && !reviewing ? (
+        <section className="card">
+          <div className="card-head">
+            <div><p className="eyebrow">Step 4 of 4</p><h3>KYC documents</h3><p className="card-sub">Every document is required{form.farmer_type === 'NEW' ? ', including the DAEO letter.' : '. The DAEO letter is not required for an existing farmer.'} PDF, JPG or PNG, up to {context.max_upload_mb} MB each.</p></div>
+            <Pill tone={missing.length ? 'warn' : 'good'}>{required.length - missing.length} of {required.length} required uploaded</Pill>
+          </div>
+          <div className="upload-grid">
+            {required.map((item) => <UploadCard key={item.code} item={{ ...item, required: true }} document={documents.find((document) => document.document_type === item.code)} state={uploads[item.code]} onFile={upload} />)}
+          </div>
+          <div className="wizard-actions">
+            <button type="button" className="ghost-btn" onClick={() => setStep(2)}><Icon name="arrowLeft" />Back</button>
             <span className="card-sub">{missing.length ? `Still needed: ${missing.map((item) => item.label).join(', ')}.` : 'All required documents are uploaded.'}</span>
             <button type="button" className="primary-btn" disabled={Boolean(missing.length)} onClick={() => setReviewing(true)}>Review registration<Icon name="arrowRight" /></button>
           </div>
@@ -531,15 +601,16 @@ function RegisterFarmerPage() {
           <div className="card-head"><div><p className="eyebrow">Final review</p><h3>Check the details before submitting</h3><p className="card-sub">After you submit, the registration goes to an administrator and cannot be changed unless corrections are requested.</p></div></div>
           <div className="review-grid">
             <ReviewBlock title="Farmer" onEdit={() => goTo(0)} rows={[
-              ['Name', fullName], ['National ID', form.national_id], ['Phone', form.phone_primary], ['Email', form.email || '—'], ['Farm name', form.farm_name],
+              ['Name', fullName], ['National ID', form.national_id], ['Farmer type', form.farmer_type === 'NEW' ? 'New farmer' : 'Existing farmer'], ['Phone', form.phone_primary], ['Email', form.email || '—'], ['Farm name', form.farm_name],
             ]} />
             <ReviewBlock title="Farm" onEdit={() => goTo(1)} rows={[
-              ['Province', nameOf(options.provinces, form.province)], ['District', nameOf(options.districts, form.district)], ['Ward', nameOf(options.wards, form.ward)],
-              ['Cluster', context.cluster?.name || nameOf(options.clusters, form.cluster)],
+              ['Province', nameOf(options.provinces, form.province)], ['District', nameOf(options.districts, form.district)], ['Ward', form.ward || '—'],
+              ['Cluster', context.cluster?.name || (asLead ? 'Created from the lead farmer’s name' : '—')],
               ['Total farm size', `${form.total_hectares} ha`], ['Arable irrigated', `${form.irrigated_hectares} ha`], ['Arable dryland', `${form.dryland_hectares} ha`],
               ['Coordinates', form.latitude !== '' ? `${form.latitude}, ${form.longitude}` : 'Not recorded'],
             ]} />
-            <ReviewBlock title="Documents" onEdit={() => goTo(2)} rows={documents.map((document) => [document.label, document.file_name])} />
+            <ReviewBlock title="Crops" onEdit={() => goTo(2)} rows={allocations.length ? allocations.map((row) => [nameOf(options.crops, row.crop), `${row.hectares || 0} ha · ${nameOf(options.seasons, row.season)}`]) : [['Crops', 'Left for the administrator']]} />
+            <ReviewBlock title="Documents" onEdit={() => goTo(3)} rows={documents.map((document) => [document.label, document.file_name])} />
           </div>
           <div className="wizard-actions">
             <button type="button" className="ghost-btn" onClick={() => setReviewing(false)}><Icon name="arrowLeft" />Back to documents</button>

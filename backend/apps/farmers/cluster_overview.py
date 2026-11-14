@@ -106,4 +106,32 @@ def build_cluster_overview(farmers, user, season_name):
             "input_allocation": _percent(len(allocated & approved_ids), len(approved)),
         },
         "farmers": farmer_rows,
+        "by_district": _places(farmer_rows, "district"),
+        "by_ward": _places(farmer_rows, "ward"),
     }
+
+
+def _places(rows, field):
+    groups = {}
+    for row in rows:
+        label = row.get(field) or "Not recorded"
+        bucket = groups.setdefault(label, {"label": label, "farmers": 0, "approved": 0, "pending": 0, "compliance": [], "participating": 0})
+        bucket["farmers"] += 1
+        if row["verification_status"] in kyc.APPROVED_STATES:
+            bucket["approved"] += 1
+            if row["subscription_compliance"] is not None:
+                bucket["compliance"].append(row["subscription_compliance"])
+            if row["planting_recorded"]:
+                bucket["participating"] += 1
+        elif row["verification_status"] in kyc.AWAITING_REVIEW:
+            bucket["pending"] += 1
+    result = []
+    for bucket in groups.values():
+        values = bucket.pop("compliance")
+        approved = bucket["approved"]
+        bucket["subscription_compliance"] = int(round(sum(values) / len(values))) if values else 0
+        bucket["agricultural_participation"] = _percent(bucket.pop("participating"), approved)
+        bucket["crop_allocation"] = bucket["agricultural_participation"]
+        result.append(bucket)
+    result.sort(key=lambda item: (-item["farmers"], item["label"]))
+    return result

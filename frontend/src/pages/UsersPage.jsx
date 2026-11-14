@@ -241,8 +241,8 @@ function UsersPage() {
                       {canManage ? (
                         <td>
                           <div className="table-actions">
-                            <button type="button" className="ghost-btn small" onClick={() => openEdit(user)}>Edit access</button>
-                            <button type="button" className="ghost-btn small" onClick={() => setConfirmReset(user)}>Reset password</button>
+                            <button type="button" className="icon-btn" title="Edit access" aria-label={`Edit ${user.email}`} onClick={() => openEdit(user)}><Icon name="pencil" /></button>
+                            <button type="button" className="icon-btn" title="Reset password" aria-label={`Reset password for ${user.email}`} onClick={() => setConfirmReset(user)}><Icon name="lock" /></button>
                             {user.id !== profile?.id ? (
                               <button type="button" className={user.is_active ? 'ghost-btn small danger' : 'ghost-btn small'} onClick={() => toggleActive(user)}>{user.is_active ? 'Deactivate' : 'Activate'}</button>
                             ) : null}
@@ -337,17 +337,23 @@ function UsersPage() {
             <label>Phone number<input type="tel" value={form.phone_number} onChange={(event) => setForm({ ...form, phone_number: event.target.value })} /></label>
             {form.role === 'lead_farmer' ? (
               <div>
-                <label>Cluster
-                  <select required disabled={!form.farmer} value={form.assigned_cluster} onChange={(event) => setForm({ ...form, assigned_cluster: event.target.value })}>
-                    <option value="">{form.farmer ? 'Select a cluster in their province' : 'Choose a registered farmer first'}</option>
-                    {leadClusters.map((cluster) => <option key={cluster.id} value={cluster.id}>{cluster.name}{cluster.province_name ? ` (${cluster.province_name})` : ''}</option>)}
-                  </select>
-                </label>
-                <span className="field-hint">
-                  {form.farmer && !leadClusters.length
-                    ? 'This farmer has no cluster in their province.'
-                    : 'A lead farmer can only lead a cluster in their own province, and only sees farmers in that cluster.'}
-                </span>
+                {options.clusters.some((cluster) => String(cluster.lead_member) === String(form.farmer)) ? (
+                  <p className="field-hint">Cluster: {options.clusters.find((cluster) => String(cluster.lead_member) === String(form.farmer))?.name}. The cluster is this lead farmer. It is assigned automatically.</p>
+                ) : (
+                  <>
+                    <label>Cluster
+                      <select required disabled={!form.farmer} value={form.assigned_cluster} onChange={(event) => setForm({ ...form, assigned_cluster: event.target.value })}>
+                        <option value="">{form.farmer ? 'Select a cluster in their province' : 'Choose a registered farmer first'}</option>
+                        {leadClusters.map((cluster) => <option key={cluster.id} value={cluster.id}>{cluster.name}{cluster.province_name ? ` (${cluster.province_name})` : ''}</option>)}
+                      </select>
+                    </label>
+                    <span className="field-hint">
+                      {form.farmer && !leadClusters.length
+                        ? 'Register this person as a lead farmer first. Their cluster is created from that registration.'
+                        : 'A lead farmer can only lead a cluster in their own province, and only sees farmers in that cluster.'}
+                    </span>
+                  </>
+                )}
               </div>
             ) : null}
             {form.role === 'district_coordinator' ? (

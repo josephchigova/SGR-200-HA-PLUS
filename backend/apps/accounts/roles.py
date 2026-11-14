@@ -30,11 +30,16 @@ MATRIX = {
     "dashboard": (ALL_ROLES, set(), set(), set(), set(), set()),
     "farmers": (
         FarmerWorkflowPermission.read_roles,
-        FarmerWorkflowPermission.write_roles,
+        {User.ROLE_SUPER_ADMIN, User.ROLE_LEAD_FARMER},
         FarmerWorkflowPermission.write_roles,
         FarmerWorkflowPermission.delete_roles,
         VerificationPermission.allowed_roles,
         FarmerWorkflowPermission.read_roles,
+    ),
+    "lead_registration": (
+        {User.ROLE_SUPER_ADMIN, User.ROLE_SGR_EXECUTIVE, User.ROLE_MEMBERSHIP_OFFICER},
+        {User.ROLE_SUPER_ADMIN, User.ROLE_SGR_EXECUTIVE, User.ROLE_MEMBERSHIP_OFFICER},
+        set(), set(), set(), set(),
     ),
     "verification": (
         VerificationPermission.allowed_roles | {User.ROLE_AUDITOR, User.ROLE_MEMBERSHIP_OFFICER},

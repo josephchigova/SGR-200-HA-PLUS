@@ -30,6 +30,20 @@ class DuplicateCheckService:
         return Farmer.objects.filter(combined)
 
 
+def _lead_name(farmer):
+    cluster = getattr(farmer, "cluster", None)
+    if cluster is None:
+        return ""
+    if cluster.lead_member_id and cluster.lead_member_id != farmer.pk:
+        return cluster.lead_member.full_name
+    if cluster.lead_member_id:
+        return cluster.lead_member.full_name
+    user = cluster.lead_farmer
+    if user is None:
+        return ""
+    return f"{user.first_name} {user.last_name}".strip() or user.email
+
+
 class FarmerRegistrationService:
     @staticmethod
     def validate(data, farmer_id=None):
@@ -64,7 +78,17 @@ class FarmerRegistrationService:
         elif not re.fullmatch(r"[A-Za-z0-9/-]{5,30}", national_id):
             errors["national_id"] = ["Enter 5-30 letters or digits; hyphens and slashes are allowed."]
         elif Farmer.objects.filter(national_id=national_id).exclude(pk=farmer_id).exists():
-            errors["national_id"] = ["National ID must be unique."]
+            existing = (
+                Farmer.objects.filter(national_id=national_id)
+                .exclude(pk=farmer_id)
+                .select_related("cluster__lead_member", "cluster__lead_farmer")
+                .first()
+            )
+            leader = _lead_name(existing)
+            errors["national_id"] = [
+                f"This farmer is already registered. {leader} is the lead farmer for this farmer."
+                if leader else "This farmer is already registered."
+            ]
 
         if not phone_primary:
             errors["phone_primary"] = ["Phone number is required."]
@@ -238,4 +262,111 @@ class FarmerApprovalEligibilityService:
             is_active=True,
             **{farm_flag: True},
             normalized_subscription_status__in=QUALIFYING_SUBSCRIPTION_STATUSES,
+        )
+
+
+def open_lead_cluster(farmer):
+    """The lead farmer is the cluster. The cluster name is the lead farmer's name."""
+    from apps.clusters.models import Cluster
+
+    farmer.is_lead = True
+    existing = Cluster.objects.filter(lead_member=farmer, active=True).first()
+    if existing is None:
+        name = farmer.full_name or f"Lead farmer {farmer.pk}"
+        base = name
+        suffix = 2
+        while Cluster.objects.filter(name=name).exists():
+            name = f"{base} ({suffix})"
+            suffix += 1
+        existing = Cluster.objects.create(
+            name=name,
+            province=farmer.province,
+            district=None,
+            lead_member=farmer,
+        )
+    farmer.cluster = existing
+    farmer.save(update_fields=["is_lead", "cluster", "updated_at"])
+    return existing
+
+
+def replace_crop_allocations(farmer, rows):
+    """Replace the draft crop list. Hectares in one season cannot pass the farm's arable land."""
+    from decimal import Decimal, InvalidOperation
+
+    from apps.programmes.models import Crop, Season
+
+    from .models import RegistrationCropAllocation
+
+    farm = farmer.farms.order_by("id").first()
+    limit = Decimal(str(farm.arable_hectares if farm is not None else 0))
+    cleaned = []
+    seen = set()
+    totals = {}
+    for index, row in enumerate(rows or []):
+        crop = Crop.objects.filter(pk=row.get("crop"), active=True).first()
+        season = Season.objects.filter(pk=row.get("season")).first()
+        if crop is None or season is None:
+            raise ValueError(f"Crop row {index + 1} needs a crop from the catalogue and a season.")
+        try:
+            hectares = Decimal(str(row.get("hectares")))
+        except (InvalidOperation, TypeError):
+            raise ValueError(f"Crop row {index + 1} has an invalid hectare value.")
+        if hectares <= 0:
+            raise ValueError(f"Crop row {index + 1} needs hectares greater than zero.")
+        key = (crop.pk, season.pk)
+        if key in seen:
+            raise ValueError(f"{crop.name} is already allocated for {season.name}.")
+        seen.add(key)
+        totals[season.pk] = totals.get(season.pk, Decimal("0")) + hectares
+        if totals[season.pk] > limit:
+            raise ValueError(
+                f"Allocated hectares for {season.name} ({totals[season.pk]} ha) exceed the farm's arable hectares ({limit} ha)."
+            )
+        cleaned.append((crop, season, hectares))
+    farmer.crop_allocations.all().delete()
+    RegistrationCropAllocation.objects.bulk_create([
+        RegistrationCropAllocation(farmer=farmer, crop=crop, season=season, hectares=hectares)
+        for crop, season, hectares in cleaned
+    ])
+
+
+def publish_registration_crops(farmer):
+    """Copy approved registration crops into seasonal planting and production."""
+    from apps.production.models import FarmerProduction, SeasonalPlantingPlan
+    from apps.programmes.models import Crop
+
+    farm = farmer.farms.order_by("id").first()
+    if farm is None:
+        return
+    by_season = {}
+    for row in farmer.crop_allocations.select_related("crop", "season"):
+        FarmerProduction.objects.update_or_create(
+            farmer=farmer,
+            season=row.season,
+            crop=row.crop.name,
+            defaults={
+                "farm": farm,
+                "contracted_hectares": row.hectares,
+                "status": FarmerProduction.STATUS_PENDING,
+            },
+        )
+        bucket = by_season.setdefault(row.season_id, {"season": row.season, "summer": None, "winter": None})
+        if row.crop.category == Crop.CATEGORY_WINTER:
+            if bucket["winter"] is None:
+                bucket["winter"] = row
+        elif bucket["summer"] is None:
+            bucket["summer"] = row
+    for bucket in by_season.values():
+        summer = bucket["summer"]
+        winter = bucket["winter"]
+        SeasonalPlantingPlan.objects.update_or_create(
+            farmer=farmer,
+            farm=farm,
+            season=bucket["season"],
+            defaults={
+                "summer_crop": summer.crop if summer else None,
+                "summer_hectares": summer.hectares if summer else 0,
+                "winter_crop": winter.crop if winter else None,
+                "winter_hectares": winter.hectares if winter else 0,
+            },
         )

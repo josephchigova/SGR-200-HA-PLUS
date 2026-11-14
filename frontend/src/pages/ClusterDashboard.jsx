@@ -17,6 +17,25 @@ const AWAITING = ['SUBMITTED', 'UNDER_REVIEW', 'PENDING']
 const APPROVED = ['VERIFIED', 'APPROVED']
 const ACTION = ['DRAFT', 'CORRECTIONS_REQUESTED', 'REJECTED']
 
+function PlaceTable({ title, rows }) {
+  return (
+    <div className="table-wrap" style={{ marginTop: 12 }}>
+      <table className="data-table">
+        <thead><tr><th>{title}</th><th>Farmers</th><th>Approved</th><th>Pending</th><th>Subscription</th><th>Participation</th><th>Crop allocation</th></tr></thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.label}>
+              <td>{row.label}</td><td>{row.farmers}</td><td>{row.approved}</td><td>{row.pending}</td>
+              <td>{row.subscription_compliance}%</td><td>{row.agricultural_participation}%</td><td>{row.crop_allocation}%</td>
+            </tr>
+          ))}
+          {!rows.length ? <tr><td colSpan={7}>No farmers in this breakdown yet.</td></tr> : null}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 export function Meter({ value, label }) {
   const percent = Math.max(0, Math.min(100, Number(value) || 0))
   const tone = percent >= 100 ? 'good' : percent > 0 ? 'warn' : 'none'
@@ -142,6 +161,12 @@ function ClusterDashboard({ selectedSeason = null, periodStatus = 'ready' }) {
               <Progress label="Seasonal cropping recorded" value={performance.seasonal_cropping || 0} detail="Approved farmers with a planting plan" />
               <Progress label="Inputs allocated" value={performance.input_allocation || 0} detail="Approved farmers with an input allocation" />
             </div>
+          </section>
+
+          <section className="card">
+            <div className="card-head"><div><h3>Performance by district and ward</h3><p className="card-sub">Only farmers in your cluster. Subscription figures are percentages.</p></div></div>
+            <PlaceTable title="District" rows={data.by_district || []} />
+            <PlaceTable title="Ward" rows={data.by_ward || []} />
           </section>
 
           <section className="card">

@@ -67,8 +67,10 @@ class FarmerDocumentSerializer(serializers.ModelSerializer):
         return DOCUMENT_LABELS.get(obj.document_type, obj.document_type)
 
     def get_required(self, obj):
-        from .kyc import REQUIRED_CODES
+        from .kyc import REQUIRED_CODES, required_codes_for
 
+        if obj.farmer_id:
+            return obj.document_type in required_codes_for(obj.farmer)
         return obj.document_type in REQUIRED_CODES
 
     def get_download_url(self, obj):
@@ -253,6 +255,9 @@ class FarmerSerializer(serializers.ModelSerializer):
     documents_summary = serializers.SerializerMethodField()
     primary_farm = serializers.SerializerMethodField()
     ward_name = serializers.CharField(source="ward.name", read_only=True, default="")
+    ward_text = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    as_lead = serializers.BooleanField(write_only=True, required=False, default=False)
+    crop_allocations = serializers.ListField(child=serializers.DictField(), write_only=True, required=False)
 
     class Meta:
         model = Farmer
@@ -277,6 +282,11 @@ class FarmerSerializer(serializers.ModelSerializer):
             "district_name",
             "ward",
             "ward_name",
+            "ward_text",
+            "farmer_type",
+            "is_lead",
+            "as_lead",
+            "crop_allocations",
             "cluster",
             "cluster_name",
             "lead_member",
@@ -324,7 +334,17 @@ class FarmerSerializer(serializers.ModelSerializer):
             "total_arable_hectares",
             "total_irrigated_hectares",
             "farms",
+            "is_lead",
         ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        national_id = self.fields.get("national_id")
+        if national_id is not None:
+            national_id.validators = [
+                validator for validator in national_id.validators
+                if validator.__class__.__name__ != "UniqueValidator"
+            ]
 
     def _registrar(self):
         request = self.context.get("request")
@@ -364,9 +384,20 @@ class FarmerSerializer(serializers.ModelSerializer):
             if national_id is not None and (self.instance is None or national_id != self.instance.national_id):
                 if not NATIONAL_ID_PATTERN.fullmatch(national_id):
                     raise serializers.ValidationError({"national_id": ["Enter the national ID as 63-2330173E58: two digits, a hyphen, seven digits, a letter and two digits."]})
+            typed_ward = str(attrs.pop("ward_text", "") or "").strip()
+            district = attrs.get("district", getattr(self.instance, "district", None))
+            if typed_ward:
+                if district is None:
+                    raise serializers.ValidationError({"ward_text": ["Choose the district before entering the ward."]})
+                from apps.geography.models import Ward
+
+                ward, _created = Ward.objects.get_or_create(district=district, name=typed_ward)
+                attrs["ward"] = ward
+            else:
+                attrs.pop("ward_text", None)
             ward = attrs.get("ward", getattr(self.instance, "ward", None))
             if self.instance is None and ward is None:
-                raise serializers.ValidationError({"ward": ["Choose the ward."]})
+                raise serializers.ValidationError({"ward": ["Enter the ward."]})
         source = dict(self.initial_data)
         for field in ("first_name", "middle_name", "surname", "national_id", "farm_name"):
             if field in attrs and field in source:
@@ -436,7 +467,10 @@ class FarmerSerializer(serializers.ModelSerializer):
         latitude = validated_data.pop("latitude", None)
         longitude = validated_data.pop("longitude", None)
         additional_farms = validated_data.pop("additional_farms", [])
-        as_draft = validated_data.pop("as_draft", False) or self._is_lead_farmer()
+        as_lead = validated_data.pop("as_lead", False)
+        crop_rows = validated_data.pop("crop_allocations", None)
+        validated_data.pop("ward_text", None)
+        as_draft = validated_data.pop("as_draft", False) or self._is_lead_farmer() or as_lead
         # A draft waits for its KYC documents. Nothing is a member until an administrator approves it.
         validated_data["verification_status"] = Farmer.STATUS_DRAFT if as_draft else Farmer.STATUS_SUBMITTED
         validated_data["membership_status"] = Farmer.MEMBERSHIP_INACTIVE
@@ -478,11 +512,21 @@ class FarmerSerializer(serializers.ModelSerializer):
                 irrigated_hectares=extra.get("irrigated_hectares") or "0",
                 irrigation_type=extra.get("irrigation_type") or Farm.IRRIGATION_NONE,
             )
+        if as_lead:
+            from .services import open_lead_cluster
+
+            cluster = open_lead_cluster(farmer)
+            farmer.farms.update(cluster=cluster)
+        if crop_rows is not None:
+            self._save_crops(farmer, crop_rows)
         return farmer
 
     def update(self, instance, validated_data):
         validated_data.pop("additional_farms", None)
         validated_data.pop("as_draft", None)
+        as_lead = validated_data.pop("as_lead", False)
+        crop_rows = validated_data.pop("crop_allocations", None)
+        validated_data.pop("ward_text", None)
         farm_changes = {
             name: validated_data.pop(name)
             for name in ("total_hectares", "arable_hectares", "irrigated_hectares", "irrigation_type", "farm_name")
@@ -508,7 +552,36 @@ class FarmerSerializer(serializers.ModelSerializer):
                 farm.latitude = latitude
                 farm.longitude = longitude
                 farm.save(update_fields=["latitude", "longitude", "updated_at"])
+        if as_lead:
+            from .services import open_lead_cluster
+
+            open_lead_cluster(farmer)
+        if crop_rows is not None:
+            self._save_crops(farmer, crop_rows)
         return farmer
+
+    def _save_crops(self, farmer, rows):
+        from .services import replace_crop_allocations
+
+        try:
+            replace_crop_allocations(farmer, rows)
+        except ValueError as exc:
+            raise serializers.ValidationError({"crop_allocations": [str(exc)]}) from exc
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["crop_allocations"] = [
+            {
+                "id": row.pk,
+                "crop": row.crop_id,
+                "crop_name": row.crop.name,
+                "season": row.season_id,
+                "season_name": row.season.name,
+                "hectares": str(row.hectares),
+            }
+            for row in instance.crop_allocations.select_related("crop", "season")
+        ]
+        return data
 
     def get_lead_member(self, obj):
         cluster = obj.cluster
@@ -546,13 +619,14 @@ class FarmerSerializer(serializers.ModelSerializer):
         }
 
     def get_documents_summary(self, obj):
-        from .kyc import REQUIRED_CODES
+        from .kyc import required_codes_for
 
         documents = list(obj.documents.all())
         present = {document.document_type for document in documents}
+        required = required_codes_for(obj)
         return {
-            "required": len(REQUIRED_CODES),
-            "uploaded_required": sum(1 for code in REQUIRED_CODES if code in present),
+            "required": len(required),
+            "uploaded_required": sum(1 for code in required if code in present),
             "uploaded": len(documents),
             "verified": sum(1 for document in documents if document.review_status == "VERIFIED"),
             "rejected": sum(1 for document in documents if document.review_status == "REJECTED"),
