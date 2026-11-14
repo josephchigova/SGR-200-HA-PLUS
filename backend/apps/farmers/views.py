@@ -301,12 +301,19 @@ class FarmerViewSet(viewsets.ModelViewSet):
         farmer = self.get_object()
         if farmer.verification_status not in kyc.EDITABLE_BY_REGISTRAR:
             return Response({"detail": "This registration is already with the administrator."}, status=400)
+        checked_in_person = not kyc.kyc_upload_required(farmer)
+        user = request.user
+        if checked_in_person and not user.is_superuser and user.role == user.ROLE_LEAD_FARMER:
+            # This record was captured by an administrator, who also completes it.
+            return Response({"detail": "An administrator completes this registration."}, status=403)
         missing = kyc.missing_required_documents(farmer)
         if missing:
             return Response({"detail": "Upload the required documents first: " + ", ".join(missing) + "."}, status=400)
         if not farmer.farms.exists():
             return Response({"detail": "Add the farm details before submitting."}, status=400)
-        kyc.submit_registration(farmer, request.user)
+        kyc.submit_registration(farmer, user)
+        if checked_in_person:
+            kyc.record_event(farmer, FarmerReviewEvent.UPDATED, user, "KYC documents checked in person by the administrator. No files uploaded.")
         return Response(self.get_serializer(farmer).data)
 
     @action(detail=True, methods=["get"], url_path="history")
@@ -347,6 +354,8 @@ class FarmerViewSet(viewsets.ModelViewSet):
         user = request.user
         data = {"locked": False, "cluster": None, "province": None, "district": None, "documents": kyc.DOCUMENT_TYPES,
                 "max_upload_mb": kyc.MAX_UPLOAD_BYTES // (1024 * 1024), "national_id_pattern": kyc.NATIONAL_ID_PATTERN.pattern,
+                # Only a lead farmer uploads KYC files. An administrator checks them in person.
+                "kyc_upload": not user.is_superuser and user.role == user.ROLE_LEAD_FARMER,
                 "registers": "lead" if _registers_leads(request.user) and request.user.role != request.user.ROLE_LEAD_FARMER else "farmer"}
         if not user.is_superuser and user.role == user.ROLE_LEAD_FARMER:
             cluster = user.assigned_cluster

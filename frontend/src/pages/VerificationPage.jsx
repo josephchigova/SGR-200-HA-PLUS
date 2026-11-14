@@ -134,7 +134,7 @@ function VerificationPage() {
                       <td>{farmer.district_name || '—'}</td>
                       <td>{farmer.cluster_name || '—'}</td>
                       <td>{farmer.registered_by_name || '—'}</td>
-                      <td>{summary ? `${summary.verified} of ${summary.uploaded} verified` : '—'}</td>
+                      <td>{farmer.kyc_upload_required === false && !summary?.uploaded ? 'Checked in person' : summary ? `${summary.verified} of ${summary.uploaded} verified` : '—'}</td>
                       <td><Pill tone={tone}>{label}</Pill></td>
                       <td><button type="button" className="primary-btn small" onClick={() => { setNotice(''); setReviewing(farmer.id) }}><Icon name="eye" />Review</button></td>
                     </tr>

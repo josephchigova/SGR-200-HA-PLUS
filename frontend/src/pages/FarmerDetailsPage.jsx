@@ -177,7 +177,9 @@ function FarmerDetailsPage() {
       <div className="split">
         <section className="card">
           <div className="card-head"><h3>KYC documents</h3></div>
-          <DocumentList documents={registration.documents} />
+          {farmer.kyc_upload_required === false && !registration.documents.length
+            ? <p className="card-sub">Registered by an administrator, who checked the KYC documents in person. No files were uploaded.</p>
+            : <DocumentList documents={registration.documents} />}
         </section>
         <section className="card">
           <div className="card-head"><h3>Registration history</h3></div>

@@ -166,7 +166,8 @@ function RegisterFarmerPage() {
           setDocuments(documentRows)
           setAllocations((record.crop_allocations || []).map((row) => ({ crop: String(row.crop), season: String(row.season), hectares: String(Number(row.hectares)) })))
           setSaved(JSON.stringify(next))
-          setStep(3)
+          // A registration an administrator captured has no upload step: the documents are checked in person.
+          setStep(record.kyc_upload_required ? 3 : 2)
         }
         setForm(next)
         setError('')
@@ -215,8 +216,11 @@ function RegisterFarmerPage() {
   const errorsTwo = useMemo(() => farmErrors(form), [form])
   const cropProblems = useMemo(() => cropProblemsFor(allocations, arableLater(form)), [allocations, form])
   const uploadedCodes = new Set(documents.map((document) => document.document_type))
+  // Only a lead farmer's registration uploads KYC files. An administrator checks them in person.
+  const uploadsKyc = farmer ? Boolean(farmer.kyc_upload_required) : Boolean(context?.kyc_upload)
+  const steps = uploadsKyc ? STEPS : STEPS.slice(0, 3)
   const missing = required.filter((item) => !uploadedCodes.has(item.code))
-  const stepValid = [!Object.keys(errorsOne).length, !Object.keys(errorsTwo).length, !cropProblems.length, !missing.length]
+  const stepValid = [!Object.keys(errorsOne).length, !Object.keys(errorsTwo).length, !cropProblems.length, !uploadsKyc || !missing.length]
   const dirty = saved !== JSON.stringify(form)
   // A step opens only when every step before it is valid and saved.
   const reachable = (index) => index === 0 || (index === 1 && stepValid[0]) || (index === 2 && stepValid[0] && stepValid[1] && Boolean(farmerId) && !dirty) || (index === 3 && reachableCrops())
@@ -306,7 +310,8 @@ function RegisterFarmerPage() {
         })
         setFarmer(response.data)
       }
-      setStep(3)
+      if (uploadsKyc) setStep(3)
+      else setReviewing(true)
     } catch (requestError) {
       setError(errorMessage(requestError, 'The crop allocation could not be saved.'))
     } finally {
@@ -424,7 +429,9 @@ function RegisterFarmerPage() {
         title={id ? 'Continue registration' : asLead ? 'Register a lead farmer' : 'Register a farmer'}
         subtitle={asLead
           ? 'Four steps. The cluster is created from this lead farmer’s name. There is no cluster to choose.'
-          : 'Four steps: the farmer, the farm, the crop allocation, then the KYC documents. An administrator approves the registration after you submit it.'}
+          : uploadsKyc
+            ? 'Four steps: the farmer, the farm, the crop allocation, then the KYC documents. An administrator approves the registration after you submit it.'
+            : 'Three steps: the farmer, the farm and the crop allocation. You check the KYC documents in person, so nothing is uploaded.'}
       >
         <Link className="ghost-btn" to="/farmers"><Icon name="arrowLeft" />Back to farmers</Link>
       </PageHead>
@@ -449,8 +456,8 @@ function RegisterFarmerPage() {
       ) : null}
 
       <ol className="stepper" aria-label="Registration steps">
-        {STEPS.map((item, index) => {
-          const state = index === step && !reviewing ? 'current' : stepValid[index] && (index < 3 ? reachable(index + 1) || index < step : true) ? 'done' : 'todo'
+        {steps.map((item, index) => {
+          const state = index === step && !reviewing ? 'current' : stepValid[index] && (index < steps.length - 1 ? reachable(index + 1) || index < step : true) ? 'done' : 'todo'
           return (
             <li key={item.key} className={state}>
               <button type="button" disabled={!reachable(index)} aria-current={state === 'current' ? 'step' : undefined} onClick={() => goTo(index)}>
@@ -466,7 +473,7 @@ function RegisterFarmerPage() {
 
       {step === 0 && !reviewing ? (
         <section className="card">
-          <div className="card-head"><div><p className="eyebrow">Step 1 of 4</p><h3>Personal details</h3><p className="card-sub">Names and the farm name are written in capital letters automatically.</p></div></div>
+          <div className="card-head"><div><p className="eyebrow">Step 1 of {steps.length}</p><h3>Personal details</h3><p className="card-sub">Names and the farm name are written in capital letters automatically.</p></div></div>
           <div className="form-grid two">
             <Field label="First name" name="first_name" errors={errorsOne} required autoComplete="off" {...fieldProps} />
             <Field label="Middle name (optional)" name="middle_name" errors={errorsOne} autoComplete="off" {...fieldProps} />
@@ -502,7 +509,7 @@ function RegisterFarmerPage() {
 
       {step === 1 && !reviewing ? (
         <section className="card">
-          <div className="card-head"><div><p className="eyebrow">Step 2 of 4</p><h3>Farm details</h3><p className="card-sub">Choose the province, district and ward from the official lists, then record the land.</p></div></div>
+          <div className="card-head"><div><p className="eyebrow">Step 2 of {steps.length}</p><h3>Farm details</h3><p className="card-sub">Choose the province, district and ward from the official lists, then record the land.</p></div></div>
           <div className="form-grid three">
             <SearchSelect
               label="Province" required value={form.province} disabled={locked}
@@ -559,7 +566,7 @@ function RegisterFarmerPage() {
         <section className="card">
           <div className="card-head">
             <div>
-              <p className="eyebrow">Step 3 of 4</p>
+              <p className="eyebrow">Step 3 of {steps.length}</p>
               <h3>Crop allocation</h3>
               <p className="card-sub">Add the crops this farmer will grow, or leave the list empty for the administrator. Allocated hectares cannot exceed the {arable.toLocaleString('en-US', { maximumFractionDigits: 2 })} ha of arable land in a season.</p>
             </div>
@@ -601,10 +608,10 @@ function RegisterFarmerPage() {
         </section>
       ) : null}
 
-      {step === 3 && !reviewing ? (
+      {step === 3 && uploadsKyc && !reviewing ? (
         <section className="card">
           <div className="card-head">
-            <div><p className="eyebrow">Step 4 of 4</p><h3>KYC documents</h3><p className="card-sub">Every document is required{form.farmer_type === 'NEW' ? ', including the DAEO letter.' : '. The DAEO letter is not required for an existing farmer.'} PDF, JPG or PNG, up to {context.max_upload_mb} MB each.</p></div>
+            <div><p className="eyebrow">Step 4 of {steps.length}</p><h3>KYC documents</h3><p className="card-sub">Every document is required{form.farmer_type === 'NEW' ? ', including the DAEO letter.' : '. The DAEO letter is not required for an existing farmer.'} PDF, JPG or PNG, up to {context.max_upload_mb} MB each.</p></div>
             <Pill tone={missing.length ? 'warn' : 'good'}>{required.length - missing.length} of {required.length} required uploaded</Pill>
           </div>
           <div className="upload-grid">
@@ -627,15 +634,17 @@ function RegisterFarmerPage() {
             ]} />
             <ReviewBlock title="Farm" onEdit={() => goTo(1)} rows={[
               ['Province', nameOf(options.provinces, form.province)], ['District', nameOf(options.districts, form.district)], ['Ward', nameOf(options.wards, form.ward)],
-              ['Cluster', context.cluster?.name || (asLead ? 'Created from the lead farmer’s name' : '—')],
+              ['Cluster', context.cluster?.name || farmer?.cluster_name || (asLead ? 'Created from the lead farmer’s name' : '—')],
               ['Total farm size', `${form.total_hectares} ha`], ['Arable irrigated', `${form.irrigated_hectares} ha`], ['Arable dryland', `${form.dryland_hectares} ha`],
               ['Coordinates', form.latitude !== '' ? `${form.latitude}, ${form.longitude}` : 'Not recorded'],
             ]} />
-            <ReviewBlock title="Crops" onEdit={() => goTo(2)} rows={allocations.length ? allocations.map((row) => [nameOf(options.crops, row.crop), `${row.hectares || 0} ha · ${nameOf(options.seasons, row.season)}`]) : [['Crops', 'Left for the administrator']]} />
-            <ReviewBlock title="Documents" onEdit={() => goTo(3)} rows={documents.map((document) => [document.label, document.file_name])} />
+            <ReviewBlock title="Crops" onEdit={() => goTo(2)} rows={allocations.length ? allocations.map((row) => [nameOf(options.crops, row.crop), `${row.hectares || 0} ha · ${nameOf(options.seasons, row.season)}`]) : [['Crops', (uploadsKyc ? 'Left for the administrator' : 'None recorded yet')]]} />
+            {uploadsKyc
+              ? <ReviewBlock title="Documents" onEdit={() => goTo(3)} rows={documents.map((document) => [document.label, document.file_name])} />
+              : <ReviewBlock title="KYC documents" rows={[['Verification', 'Checked in person by the administrator. Nothing is uploaded.']]} />}
           </div>
           <div className="wizard-actions">
-            <button type="button" className="ghost-btn" onClick={() => setReviewing(false)}><Icon name="arrowLeft" />Back to documents</button>
+            <button type="button" className="ghost-btn" onClick={() => { setReviewing(false); if (!uploadsKyc) setStep(2) }}><Icon name="arrowLeft" />{uploadsKyc ? 'Back to documents' : 'Back to crops'}</button>
             <button type="button" className="primary-btn" disabled={busy || !stepValid.every(Boolean) || dirty} onClick={submit}>{busy ? 'Submitting…' : 'Submit for approval'}<Icon name="check" /></button>
           </div>
         </section>
@@ -647,7 +656,7 @@ function RegisterFarmerPage() {
 function ReviewBlock({ title, rows, onEdit }) {
   return (
     <div className="review-block">
-      <header><h4>{title}</h4><button type="button" className="link-btn" onClick={onEdit}>Edit</button></header>
+      <header><h4>{title}</h4>{onEdit ? <button type="button" className="link-btn" onClick={onEdit}>Edit</button> : null}</header>
       <dl>
         {rows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
       </dl>

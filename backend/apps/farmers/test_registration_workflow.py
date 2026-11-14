@@ -6,7 +6,7 @@ from rest_framework.test import APIClient
 
 from apps.clusters.models import Cluster
 from apps.farmers import kyc
-from apps.farmers.models import Farmer, FarmerDocument, FarmerReviewEvent
+from apps.farmers.models import Farm, Farmer, FarmerDocument, FarmerReviewEvent
 from apps.geography.models import District, Province, Ward
 from apps.subscriptions.models import FarmerSubscription
 
@@ -262,3 +262,80 @@ class WardRegisterTests(TestCase):
         self.assertNotEqual(District.objects.get(name="Bulawayo").wards.count(), buhera.wards.count())
         call_command("load_zimbabwe_wards", verbosity=0)
         self.assertEqual(Ward.objects.count(), total)
+
+
+@override_settings(MEDIA_ROOT="/tmp/sgr-test-media")
+class InPersonKycTests(TestCase):
+    """An administrator checks KYC documents in person, so their registrations upload nothing."""
+
+    def setUp(self):
+        from apps.farmers.services import open_lead_cluster
+
+        self.province = Province.objects.create(name="Mashonaland West", code="MW")
+        self.district = District.objects.create(province=self.province, name="Makonde")
+        self.admin = account("admin@example.com", User.ROLE_SUPER_ADMIN)
+        self.lead_record = Farmer.objects.create(
+            first_name="ADMIN", surname="CAPTURED", national_id="63-1212121A12", province=self.province, district=self.district,
+            registered_by=self.admin,
+        )
+        Farm.objects.create(farmer=self.lead_record, farm_name="Home", province=self.province, total_hectares=250, arable_hectares=220)
+        cluster = open_lead_cluster(self.lead_record)
+        self.lead = account("lead@example.com", User.ROLE_LEAD_FARMER, assigned_cluster=cluster, farmer=self.lead_record)
+
+    def client_for(self, user):
+        client = APIClient()
+        client.force_authenticate(user=user)
+        return client
+
+    def test_administrator_capture_submits_and_is_approved_without_documents(self):
+        admin = self.client_for(self.admin)
+        record = admin.get(f"/api/farmers/{self.lead_record.id}/").json()
+        self.assertFalse(record["kyc_upload_required"])
+        self.assertEqual(record["documents_summary"]["required"], 0)
+        self.assertTrue(self.client_for(self.lead).get("/api/farmers/registration-context/").json()["kyc_upload"])
+        self.assertFalse(admin.get("/api/farmers/registration-context/").json()["kyc_upload"])
+        submitted = admin.post(f"/api/farmers/{self.lead_record.id}/submit/")
+        self.assertEqual(submitted.status_code, 200, submitted.content)
+        approved = admin.post(f"/api/farmers/{self.lead_record.id}/verify/", {"verification_status": "VERIFIED"}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.content)
+        remarks = list(self.lead_record.review_events.values_list("remarks", flat=True))
+        self.assertTrue(any("checked in person" in remark for remark in remarks))
+
+    def test_lead_farmer_cannot_submit_an_administrator_capture_without_documents(self):
+        self.assertEqual(self.client_for(self.lead).post(f"/api/farmers/{self.lead_record.id}/submit/").status_code, 403)
+
+    def test_lead_farmer_captures_still_need_every_document(self):
+        lead = self.client_for(self.lead)
+        created = lead.post("/api/farmers/", {
+            "first_name": "Rudo", "surname": "Moyo", "national_id": "63-3434343R34", "phone_primary": "0771234567",
+            "farm_name": "Rudo", "province": self.province.id, "district": self.district.id,
+            "ward": Ward.objects.create(district=self.district, name="Ward 2").id,
+            "total_hectares": "250", "arable_hectares": "220", "irrigated_hectares": "0", "as_draft": True,
+        }, format="json")
+        self.assertEqual(created.status_code, 201, created.content)
+        self.assertTrue(created.json()["kyc_upload_required"])
+        refused = lead.post(f"/api/farmers/{created.json()['id']}/submit/")
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("Upload the required documents", refused.json()["detail"])
+
+
+class LeadRecordFarmTests(TestCase):
+    def test_wizard_save_adds_the_first_farm_to_a_lead_record(self):
+        from apps.farmers.services import open_lead_cluster
+
+        province = Province.objects.create(name="Mashonaland East", code="ME")
+        district = District.objects.create(province=province, name="Marondera")
+        ward = Ward.objects.create(district=district, name="Ward 7")
+        admin = account("admin@example.com", User.ROLE_SUPER_ADMIN)
+        lead = Farmer.objects.create(first_name="JOHN", surname="MOYO", national_id="63-1111111A11", phone_primary="0771111111",
+                                     province=province, district=district, ward=ward, registered_by=admin)
+        open_lead_cluster(lead)
+        client = APIClient()
+        client.force_authenticate(user=admin)
+        saved = client.patch(f"/api/farmers/{lead.id}/", {
+            "farm_name": "moyo estate", "total_hectares": "320", "arable_hectares": "260", "irrigated_hectares": "60", "as_draft": True,
+        }, format="json")
+        self.assertEqual(saved.status_code, 200, saved.content)
+        farm = lead.farms.get()
+        self.assertEqual((farm.farm_name, farm.total_hectares, farm.cluster_id), ("MOYO ESTATE", 320, lead.cluster_id))
+        self.assertEqual(client.post(f"/api/farmers/{lead.id}/submit/").status_code, 200)

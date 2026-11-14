@@ -20,7 +20,7 @@ def _percent(part, whole):
 
 def build_cluster_overview(farmers, user, season_name, cluster=None):
     # The lead farmer's own record is the cluster, not one of its members.
-    farmers = farmers.exclude(is_lead=True).select_related("district", "ward", "cluster")
+    farmers = farmers.exclude(is_lead=True).select_related("district", "ward", "cluster", "registered_by")
     rows = list(farmers.order_by("surname", "first_name"))
     ids = [farmer.pk for farmer in rows]
     approved = [farmer for farmer in rows if farmer.verification_status in kyc.APPROVED_STATES]
@@ -47,13 +47,14 @@ def build_cluster_overview(farmers, user, season_name, cluster=None):
         crops.setdefault(allocation.farmer_id, []).append(f"{allocation.crop.name} {allocation.hectares.normalize():f} ha ({allocation.season.name})")
 
     documents = {}
-    for document in FarmerDocument.objects.filter(farmer_id__in=ids, document_type__in=kyc.REQUIRED_CODES):
+    for document in FarmerDocument.objects.filter(farmer_id__in=ids, document_type__in=kyc.DOCUMENT_CODES):
         entry = documents.setdefault(document.farmer_id, {"uploaded": set(), "verified": set()})
         entry["uploaded"].add(document.document_type)
         if document.review_status == FarmerDocument.REVIEW_VERIFIED:
             entry["verified"].add(document.document_type)
 
-    required = len(kyc.REQUIRED_CODES)
+    # Each farmer's own list: none when an administrator checked the documents in person.
+    required_for = {farmer.pk: kyc.required_codes_for(farmer) for farmer in rows}
     farmer_rows = []
     compliance_values = []
     for farmer in rows:
@@ -79,7 +80,8 @@ def build_cluster_overview(farmers, user, season_name, cluster=None):
             "subscription_status": compliance_label(percent) if percent is not None else "Awaiting approval",
             "documents_uploaded": len(docs["uploaded"]),
             "documents_verified": len(docs["verified"]),
-            "documents_required": required,
+            "documents_required": len(required_for[farmer.pk]),
+            "kyc_checked_in_person": not required_for[farmer.pk],
             "planting_recorded": farmer.pk in planting or farmer.pk in producing,
             "inputs_allocated": farmer.pk in allocated,
         })
@@ -87,7 +89,10 @@ def build_cluster_overview(farmers, user, season_name, cluster=None):
     total = len(rows)
     count = lambda *states: sum(1 for farmer in rows if farmer.verification_status in states)  # noqa: E731
     awaiting = count(*kyc.AWAITING_REVIEW)
-    kyc_complete = sum(1 for entry in documents.values() if len(entry["verified"]) >= required)
+    kyc_complete = sum(
+        1 for farmer in rows
+        if set(required_for[farmer.pk]) <= documents.get(farmer.pk, {"verified": set()})["verified"]
+    )
     participating = len((planting | producing) & approved_ids)
     if cluster is None and not user.is_superuser and user.role == user.ROLE_LEAD_FARMER:
         cluster = getattr(user, "assigned_cluster", None)

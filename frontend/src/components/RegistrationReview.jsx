@@ -188,7 +188,9 @@ function RegistrationReview({ farmerId, canDecide, onClose, onDecided }) {
           </div>
           <section>
             <h4 className="group-title">KYC documents</h4>
-            <DocumentList documents={documents} canReview={canDecide && decidable} onReview={reviewDocument} busy={busy} />
+            {farmer.kyc_upload_required === false && !documents.length
+              ? <p className="card-sub">An administrator registered this farmer and checked the KYC documents in person. No files were uploaded.</p>
+              : <DocumentList documents={documents} canReview={canDecide && decidable} onReview={reviewDocument} busy={busy} />}
           </section>
           {canDecide && decidable ? (
             <label className="form-field">

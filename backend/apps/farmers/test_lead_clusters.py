@@ -118,14 +118,23 @@ class LeadClusterRegistrationTests(TestCase):
             assigned_cluster_id=farmer.cluster_id, province=self.province,
         )
         owner = self.client_for(lead)
+        # The lead's own record was captured by the executive, who checks its documents in person.
+        self.assertEqual(kyc.required_codes_for(farmer), [])
+        new_member = owner.post("/api/farmers/", {
+            "first_name": "Tafara", "surname": "Ncube", "national_id": "63-6666666E66", "phone_primary": "0776666666",
+            "farm_name": "Ncube Farm", "province": self.province.id, "district": self.district.id, "ward_text": "Ward 2",
+            "total_hectares": "12", "arable_hectares": "10", "irrigated_hectares": "0", "farmer_type": "NEW", "as_draft": True,
+        }, format="json")
+        self.assertEqual(new_member.status_code, 201, new_member.content)
+        member_id = new_member.data["id"]
         for code in kyc.REQUIRED_CODES:
-            response = owner.post("/api/farmer-documents/", {"farmer": farmer.id, "document_type": code, "file": SimpleUploadedFile(f"{code}.pdf", PDF)}, format="multipart")
+            response = owner.post("/api/farmer-documents/", {"farmer": member_id, "document_type": code, "file": SimpleUploadedFile(f"{code}.pdf", PDF)}, format="multipart")
             self.assertEqual(response.status_code, 201, code)
-        missing = owner.post(f"/api/farmers/{farmer.id}/submit/")
+        missing = owner.post(f"/api/farmers/{member_id}/submit/")
         self.assertEqual(missing.status_code, 400)
         self.assertIn("DAEO letter", missing.json()["detail"])
-        owner.post("/api/farmer-documents/", {"farmer": farmer.id, "document_type": "DAEO_LETTER", "file": SimpleUploadedFile("daeo.pdf", PDF)}, format="multipart")
-        self.assertEqual(owner.post(f"/api/farmers/{farmer.id}/submit/").status_code, 200)
+        owner.post("/api/farmer-documents/", {"farmer": member_id, "document_type": "DAEO_LETTER", "file": SimpleUploadedFile("daeo.pdf", PDF)}, format="multipart")
+        self.assertEqual(owner.post(f"/api/farmers/{member_id}/submit/").status_code, 200)
 
         existing = client.post("/api/farmers/", self.lead_payload(first_name="Rudo", surname="Dube", national_id="63-4444444E44", farmer_type="EXISTING"), format="json")
         # The executive created another lead. A member registration uses the lead account.
@@ -159,10 +168,10 @@ class LeadClusterRegistrationTests(TestCase):
             email="j@example.com", username="j@example.com", password="StrongPass123!", role=User.ROLE_LEAD_FARMER,
             assigned_cluster_id=created.data["cluster"], province=self.province,
         )
-        owner = self.client_for(lead)
-        for code in kyc.required_codes_for(Farmer.objects.get(pk=farmer_id)):
-            owner.post("/api/farmer-documents/", {"farmer": farmer_id, "document_type": code, "file": SimpleUploadedFile(f"{code}.pdf", PDF)}, format="multipart")
-        owner.post(f"/api/farmers/{farmer_id}/submit/")
+        # The executive captured this record and checked its KYC documents in person, so nothing is uploaded.
+        self.assertEqual(kyc.required_codes_for(Farmer.objects.get(pk=farmer_id)), [])
+        self.assertEqual(self.client_for(lead).post(f"/api/farmers/{farmer_id}/submit/").status_code, 403)
+        self.assertEqual(client.post(f"/api/farmers/{farmer_id}/submit/").status_code, 200)
         admin = User.objects.create_user(email="root@example.com", username="root@example.com", password="StrongPass123!", role=User.ROLE_SUPER_ADMIN)
         reviewer = self.client_for(admin)
         for document in reviewer.get(f"/api/farmer-documents/?farmer={farmer_id}").data["results"]:

@@ -288,6 +288,7 @@ class FarmerSerializer(serializers.ModelSerializer):
     as_draft = serializers.BooleanField(write_only=True, required=False, default=False)
     registered_by_name = serializers.SerializerMethodField()
     documents_summary = serializers.SerializerMethodField()
+    kyc_upload_required = serializers.SerializerMethodField()
     primary_farm = serializers.SerializerMethodField()
     ward_name = serializers.CharField(source="ward.name", read_only=True, default="")
     ward_text = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -350,6 +351,7 @@ class FarmerSerializer(serializers.ModelSerializer):
             "submitted_at",
             "as_draft",
             "documents_summary",
+            "kyc_upload_required",
             "primary_farm",
             "is_active",
             "farm_count",
@@ -578,6 +580,10 @@ class FarmerSerializer(serializers.ModelSerializer):
         if farm_changes and farmer.verification_status in EDITABLE_BY_REGISTRAR:
             # While a registration is still being prepared, its first farm follows the form.
             farm = farmer.farms.order_by("id").first()
+            if farm is None and "total_hectares" in farm_changes:
+                # A lead farmer registered on the Lead farmers page has no farm until this form adds it.
+                farm = Farm(farmer=farmer, cluster=farmer.cluster)
+                farm_changes.setdefault("farm_name", f"{farmer.full_name} Farm")
             if farm is not None:
                 for name, value in farm_changes.items():
                     setattr(farm, name, value)
@@ -656,6 +662,11 @@ class FarmerSerializer(serializers.ModelSerializer):
             "latitude": str(farm.latitude) if farm.latitude is not None else None,
             "longitude": str(farm.longitude) if farm.longitude is not None else None,
         }
+
+    def get_kyc_upload_required(self, obj):
+        from .kyc import kyc_upload_required
+
+        return kyc_upload_required(obj)
 
     def get_documents_summary(self, obj):
         from .kyc import required_codes_for

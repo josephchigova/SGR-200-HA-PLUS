@@ -32,8 +32,20 @@ REQUIRED_CODES = [item["code"] for item in DOCUMENT_TYPES if item["required"]]
 DOCUMENT_LABELS = {item["code"]: item["label"] for item in DOCUMENT_TYPES}
 
 
+def kyc_upload_required(farmer):
+    """Uploaded KYC files are needed only when a lead farmer captured the registration.
+
+    An administrator who registers a farmer checks the documents in person, so nothing
+    is uploaded for those registrations.
+    """
+    registrar = getattr(farmer, "registered_by", None)
+    return bool(registrar is not None and not registrar.is_superuser and registrar.role == "lead_farmer")
+
+
 def required_codes_for(farmer):
     """Documents this farmer must upload. DAEO is required only for a new farmer."""
+    if not kyc_upload_required(farmer):
+        return []
     codes = list(REQUIRED_CODES)
     if getattr(farmer, "farmer_type", "") == "NEW":
         codes.append("DAEO_LETTER")
