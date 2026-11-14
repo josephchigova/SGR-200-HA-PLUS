@@ -136,3 +136,23 @@ class AuditLog(models.Model):
 
     def __str__(self):
         return f"{self.created_at:%Y-%m-%d %H:%M} {self.user_email} {self.action} {self.module}"
+
+
+class FormDraft(models.Model):
+    """An unfinished form, saved as the user types so a refresh or a stray click loses nothing.
+
+    Each user has at most one draft per form key. Drafts are private to their owner and
+    are removed when the form is saved. Passwords are never stored.
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="form_drafts")
+    key = models.CharField(max_length=160)
+    data = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+        constraints = [models.UniqueConstraint(fields=["user", "key"], name="unique_form_draft_per_user")]
+
+    def __str__(self):
+        return f"{self.user_id}:{self.key}"

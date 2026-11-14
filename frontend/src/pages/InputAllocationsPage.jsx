@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
+import { DraftNotice } from '../components/ui'
+import { useFormDraft } from '../drafts'
 
 const toList = (data) => (Array.isArray(data) ? data : data?.results || [])
 
@@ -32,6 +34,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
   const [previewLoading, setPreviewLoading] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const draft = useFormDraft({ key: 'allocations:new', value: form, onRestore: (data) => setForm((current) => ({ ...current, ...data })) })
 
   const seasonQuery = useMemo(() => {
     if (!selectedSeason) return ''
@@ -186,6 +189,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
         hectares: form.hectares,
       })
       setMessage('Input allocation saved and debt generated.')
+      draft.clear({ farmer: '', farm: '', crop_reference: '', programme: '', hectares: '' })
       setForm({ farmer: '', farm: '', crop_reference: '', programme: '', hectares: '' })
       setPreview(null)
       await refresh()
@@ -211,6 +215,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
 
       <form className="workflow-form" onSubmit={submit} hidden={!canAllocate}>
         <h4>Allocate crop inputs</h4>
+        <DraftNotice draft={draft} />
         <div className="workflow-fields">
           <FarmerAutocomplete
             label="Eligible farmer"

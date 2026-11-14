@@ -262,7 +262,7 @@ describe('VerificationPage pagination', () => {
       }))
     })
 
-    render(<VerificationPage />)
+    render(<MemoryRouter><VerificationPage /></MemoryRouter>)
 
     expect(await screen.findByText('Draft Queue Farmer')).toBeTruthy()
     expect(screen.getAllByText('Manicaland').length).toBeGreaterThan(0)

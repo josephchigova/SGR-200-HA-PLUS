@@ -13,7 +13,7 @@ from .models import AuditLog
 logger = logging.getLogger("apps.accounts")
 
 WRITE_METHODS = {"POST": AuditLog.ACTION_CREATE, "PUT": AuditLog.ACTION_UPDATE, "PATCH": AuditLog.ACTION_UPDATE, "DELETE": AuditLog.ACTION_DELETE}
-SKIPPED_PATHS = ("/api/auth/login/", "/api/auth/refresh/", "/api/auth/password-reset/")
+SKIPPED_PATHS = ("/api/auth/login/", "/api/auth/refresh/", "/api/auth/password-reset/", "/api/drafts/")
 ACTION_WORDS = {
     "verify": "Verification decision",
     "receive": "Payment received",

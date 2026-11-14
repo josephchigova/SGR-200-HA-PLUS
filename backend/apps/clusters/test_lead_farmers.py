@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import AuditLog
 from apps.clusters.models import Cluster
-from apps.farmers.models import Farmer, FarmerReviewEvent
+from apps.farmers.models import Farmer, FarmerChangeRequest, FarmerReviewEvent
 from apps.geography.models import District, Province, Ward
 
 User = get_user_model()
@@ -380,3 +380,129 @@ class SuperuserAndAccountTests(TestCase):
         last = self.client_for(User.objects.create_superuser(email="su@example.com", username="su", password=PASSWORD, role=User.ROLE_VIEWER)).delete(f"/api/auth/users/{lone.id}/")
         self.assertEqual(last.status_code, 400)
         self.assertIn("only active Super Administrator", last.json()["detail"])
+
+
+class AdminRegisteredLeadTests(TestCase):
+    """A lead farmer an administrator registers is complete. Their later edits go to administration."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.province = Province.objects.create(name="Manicaland", code="MN")
+        cls.district = District.objects.create(province=cls.province, name="Chipinge")
+        cls.admin = User.objects.create_user(email="admin@example.com", username="admin", password=PASSWORD, role=User.ROLE_SUPER_ADMIN)
+
+    def client_for(self, user):
+        client = APIClient()
+        client.force_authenticate(user=user)
+        return client
+
+    def register_lead_with_wizard(self):
+        admin = self.client_for(self.admin)
+        created = admin.post("/api/farmers/", {
+            "first_name": "Takunda", "middle_name": "Joshua", "surname": "Mutenje", "national_id": "64-9873737E34",
+            "phone_primary": "077717272773"[:12], "email": "takunda@example.com", "farm_name": "Mutenje Farm",
+            "province": self.province.id, "district": self.district.id, "ward_number": "12",
+            "total_hectares": "200", "arable_hectares": "100", "irrigated_hectares": "100", "irrigation_type": "SPRINKLER",
+            "as_draft": True, "as_lead": True, "login_password": "Lead-Start-2026!",
+        }, format="json")
+        self.assertEqual(created.status_code, 201, created.content)
+        farmer = Farmer.objects.get(pk=created.json()["id"])
+        finished = admin.post(f"/api/farmers/{farmer.id}/submit/")
+        self.assertEqual(finished.status_code, 200, finished.content)
+        farmer.refresh_from_db()
+        return farmer, User.objects.get(email="takunda@example.com")
+
+    def test_finishing_an_administrator_registration_completes_it(self):
+        farmer, _ = self.register_lead_with_wizard()
+        self.assertEqual(farmer.verification_status, Farmer.STATUS_VERIFIED)
+        self.assertEqual(farmer.membership_status, Farmer.MEMBERSHIP_ACTIVE)
+        self.assertEqual(farmer.verified_by, self.admin)
+        self.assertEqual(farmer.farms.get().verification_status, "VERIFIED")
+        self.assertTrue(farmer.review_events.filter(action=FarmerReviewEvent.APPROVED).exists())
+
+    def test_one_step_lead_registration_is_complete_too(self):
+        response = self.client_for(self.admin).post("/api/lead-farmers/", {
+            "first_name": "Mary", "surname": "Dube", "national_id": "63-3333333C33", "phone_primary": "0773333333",
+            "email": "mary@example.com", "province": self.province.id, "district": self.district.id, "ward_number": "3",
+            "password": "AnotherStrong456!",
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["own_record_status"], Farmer.STATUS_VERIFIED)
+
+    def test_lead_farmer_cannot_edit_the_record_directly(self):
+        farmer, lead = self.register_lead_with_wizard()
+        client = self.client_for(lead)
+        self.assertEqual(client.patch(f"/api/farmers/{farmer.id}/", {"phone_primary": "0779999999"}, format="json").status_code, 400)
+        self.assertEqual(client.post(f"/api/farmers/{farmer.id}/submit/").status_code, 400)
+        farm = farmer.farms.get()
+        self.assertEqual(client.patch(f"/api/farms/{farm.id}/", {"total_hectares": "300"}, format="json").status_code, 400)
+
+    def test_change_request_waits_for_approval_then_applies(self):
+        farmer, lead = self.register_lead_with_wizard()
+        client = self.client_for(lead)
+        nothing = client.post(f"/api/farmers/{farmer.id}/change-requests/", {"phone_primary": farmer.phone_primary}, format="json")
+        self.assertEqual(nothing.status_code, 400)
+        bad = client.post(f"/api/farmers/{farmer.id}/change-requests/", {"arable_hectares": "500"}, format="json")
+        self.assertEqual(bad.status_code, 400)
+        sent = client.post(f"/api/farmers/{farmer.id}/change-requests/", {
+            "phone_primary": "0779999999", "surname": "mutenje-moyo", "total_hectares": "250", "ward_number": 14, "note": "New phone",
+        }, format="json")
+        self.assertEqual(sent.status_code, 201, sent.content)
+        farmer.refresh_from_db()
+        self.assertEqual(farmer.phone_primary, "077717272773"[:12])
+        rows = {row["field"]: (row["old"], row["new"]) for row in sent.json()["rows"]}
+        self.assertEqual(rows["surname"], ("MUTENJE", "MUTENJE-MOYO"))
+        self.assertEqual(rows["ward_number"], ("12", "14"))
+        again = client.post(f"/api/farmers/{farmer.id}/change-requests/", {"phone_primary": "0778888888"}, format="json")
+        self.assertEqual(again.status_code, 201)
+        self.assertEqual(FarmerChangeRequest.objects.filter(farmer=farmer, status="PENDING").count(), 1)
+        change_id = again.json()["id"]
+        self.assertEqual(client.post(f"/api/farmer-change-requests/{change_id}/approve/").status_code, 403)
+        admin = self.client_for(self.admin)
+        queue = admin.get("/api/farmer-change-requests/?status=PENDING").json()["results"]
+        self.assertEqual([row["id"] for row in queue], [change_id])
+        notices = [item["key"] for item in admin.get("/api/notifications/").json()["items"]]
+        self.assertIn("changes", notices)
+        approved = admin.post(f"/api/farmer-change-requests/{change_id}/approve/")
+        self.assertEqual(approved.status_code, 200, approved.content)
+        farmer.refresh_from_db()
+        self.assertEqual(farmer.phone_primary, "0778888888")
+        self.assertEqual(farmer.verification_status, Farmer.STATUS_VERIFIED)
+        self.assertEqual(admin.post(f"/api/farmer-change-requests/{change_id}/approve/").status_code, 400)
+
+    def test_approved_names_and_land_reach_the_cluster_and_farm(self):
+        farmer, lead = self.register_lead_with_wizard()
+        change = self.client_for(lead).post(f"/api/farmers/{farmer.id}/change-requests/", {
+            "surname": "Moyo", "total_hectares": "260", "arable_hectares": "150", "ward_number": 7,
+        }, format="json").json()
+        self.client_for(self.admin).post(f"/api/farmer-change-requests/{change['id']}/approve/")
+        farmer.refresh_from_db()
+        self.assertEqual(farmer.cluster.name, "TAKUNDA JOSHUA MOYO")
+        self.assertEqual(User.objects.get(pk=lead.pk).last_name, "MOYO")
+        farm = farmer.farms.get()
+        self.assertEqual((farm.total_hectares, farm.arable_hectares, farm.ward.name), (260, 150, "Ward 7"))
+        self.assertEqual(farmer.ward.name, "Ward 7")
+
+    def test_rejection_needs_a_reason_and_changes_nothing(self):
+        farmer, lead = self.register_lead_with_wizard()
+        change = self.client_for(lead).post(f"/api/farmers/{farmer.id}/change-requests/", {"phone_primary": "0771111111"}, format="json").json()
+        admin = self.client_for(self.admin)
+        self.assertEqual(admin.post(f"/api/farmer-change-requests/{change['id']}/reject/").status_code, 400)
+        rejected = admin.post(f"/api/farmer-change-requests/{change['id']}/reject/", {"remarks": "Bring the new SIM registration"}, format="json")
+        self.assertEqual(rejected.json()["status"], "REJECTED")
+        farmer.refresh_from_db()
+        self.assertNotEqual(farmer.phone_primary, "0771111111")
+        current = self.client_for(lead).get(f"/api/farmers/{farmer.id}/change-requests/current/").json()
+        self.assertEqual(current["values"]["phone_primary"], farmer.phone_primary)
+        self.assertIn("ward_number", current["labels"])
+        history = self.client_for(lead).get(f"/api/farmers/{farmer.id}/change-requests/").json()
+        self.assertEqual(history[0]["remarks"], "Bring the new SIM registration")
+
+    def test_another_lead_farmer_cannot_request_changes(self):
+        farmer, _ = self.register_lead_with_wizard()
+        from apps.farmers.services import open_lead_cluster
+
+        other_record = Farmer.objects.create(first_name="OTHER", surname="LEAD", national_id="63-5656565O56", province=self.province)
+        other = User.objects.create_user(email="o@example.com", username="o", password=PASSWORD, role=User.ROLE_LEAD_FARMER,
+                                         farmer=other_record, assigned_cluster=open_lead_cluster(other_record))
+        self.assertEqual(self.client_for(other).post(f"/api/farmers/{farmer.id}/change-requests/", {"phone_primary": "0770000000"}, format="json").status_code, 404)

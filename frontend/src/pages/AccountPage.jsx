@@ -2,7 +2,8 @@ import { useState } from 'react'
 
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
-import { PageHead, errorMessage } from '../components/ui'
+import { DraftNotice, PageHead, errorMessage } from '../components/ui'
+import { useFormDraft } from '../drafts'
 import { useTheme } from '../theme'
 
 function AccountPage() {
@@ -15,12 +16,15 @@ function AccountPage() {
   // Until the user types, the form shows the saved profile.
   const details = edited || { first_name: profile?.first_name || '', last_name: profile?.last_name || '', phone_number: profile?.phone_number || '' }
   const setDetails = setEdited
+  // Passwords are never drafted; the contact details are.
+  const detailsDraft = useFormDraft({ key: 'account:details', value: details, enabled: Boolean(profile), onRestore: (data) => setEdited((current) => ({ ...(current || details), ...data })) })
 
   const saveDetails = async (event) => {
     event.preventDefault()
     setDetailState({ saving: true, message: '', error: '' })
     try {
       await apiClient.patch('/auth/me/', details)
+      detailsDraft.clear(details)
       reload()
       setDetailState({ saving: false, message: 'Your details were saved.', error: '' })
     } catch (requestError) {
@@ -62,6 +66,7 @@ function AccountPage() {
       </section>
 
       <form className="card" onSubmit={saveDetails}>
+        <DraftNotice draft={detailsDraft} />
         <div className="card-head"><h3>Your details</h3></div>
         <div className="form-grid">
           <label>First name<input value={details.first_name} onChange={(event) => setDetails({ ...details, first_name: event.target.value })} /></label>

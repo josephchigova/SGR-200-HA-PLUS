@@ -306,6 +306,11 @@ class NotificationsView(APIView):
                 add("verification", pending, f"{pending} farmer{'s' if pending != 1 else ''} awaiting verification", "Review the submitted registrations.", "/verification", "warning")
             elif can(user, "farmers", "create"):
                 add("verification", pending, f"{pending} registration{'s' if pending != 1 else ''} with the verification team", "No action needed until a decision is made.", "/farmers")
+            if can(user, "farmers", "approve"):
+                from apps.farmers.models import FarmerChangeRequest
+
+                waiting = scope_by_farmer(FarmerChangeRequest.objects.filter(status=FarmerChangeRequest.PENDING), user).count()
+                add("changes", waiting, f"{waiting} change request{'s' if waiting != 1 else ''} to review", "Lead farmers asked to change approved details.", "/verification?queue=changes", "warning")
             if can(user, "farmers", "edit"):
                 add("rejected", rejected, f"{rejected} rejected registration{'s' if rejected != 1 else ''}", "Correct the record and resubmit it.", "/farmers", "danger")
         if can(user, "subscriptions"):

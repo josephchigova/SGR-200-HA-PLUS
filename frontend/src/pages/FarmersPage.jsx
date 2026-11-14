@@ -270,7 +270,10 @@ function GroupRows({ group, canEdit, leadFarmer }) {
         const name = farmerName(farmer)
         const [label, tone] = statusOf(farmer.verification_status)
         const registrationOpen = EDITABLE.includes(farmer.verification_status)
-        const showPencil = canEdit && (!leadFarmer || registrationOpen)
+        // A lead farmer edits only registrations they are still capturing. Records an
+        // administrator registered change through a request on the farmer's page.
+        const leadEditable = registrationOpen && farmer.kyc_upload_required !== false
+        const showPencil = canEdit && (!leadFarmer || leadEditable)
         const place = [farmer.province_name, farmer.district_name].filter(Boolean).join(' · ')
         return (
           <tr key={farmer.id}>
@@ -284,7 +287,7 @@ function GroupRows({ group, canEdit, leadFarmer }) {
                 {showPencil ? (
                   <Link
                     className="icon-btn"
-                    to={registrationOpen ? `/farmers/${farmer.id}/edit` : `/farmers/${farmer.id}#farms`}
+                    to={registrationOpen && (!leadFarmer || leadEditable) ? `/farmers/${farmer.id}/edit` : `/farmers/${farmer.id}#farms`}
                     aria-label={`Edit ${name}`}
                     title={registrationOpen ? 'Edit registration' : 'Edit farms'}
                   >

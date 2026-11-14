@@ -1,6 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import apiClient from '../api/client'
+import { DraftNotice } from '../components/ui'
+import { useFormDraft } from '../drafts'
 
 const WRITE_ROLES = new Set(['super_admin', 'sgr_executive', 'finance_officer'])
 const ADMIN_ROLES = new Set(['super_admin', 'sgr_executive'])
@@ -141,6 +143,24 @@ function AssetsPanel() {
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const assetDraft = useFormDraft({
+    key: `assets:${editingId || 'new'}`,
+    value: form,
+    enabled: showForm,
+    onRestore: (data) => setForm((current) => ({ ...current, ...data })),
+  })
+  const actionValues = useMemo(() => ({ maintenance, transfer, disposal }), [maintenance, transfer, disposal])
+  const actionsDraft = useFormDraft({
+    key: `assets:${selected?.id}:actions`,
+    value: actionValues,
+    enabled: Boolean(selected?.id),
+    onRestore: (data) => {
+      if (data.maintenance) setMaintenance((current) => ({ ...current, ...data.maintenance }))
+      if (data.transfer) setTransfer((current) => ({ ...current, ...data.transfer }))
+      if (data.disposal) setDisposal((current) => ({ ...current, ...data.disposal }))
+    },
+  })
+  const categoryDraft = useFormDraft({ key: 'assets:category', value: categoryForm, onRestore: (data) => setCategoryForm((current) => ({ ...current, ...data })) })
 
   const canWrite = WRITE_ROLES.has(profile?.role)
   const canConfigureCategories = ADMIN_ROLES.has(profile?.role)
@@ -232,6 +252,7 @@ function AssetsPanel() {
       const response = editingId
         ? await apiClient.patch(`/assets/${editingId}/`, body)
         : await apiClient.post('/assets/', body)
+      assetDraft.clear()
       setMessage(editingId ? 'Asset updated. No ledger entry was posted.' : `Asset ${response.data.asset_id} registered. Acquisition cost was not posted as an expense.`)
       setShowForm(false)
       setEditingId(null)
@@ -260,6 +281,7 @@ function AssetsPanel() {
     setMessage('')
     try {
       await apiClient.post(path, body)
+      actionsDraft.clear()
       setMessage(success)
       await refresh()
       if (selected) await openAsset(selected)
@@ -291,6 +313,7 @@ function AssetsPanel() {
     setError('')
     try {
       await apiClient.post('/asset-categories/', categoryForm)
+      categoryDraft.clear({ name: '', description: '' })
       setCategoryForm({ name: '', description: '' })
       setMessage('Asset category saved.')
       await refresh()
@@ -373,6 +396,7 @@ function AssetsPanel() {
       {showForm && canWrite ? (
         <form className="asset-form" onSubmit={saveAsset}>
           <h4>{editingId ? 'Edit asset' : 'Register an asset'}</h4>
+          <DraftNotice draft={assetDraft} />
           <fieldset>
             <legend>Identity</legend>
             <div className="form-grid">
@@ -519,6 +543,7 @@ function AssetsPanel() {
 
           <h4>Maintenance</h4>
           <HistoryTable columns={['Date', 'Activity', 'Cost', 'Supplier']} rows={(history.maintenance || []).map((row) => [row.activity_date, row.description, money(row.cost), row.supplier || '—'])} empty="No maintenance has been recorded." />
+          <DraftNotice draft={actionsDraft}>Your unfinished maintenance, transfer or disposal entry was restored</DraftNotice>
           {canWrite ? (
             <form className="asset-inline-form" onSubmit={(event) => { event.preventDefault(); runAction(`/assets/${selected.id}/maintenance/`, maintenance, 'Maintenance recorded. The cost was not posted as an operating expense.') }}>
               <label>Date<input type="date" required value={maintenance.activity_date} onChange={(event) => setMaintenance({ ...maintenance, activity_date: event.target.value })} /></label>
@@ -584,6 +609,7 @@ function AssetsPanel() {
           <h4>Asset categories</h4>
           <p className="finance-note">Administrators can add categories. Categories already used by an asset cannot be deleted.</p>
           <ul>{categories.map((category) => <li key={category.id}>{category.name}{category.is_active ? '' : ' (inactive)'}</li>)}</ul>
+          <DraftNotice draft={categoryDraft} />
           <form className="asset-inline-form" onSubmit={saveCategory}>
             <label>Name<input required value={categoryForm.name} onChange={(event) => setCategoryForm({ ...categoryForm, name: event.target.value })} /></label>
             <label>Description<input value={categoryForm.description} onChange={(event) => setCategoryForm({ ...categoryForm, description: event.target.value })} /></label>

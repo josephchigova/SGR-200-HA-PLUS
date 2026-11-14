@@ -296,10 +296,10 @@ class InPersonKycTests(TestCase):
         self.assertFalse(admin.get("/api/farmers/registration-context/").json()["kyc_upload"])
         submitted = admin.post(f"/api/farmers/{self.lead_record.id}/submit/")
         self.assertEqual(submitted.status_code, 200, submitted.content)
-        approved = admin.post(f"/api/farmers/{self.lead_record.id}/verify/", {"verification_status": "VERIFIED"}, format="json")
-        self.assertEqual(approved.status_code, 200, approved.content)
+        # Finishing an administrator's own capture completes it. It does not wait in the queue.
+        self.assertEqual(submitted.json()["verification_status"], "VERIFIED")
         remarks = list(self.lead_record.review_events.values_list("remarks", flat=True))
-        self.assertTrue(any("checked in person" in remark for remark in remarks))
+        self.assertTrue(any("in person" in remark for remark in remarks))
 
     def test_lead_farmer_cannot_submit_an_administrator_capture_without_documents(self):
         self.assertEqual(self.client_for(self.lead).post(f"/api/farmers/{self.lead_record.id}/submit/").status_code, 403)

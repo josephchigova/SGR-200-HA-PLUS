@@ -455,3 +455,35 @@ def publish_registration_crops(farmer):
                 "winter_hectares": winter.hectares if winter else 0,
             },
         )
+
+
+def approve_registration(farmer, user, remarks=""):
+    """Make a registration an approved, active membership. Used by every approval path."""
+    from django.utils import timezone
+
+    from .kyc import record_event
+    from .models import FarmerReviewEvent
+
+    now = timezone.now()
+    farmer.verification_status = Farmer.STATUS_VERIFIED
+    farmer.verified_by = user
+    farmer.verification_date = now
+    farmer.rejection_reason = ""
+    farmer.review_remarks = remarks
+    farmer.membership_status = Farmer.MEMBERSHIP_ACTIVE
+    if farmer.submitted_at is None:
+        farmer.submitted_at = now
+    farmer.save(update_fields=[
+        "verification_status", "verified_by", "verification_date", "rejection_reason", "review_remarks",
+        "membership_status", "submitted_at", "updated_at",
+    ])
+    farmer.farms.update(verification_status="VERIFIED", verified_by=user, verification_date=now)
+    publish_registration_crops(farmer)
+    record_event(farmer, FarmerReviewEvent.APPROVED, user, remarks)
+    return farmer
+
+
+def can_approve(user):
+    from apps.accounts.permissions import VerificationPermission
+
+    return bool(user and user.is_authenticated and (user.is_superuser or user.role in VerificationPermission.allowed_roles))

@@ -31,8 +31,23 @@ export function storeTokens({ access, refresh, remember }) {
   window.dispatchEvent(new Event('sgr-auth-changed'))
 }
 
+// Drafts of unfinished forms (see drafts.js). On sign-out, drafts already kept on the
+// server leave this browser; drafts that never reached the server stay, so nothing is lost.
+function forgetSyncedDrafts() {
+  try {
+    for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+      const name = localStorage.key(index)
+      if (!name?.startsWith('sgr_draft:')) continue
+      try {
+        if (JSON.parse(localStorage.getItem(name))?.synced) localStorage.removeItem(name)
+      } catch { localStorage.removeItem(name) }
+    }
+  } catch { /* ignore */ }
+}
+
 export function clearSession(reason = '') {
   const hadSession = isSignedIn()
+  forgetSyncedDrafts()
   localStorage.removeItem(ACCESS)
   localStorage.removeItem(REFRESH)
   try {

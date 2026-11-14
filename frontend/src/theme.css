@@ -3015,3 +3015,46 @@ select.invalid,
   background: var(--danger);
   border-color: var(--danger);
 }
+
+/* Restored drafts */
+.draft-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.draft-notice svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
+.draft-notice span {
+  flex: 1 1 200px;
+}
+
+.draft-status {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+/* Change requests */
+.form-field.changed input,
+.form-field.changed select {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.change-request-card {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.change-requests {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}

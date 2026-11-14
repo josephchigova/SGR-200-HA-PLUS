@@ -219,6 +219,9 @@ class FarmerReviewEvent(models.Model):
     DOCUMENT_REJECTED = "DOCUMENT_REJECTED"
     UPDATED = "UPDATED"
     REASSIGNED = "REASSIGNED"
+    CHANGE_REQUESTED = "CHANGE_REQUESTED"
+    CHANGE_APPROVED = "CHANGE_APPROVED"
+    CHANGE_REJECTED = "CHANGE_REJECTED"
     ACTION_CHOICES = [
         (SUBMITTED, "Submitted for approval"),
         (RESUBMITTED, "Resubmitted after changes"),
@@ -230,6 +233,9 @@ class FarmerReviewEvent(models.Model):
         (DOCUMENT_REJECTED, "Document rejected"),
         (UPDATED, "Details changed"),
         (REASSIGNED, "Moved to another lead farmer"),
+        (CHANGE_REQUESTED, "Change requested"),
+        (CHANGE_APPROVED, "Change approved"),
+        (CHANGE_REJECTED, "Change rejected"),
     ]
 
     farmer = models.ForeignKey(Farmer, on_delete=models.CASCADE, related_name="review_events")
@@ -264,3 +270,36 @@ class RegistrationCropAllocation(models.Model):
 
     def __str__(self):
         return f"{self.farmer_id} {self.crop_id} {self.hectares}"
+
+
+class FarmerChangeRequest(models.Model):
+    """Changes a lead farmer asks for on a record administration already holds.
+
+    Nothing changes on the farmer until an administrator approves the request.
+    """
+
+    PENDING = "PENDING"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    STATUS_CHOICES = [(PENDING, "Awaiting approval"), (APPROVED, "Approved"), (REJECTED, "Rejected")]
+
+    farmer = models.ForeignKey(Farmer, on_delete=models.CASCADE, related_name="change_requests")
+    requested_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="farmer_change_requests")
+    changes = models.JSONField(default=dict)
+    previous = models.JSONField(default=dict)
+    note = models.TextField(blank=True)
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=PENDING)
+    remarks = models.TextField(blank=True)
+    reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="reviewed_farmer_changes")
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(fields=["farmer"], condition=models.Q(status="PENDING"), name="one_pending_change_per_farmer"),
+        ]
+
+    def __str__(self):
+        return f"{self.farmer_id} {self.status}"

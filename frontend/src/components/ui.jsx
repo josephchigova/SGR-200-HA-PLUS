@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 
+import { formatDraftTime } from '../drafts'
 import Icon from './Icon'
 
 export function PageHead({ title, subtitle, children }) {
@@ -119,4 +120,22 @@ export function errorMessage(requestError, fallback) {
     if (parts.length) return parts.join(' ')
   }
   return fallback
+}
+
+// Shows that a saved draft was put back into the form, with a way to throw it away.
+export function DraftNotice({ draft, children }) {
+  if (!draft?.restoredAt) return null
+  return (
+    <div className="form-message draft-notice" role="status">
+      <Icon name="history" />
+      <span>{children || 'Your unfinished draft was restored'}{formatDraftTime(draft.restoredAt) ? ` (saved ${formatDraftTime(draft.restoredAt)})` : ''}.</span>
+      <button type="button" className="ghost-btn small" onClick={draft.discard}>Discard draft</button>
+    </div>
+  )
+}
+
+// A quiet line under a form saying the draft is kept.
+export function DraftStatus({ draft }) {
+  if (!draft?.savedAt) return null
+  return <small className="draft-status">Draft saved {formatDraftTime(draft.savedAt)}</small>
 }

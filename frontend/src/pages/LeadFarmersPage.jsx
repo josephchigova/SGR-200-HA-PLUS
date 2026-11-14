@@ -6,7 +6,8 @@ import { useAuth } from '../auth'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
 import Icon from '../components/Icon'
 import SearchSelect from '../components/SearchSelect'
-import { EmptyState, Modal, PageHead, Pill, Skeleton, StatCard, errorMessage } from '../components/ui'
+import { DraftNotice, DraftStatus, EmptyState, Modal, PageHead, Pill, Skeleton, StatCard, errorMessage } from '../components/ui'
+import { useFormDraft } from '../drafts'
 import { formatNationalId, nationalIdError, statusOf, upper } from '../registration'
 import { Meter, PlaceTable } from './ClusterDashboard'
 
@@ -105,6 +106,7 @@ function LeadForm({ initial, creating, onClose, onSaved, cluster }) {
   const [problem, setProblem] = useState('')
   const [saving, setSaving] = useState(false)
   const busy = useRef(false)
+  const draft = useFormDraft({ key: `lead-farmers:${creating ? 'new' : cluster}`, value: form, onRestore: (data) => setForm((current) => ({ ...current, ...data })) })
   const idProblem = creating && form.national_id ? nationalIdError(form.national_id) : ''
 
   const field = (name, label, extra = {}) => (
@@ -148,6 +150,7 @@ function LeadForm({ initial, creating, onClose, onSaved, cluster }) {
       const response = creating
         ? await apiClient.post('/lead-farmers/', payload)
         : await apiClient.patch(`/lead-farmers/${cluster}/`, payload)
+      draft.clear()
       onSaved(response.data)
     } catch (requestError) {
       const found = fieldErrors(requestError)
@@ -168,11 +171,13 @@ function LeadForm({ initial, creating, onClose, onSaved, cluster }) {
       onClose={onClose}
       footer={(
         <>
+          <DraftStatus draft={draft} />
           <button type="button" className="ghost-btn" onClick={onClose}>Cancel</button>
           <button type="submit" form="lead-form" className="primary-btn" disabled={saving}>{saving ? 'Saving…' : creating ? 'Register lead farmer' : 'Save changes'}</button>
         </>
       )}
     >
+      <DraftNotice draft={draft} />
       <form id="lead-form" className="form-grid two" onSubmit={submit}>
         {field('first_name', 'First name', { required: true, autoComplete: 'off' })}
         {field('middle_name', 'Middle name (optional)', { autoComplete: 'off' })}
@@ -192,13 +197,16 @@ function LoginForm({ lead, onClose, onSaved }) {
   const [form, setForm] = useState({ email: lead.email || '', password: '' })
   const [problem, setProblem] = useState('')
   const [saving, setSaving] = useState(false)
+  const draft = useFormDraft({ key: `lead-farmers:${lead.cluster_id}:login`, value: form, onRestore: (data) => setForm((current) => ({ ...current, ...data })) })
   const submit = async (event) => {
     event.preventDefault()
     if (saving) return
     setSaving(true)
     setProblem('')
     try {
-      onSaved((await apiClient.post(`/lead-farmers/${lead.cluster_id}/login/`, form)).data)
+      const response = await apiClient.post(`/lead-farmers/${lead.cluster_id}/login/`, form)
+      draft.clear()
+      onSaved(response.data)
     } catch (requestError) {
       const found = fieldErrors(requestError)
       setProblem(Object.values(found).join(' ') || errorMessage(requestError, 'The login could not be created.'))
@@ -209,6 +217,7 @@ function LoginForm({ lead, onClose, onSaved }) {
   return (
     <Modal title={`Create a login for ${lead.lead_farmer}`} subtitle="The lead farmer signs in with this email and must change the password at first sign-in." onClose={onClose}
       footer={<><button type="button" className="ghost-btn" onClick={onClose}>Cancel</button><button type="submit" form="login-form" className="primary-btn" disabled={saving}>{saving ? 'Creating…' : 'Create login'}</button></>}>
+      <DraftNotice draft={draft} />
       <form id="login-form" className="form-grid" onSubmit={submit}>
         <label>Email<input type="email" required value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
         <label>Starting password<input type="text" required minLength={8} autoComplete="off" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} /></label>
@@ -223,6 +232,12 @@ function ReassignForm({ farmer, from, leads, onClose, onDone }) {
   const [reason, setReason] = useState('')
   const [problem, setProblem] = useState('')
   const [saving, setSaving] = useState(false)
+  const reassignValue = useMemo(() => ({ target, reason }), [target, reason])
+  const draft = useFormDraft({
+    key: `farmer:${farmer.id}:reassign`,
+    value: reassignValue,
+    onRestore: (data) => { setTarget(data.target || ''); setReason(data.reason || '') },
+  })
   const choices = leads.filter((lead) => lead.cluster_id !== from?.cluster_id && lead.status !== 'INACTIVE' && (!farmer.province || !lead.province || lead.province.id === farmer.province))
   const chosen = choices.find((lead) => String(lead.cluster_id) === String(target))
   const submit = async () => {
@@ -231,6 +246,7 @@ function ReassignForm({ farmer, from, leads, onClose, onDone }) {
     setProblem('')
     try {
       const response = await apiClient.post('/lead-farmers/reassign/', { farmer: farmer.id, cluster: target, reason })
+      draft.clear()
       onDone(response.data.detail)
     } catch (requestError) {
       setProblem(errorMessage(requestError, 'The farmer could not be moved.'))
@@ -250,6 +266,7 @@ function ReassignForm({ farmer, from, leads, onClose, onDone }) {
         </>
       )}
     >
+      <DraftNotice draft={draft} />
       <label className="form-field">New lead farmer
         <select value={target} onChange={(event) => setTarget(event.target.value)}>
           <option value="">Choose a lead farmer in the same province</option>
@@ -457,7 +474,7 @@ function LeadDetail({ clusterId, seasonName, leads, canManage, onClose, onChange
 function LeadFarmersPage({ selectedSeason = null }) {
   const { can } = useAuth()
   const canManage = can('clusters', 'create')
-  const [params, setParams] = useSearchParams()
+  const [params] = useSearchParams()
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [filters, setFilters] = useState({ search: '', province: '', status: '' })

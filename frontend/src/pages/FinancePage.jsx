@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from 'react'
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import Icon from '../components/Icon'
-import { EmptyState, PageHead, Pill, Skeleton, StatCard } from '../components/ui'
+import { DraftNotice, EmptyState, PageHead, Pill, Skeleton, StatCard } from '../components/ui'
+import { useFormDraft } from '../drafts'
 import AssetsPanel from './AssetsPanel'
 
 // Plain-language sections. Each one reads the same finance endpoints as before.
@@ -43,6 +44,7 @@ function FinancePage({ selectedSeason }) {
   const [schedule, setSchedule] = useState(null)
   const [debtors, setDebtors] = useState(null)
   const [expenseForm, setExpenseForm] = useState({ expense_date: '', description: '', amount: '', method: 'CASH', category: 'OTHER', reference: '', paid: true, notes: '' })
+  const expenseDraft = useFormDraft({ key: 'finance:expense', value: expenseForm, onRestore: (data) => setExpenseForm((current) => ({ ...current, ...data })) })
   const [reload, setReload] = useState(0)
   const requestId = useRef(0)
 
@@ -121,7 +123,9 @@ function FinancePage({ selectedSeason }) {
     try {
       await apiClient.post('/expense-schedule/', { ...expenseForm, paid: expenseForm.paid })
       setNotice('Expense recorded.')
-      setExpenseForm({ expense_date: end, description: '', amount: '', method: 'CASH', category: 'OTHER', reference: '', paid: true, notes: '' })
+      const blank = { expense_date: end, description: '', amount: '', method: 'CASH', category: 'OTHER', reference: '', paid: true, notes: '' }
+      expenseDraft.clear(blank)
+      setExpenseForm(blank)
       setReload((value) => value + 1)
     } catch (requestError) {
       const detail = requestError.response?.data
@@ -164,6 +168,7 @@ function FinancePage({ selectedSeason }) {
       {!loading && reportName === 'subscription-report' && report ? <SubscriptionReport report={report} /> : null}
       {!loading && reportName === 'cash-bank' && report ? <CashBank report={report} /> : null}
       {!loading && reportName === 'debtors' ? <Debtors rows={debtors?.results || []} /> : null}
+      {!loading && reportName === 'expense-schedule' ? <DraftNotice draft={expenseDraft} /> : null}
       {!loading && reportName === 'expense-schedule' ? <ExpenseSchedule schedule={schedule} form={expenseForm} setForm={setExpenseForm} onSubmit={saveExpense} canWrite={canWrite} /> : null}
       {canWrite && reportName === 'dashboard' ? (
         <details className="report-note no-print">

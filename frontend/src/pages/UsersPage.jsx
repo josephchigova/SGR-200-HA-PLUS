@@ -5,7 +5,8 @@ import { Link } from 'react-router-dom'
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import Icon from '../components/Icon'
-import { EmptyState, Modal, PageHead, Pill, Skeleton, errorMessage } from '../components/ui'
+import { DraftNotice, DraftStatus, EmptyState, Modal, PageHead, Pill, Skeleton, errorMessage } from '../components/ui'
+import { useFormDraft } from '../drafts'
 
 const EMPTY = { email: '', first_name: '', last_name: '', phone_number: '', role: 'viewer', is_active: true, assigned_cluster: '', district: '', province: '', farmer: '', password: '' }
 const MODULE_LABELS = {
@@ -41,6 +42,13 @@ function UsersPage() {
   const [confirmReset, setConfirmReset] = useState(null)
   const [confirmDelete, setConfirmDelete] = useState(null)
   const [deleting, setDeleting] = useState(false)
+  // Passwords are never kept in the draft.
+  const draft = useFormDraft({
+    key: `users:${editing === 'new' ? 'new' : editing?.id}`,
+    value: form,
+    enabled: Boolean(editing),
+    onRestore: (data) => setForm((current) => ({ ...current, ...data })),
+  })
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -134,6 +142,7 @@ function UsersPage() {
         await apiClient.patch(`/auth/users/${editing.id}/`, payload)
         setNotice(`Access updated for ${form.email}.`)
       }
+      draft.clear()
       setEditing(null)
       load()
     } catch (requestError) {
@@ -295,12 +304,14 @@ function UsersPage() {
           onClose={() => setEditing(null)}
           footer={(
             <>
+              <DraftStatus draft={draft} />
               <button type="button" className="ghost-btn" onClick={() => setEditing(null)}>Cancel</button>
               <button type="submit" form="user-form" className="primary-btn" disabled={saving}>{saving ? 'Saving…' : editing === 'new' ? 'Create account' : 'Save changes'}</button>
             </>
           )}
         >
           <form id="user-form" className="form-grid" onSubmit={save}>
+            <DraftNotice draft={draft}>{editing === 'new' ? 'Your unfinished account was restored. Type the starting password again' : undefined}</DraftNotice>
             <div className="form-field">
             <label>Role
               <select value={form.role} disabled={(editing !== 'new' && editing.id === profile?.id) || isLeadAccount} onChange={(event) => changeRole(event.target.value)}>

@@ -5,7 +5,8 @@ import apiClient from '../api/client'
 import { openDocument, saveDocument } from '../documents'
 import { statusOf } from '../registration'
 import Icon from './Icon'
-import { EmptyState, Modal, Pill, Skeleton, errorMessage } from './ui'
+import { useFormDraft } from '../drafts'
+import { DraftNotice, EmptyState, Modal, Pill, Skeleton, errorMessage } from './ui'
 
 const EVENT_TONES = { APPROVED: 'good', DOCUMENT_VERIFIED: 'good', REJECTED: 'bad', DOCUMENT_REJECTED: 'bad', CORRECTIONS_REQUESTED: 'info' }
 const listOf = (data) => (Array.isArray(data) ? data : data?.results || [])
@@ -104,6 +105,7 @@ function RegistrationReview({ farmerId, canDecide, onClose, onDecided }) {
   const { farmer, documents, events, loading, error, reload } = useRegistration(farmerId)
   const [remarks, setRemarks] = useState('')
   const [busy, setBusy] = useState('')
+  const remarksDraft = useFormDraft({ key: `review:${farmerId}`, value: { remarks }, enabled: canDecide, onRestore: (data) => setRemarks(data.remarks || '') })
   const [problem, setProblem] = useState('')
 
   const reviewDocument = async (document, decision, reason) => {
@@ -128,6 +130,7 @@ function RegistrationReview({ farmerId, canDecide, onClose, onDecided }) {
     setProblem('')
     try {
       await apiClient.post(`/farmers/${farmerId}/verify/`, { verification_status: status, remarks: remarks.trim(), rejection_reason: remarks.trim() })
+      remarksDraft.clear()
       onDecided(status)
     } catch (requestError) {
       setProblem(errorMessage(requestError, 'The decision could not be saved.'))
@@ -192,6 +195,7 @@ function RegistrationReview({ farmerId, canDecide, onClose, onDecided }) {
               ? <p className="card-sub">An administrator registered this farmer and checked the KYC documents in person. No files were uploaded.</p>
               : <DocumentList documents={documents} canReview={canDecide && decidable} onReview={reviewDocument} busy={busy} />}
           </section>
+          {canDecide && decidable ? <DraftNotice draft={remarksDraft}>Your unfinished remarks were restored</DraftNotice> : null}
           {canDecide && decidable ? (
             <label className="form-field">
               Remarks for the lead farmer

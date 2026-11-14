@@ -3,8 +3,10 @@ import { Link, useParams } from 'react-router-dom'
 
 import apiClient from '../api/client'
 import Icon from '../components/Icon'
+import { LeadChangeRequests } from '../components/ChangeRequests'
 import RegistrationReview, { DocumentList, HistoryList, useRegistration } from '../components/RegistrationReview'
-import { Pill } from '../components/ui'
+import { DraftNotice, Pill } from '../components/ui'
+import { useFormDraft } from '../drafts'
 import { statusOf } from '../registration'
 import { useAuth } from '../auth'
 import FarmLocationFields from '../components/FarmLocationFields'
@@ -19,8 +21,13 @@ function FarmerDetailsPage() {
   const [reviewing, setReviewing] = useState(false)
   const registration = useRegistration(id)
   const canDecide = can('farmers', 'approve')
-  // A lead farmer changes farms only while the registration is still open to them.
-  const canEdit = canEditRecord && (profile?.role !== 'lead_farmer' || ['DRAFT', 'CORRECTIONS_REQUESTED', 'REJECTED'].includes(farmer?.verification_status))
+  const isLead = profile?.role === 'lead_farmer'
+  const registrationOpen = ['DRAFT', 'CORRECTIONS_REQUESTED', 'REJECTED'].includes(farmer?.verification_status)
+  // A lead farmer edits only a registration they are still capturing. A record an
+  // administrator registered, or one already approved, changes through a change request.
+  const leadMayEdit = registrationOpen && farmer?.kyc_upload_required !== false
+  const canEdit = canEditRecord && (!isLead || leadMayEdit)
+  const canRequestChanges = isLead && Boolean(farmer) && !leadMayEdit
   const canRemoveFarm = canEdit && profile?.role !== 'lead_farmer'
   const [farms, setFarms] = useState([])
   const [showFarmForm, setShowFarmForm] = useState(false)
@@ -28,6 +35,12 @@ function FarmerDetailsPage() {
   const [farmForm, setFarmForm] = useState({ farm_name: '', total_hectares: '', arable_hectares: '', irrigated_hectares: '0', latitude: '', longitude: '' })
   const [savingFarm, setSavingFarm] = useState(false)
   const [error, setError] = useState('')
+  const farmDraft = useFormDraft({
+    key: `farmer:${id}:farm:${editingFarmId || 'new'}`,
+    value: farmForm,
+    enabled: showFarmForm,
+    onRestore: (data) => setFarmForm((current) => ({ ...current, ...data })),
+  })
 
   const loadDetails = useCallback(() => Promise.all([apiClient.get(`/farmers/${id}/`), apiClient.get('/farms/', { params: { farmer: id, include_inactive: '1' } })])
       .then(([farmerResponse, farmResponse]) => {
@@ -89,6 +102,7 @@ function FarmerDetailsPage() {
       } else {
         await apiClient.post('/farms/', payload)
       }
+      farmDraft.clear()
       resetFarmForm()
       await loadDetails()
     } catch (requestError) {
@@ -120,7 +134,7 @@ function FarmerDetailsPage() {
 
   const [statusLabel, statusTone] = statusOf(farmer?.verification_status)
   const awaiting = ['SUBMITTED', 'UNDER_REVIEW', 'PENDING'].includes(farmer?.verification_status)
-  const canResume = canEdit && Boolean(farmer?.registered_by) && ['DRAFT', 'CORRECTIONS_REQUESTED', 'REJECTED'].includes(farmer?.verification_status)
+  const canResume = canEdit && Boolean(farmer?.registered_by) && registrationOpen && (!isLead || farmer?.kyc_upload_required !== false)
 
   if (error) return <div className="form-message error" role="alert">{error}</div>
   if (!farmer) return <div className="form-message">Loading farmer…</div>
@@ -140,6 +154,7 @@ function FarmerDetailsPage() {
         </div>
       </div>
       {farmer.review_remarks && ['CORRECTIONS_REQUESTED', 'REJECTED'].includes(farmer.verification_status) ? <div className="form-message warning" role="status"><strong>Administrator remarks:</strong> {farmer.review_remarks}</div> : null}
+      {canRequestChanges ? <LeadChangeRequests farmerId={farmer.id} onChanged={loadDetails} /> : null}
       <dl className="detail-grid">
         <div><dt>National ID</dt><dd>{farmer.national_id || '—'}</dd></div>
         <div><dt>Membership number</dt><dd>{farmer.membership_number || '—'}</dd></div>
@@ -158,6 +173,7 @@ function FarmerDetailsPage() {
       <div className="workflow-list-heading" id="farms"><h4>Farms</h4><span>{farms.length} records</span>{canEdit ? <button type="button" className="primary-btn small" onClick={() => { resetFarmForm(); setShowFarmForm(true) }}>Add farm</button> : null}</div>
       {showFarmForm && canEdit ? <form className="workflow-form" onSubmit={saveFarm}>
         <h4>{editingFarmId ? 'Update farm record' : 'Add farm record'}</h4>
+        <DraftNotice draft={farmDraft} />
         <div className="workflow-fields">
           <label className="form-field">Farm name<input name="farm_name" value={farmForm.farm_name} onChange={updateFarmField} required maxLength="180" /></label>
           <label className="form-field">Total hectares<input name="total_hectares" type="number" min="0.01" step="0.01" value={farmForm.total_hectares} onChange={updateFarmField} required /></label>

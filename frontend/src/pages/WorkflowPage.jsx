@@ -5,6 +5,8 @@ import { useAuth } from '../auth'
 import { formatDisplay } from '../formatNumbers'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
 import Icon from '../components/Icon'
+import { DraftNotice } from '../components/ui'
+import { useFormDraft } from '../drafts'
 
 const listData = (data) => (Array.isArray(data) ? data : data?.results || [])
 
@@ -76,6 +78,20 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
   const [editingId, setEditingId] = useState(null)
   const [pendingDelete, setPendingDelete] = useState(null)
   const [deliveryPreview, setDeliveryPreview] = useState({ key: '', data: null, error: '' })
+  const draft = useFormDraft({
+    key: `workflow:${endpoint}:${editingId || 'new'}`,
+    value: values,
+    onRestore: (data) => {
+      // Reload the farms of a restored farmer before putting the saved choices back.
+      for (const form of forms) {
+        const farmerField = form.fields.find((field) => field.type === 'farmer')
+        const farmer = farmerField ? data?.[form.key]?.[farmerField.name] : ''
+        if (farmer) changeValueRef.current?.(form.key, farmerField.name, farmer)
+      }
+      setValues((current) => ({ ...current, ...data }))
+    },
+  })
+  const changeValueRef = useRef(null)
   const farmerOptionRequests = useRef({})
 
   const waitingForPeriod = seasonScoped && periodStatus === 'loading'
@@ -283,6 +299,8 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
     }
   }
 
+  useEffect(() => { changeValueRef.current = changeValue })
+
   const submit = async (event, form) => {
     event.preventDefault()
     if (seasonReadOnly) {
@@ -341,6 +359,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
         ? await apiClient.patch(scopedRequestUrl, payload)
         : await apiClient.post(scopedRequestUrl, payload)
       setMessage(`${form.submitLabel || 'Record'} saved.`)
+      draft.clear({ ...values, [form.key]: {} })
       setValues((current) => ({ ...current, [form.key]: {} }))
       setEditingId(null)
       if (form.afterCreate) await form.afterCreate(response.data)
@@ -417,6 +436,7 @@ function WorkflowPage({ title, endpoint, columns, forms, approveAction = false, 
       {deliveryPreview.error ? <div className="form-message error" role="alert">{deliveryPreview.error}</div> : null}
       {message ? <div className="form-message" role="status">{message}</div> : null}
 
+      <DraftNotice draft={draft} />
       {forms.map((form) => (
         <form className="workflow-form" key={form.key} onSubmit={(event) => submit(event, form)} hidden={!canCreate && !(editingId && canEdit)}>
           <h4>{form.title}</h4>

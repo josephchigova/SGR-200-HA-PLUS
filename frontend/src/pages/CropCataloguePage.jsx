@@ -4,6 +4,8 @@ import apiClient from '../api/client'
 import Icon from '../components/Icon'
 import { useAuth } from '../auth'
 import { addDecimal, multiplyDecimal } from '../decimal'
+import { DraftNotice } from '../components/ui'
+import { useFormDraft } from '../drafts'
 
 const costTypeChoices = [
   ['CROP_INPUT', 'Crop Input'],
@@ -80,6 +82,21 @@ function CropCataloguePage() {
     price_per_tonne: '',
     currency: 'USD',
     active: true,
+  })
+
+  const requirementDraft = useFormDraft({
+    key: `catalogue:${selectedCropId}:requirement:${editingRequirementId || 'new'}`,
+    value: requirementForm,
+    enabled: Boolean(selectedCropId),
+    onRestore: (data) => setRequirementForm((current) => ({ ...current, ...data })),
+  })
+  // The agricultural year is filled in for the user, so it is not part of the draft.
+  const priceDraft = useFormDraft({
+    key: `catalogue:${selectedCropId}:price:${editingPriceId || 'new'}`,
+    value: priceForm,
+    enabled: Boolean(selectedCropId),
+    exclude: ['season'],
+    onRestore: (data) => setPriceForm((current) => ({ ...current, ...data })),
   })
 
   const selectedCrop = useMemo(
@@ -205,6 +222,7 @@ function CropCataloguePage() {
         await apiClient.post('/crop-input-requirements/', payload)
         setMessage('Input requirement added.')
       }
+      requirementDraft.clear(emptyRequirement)
       setEditingRequirementId(null)
       setRequirementForm(emptyRequirement)
       await Promise.all([loadRequirements(selectedCropId), loadCrops(selectedCropId)])
@@ -242,6 +260,7 @@ function CropCataloguePage() {
         await apiClient.post('/crop-selling-prices/', payload)
         setMessage('Selling price saved.')
       }
+      priceDraft.clear({ season: priceForm.season, price_per_tonne: '', currency: 'USD', active: true })
       setEditingPriceId(null)
       setPriceForm({ season: priceForm.season, price_per_tonne: '', currency: 'USD', active: true })
       await loadPrices(selectedCropId)
@@ -338,6 +357,7 @@ function CropCataloguePage() {
       </div>
 
       <form className="workflow-form" onSubmit={submitRequirement} hidden={readOnly}>
+        <DraftNotice draft={requirementDraft} />
         <h4>{selectedCrop ? `${selectedCrop.name.toUpperCase()} - INPUT REQUIREMENTS` : 'Input Requirements'}</h4>
         <div className="workflow-fields">
           <label className="form-field">Group
@@ -407,6 +427,7 @@ function CropCataloguePage() {
       <div className="form-message">TOTAL INPUT COST / HA: {formatCatalogueMoney(totalCostPerHa)}</div>
 
       <form className="workflow-form" onSubmit={submitPrice} hidden={readOnly}>
+        <DraftNotice draft={priceDraft} />
         <h4>{selectedCrop ? `${selectedCrop.name} — Selling Price per Tonne — Agricultural Year ${seasons.find((season) => String(season.id) === String(priceForm.season))?.name || ''}`.trim() : 'Selling Price per Tonne'}</h4>
         <p className="finance-note">A selling price belongs to an agricultural year. It is not carried forward to the next year.</p>
         <div className="workflow-fields">

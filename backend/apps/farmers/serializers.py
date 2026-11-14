@@ -440,6 +440,11 @@ class FarmerSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"province": [f"You can only register farmers in {cluster.province.name}."]})
             if cluster.district_id and district is not None and district.pk != cluster.district_id:
                 raise serializers.ValidationError({"district": [f"You can only register farmers in {cluster.district.name}."]})
+            from .kyc import kyc_upload_required
+
+            if self.instance is not None and not kyc_upload_required(self.instance):
+                # An administrator registered this farmer. Changes go to administration as a change request.
+                raise serializers.ValidationError({"detail": ["This record was registered by an administrator. Send a change request for the administrator to approve."]})
             if self.instance is not None and self.instance.verification_status not in EDITABLE_BY_REGISTRAR:
                 raise serializers.ValidationError({"detail": ["This registration is with the administrator. It can be changed only if corrections are requested."]})
         else:

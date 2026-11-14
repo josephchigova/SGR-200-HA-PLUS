@@ -6,7 +6,8 @@ import { useAuth } from '../auth'
 import Icon from '../components/Icon'
 import MapLocationPicker from '../components/MapLocationPicker'
 import SearchSelect from '../components/SearchSelect'
-import { EmptyState, PageHead, Pill, Skeleton, errorMessage } from '../components/ui'
+import { DraftNotice, DraftStatus, EmptyState, PageHead, Pill, Skeleton, errorMessage } from '../components/ui'
+import { useFormDraft } from '../drafts'
 import { openDocument } from '../documents'
 import {
   farmErrors,
@@ -222,6 +223,24 @@ function RegisterFarmerPage() {
     return stepValid[0] && stepValid[1] && stepValid[2] && Boolean(farmerId) && !dirty
   }
   const editable = !farmer || EDITABLE.includes(farmer.verification_status)
+
+  // The whole wizard is kept as a draft, so a refresh or a stray click loses nothing.
+  // The lead farmer's login password is never part of it.
+  const draftValue = useMemo(() => ({ form, allocations, step }), [form, allocations, step])
+  const draft = useFormDraft({
+    key: `register:${asLead ? 'lead' : 'farmer'}:${farmerId || 'new'}`,
+    value: draftValue,
+    enabled: !loading && editable && !done,
+    onRestore: (data) => {
+      const restoredForm = { ...form, ...(data.form || {}) }
+      setForm(restoredForm)
+      if (Array.isArray(data.allocations)) setAllocations(data.allocations)
+      const wanted = Number.isInteger(data.step) ? data.step : 0
+      // Steps after the farm need the farm saved first.
+      setStep(saved === JSON.stringify(restoredForm) ? wanted : Math.min(wanted, 1))
+      setReviewing(false)
+    },
+  })
   const arable = (Number(form.irrigated_hectares) || 0) + (Number(form.dryland_hectares) || 0)
 
   const change = (name, value) => {
@@ -268,6 +287,12 @@ function RegisterFarmerPage() {
       const response = farmerId
         ? await apiClient.patch(`/farmers/${farmerId}/`, payload())
         : await apiClient.post('/farmers/', payload())
+      if (!farmerId) {
+        // The record now exists. Its address replaces the blank form's, so a refresh
+        // reopens this registration instead of starting a new one.
+        draft.clear()
+        window.history.replaceState(window.history.state, '', `/farmers/${response.data.id}/edit${asLead ? '?as=lead' : ''}`)
+      }
       setFarmer(response.data)
       setFarmerId(String(response.data.id))
       setSaved(JSON.stringify(form))
@@ -364,6 +389,7 @@ function RegisterFarmerPage() {
     setError('')
     try {
       const response = await apiClient.post(`/farmers/${farmerId}/submit/`)
+      draft.clear()
       setFarmer(response.data)
       setDone(true)
     } catch (requestError) {
@@ -388,16 +414,19 @@ function RegisterFarmerPage() {
   }
 
   if (done) {
+    const complete = ['VERIFIED', 'APPROVED'].includes(farmer?.verification_status)
     return (
       <div className="page-card">
-        <PageHead title="Registration submitted" />
+        <PageHead title={complete ? 'Registration complete' : 'Registration submitted'} />
         <div className="card">
-          <EmptyState icon="check" title={`${fullName} is now awaiting approval`}>
-            An administrator will check the documents and approve the registration, or send it back with remarks. You can follow its status on the Farmers page.
+          <EmptyState icon="check" title={complete ? `${fullName} is registered` : `${fullName} is now awaiting approval`}>
+            {complete
+              ? 'The registration is complete and approved. You checked the KYC documents in person, so nothing waits for review. Any later change the lead farmer asks for comes to Approvals.'
+              : 'An administrator will check the documents and approve the registration, or send it back with remarks. You can follow its status on the Farmers page.'}
           </EmptyState>
           <div className="form-actions" style={{ justifyContent: 'center' }}>
             <Link className="ghost-btn" to={`/farmers/${farmerId}`}>Open the registration</Link>
-            <a className="primary-btn" href="/farmers/register"><Icon name="plus" />Register another farmer</a>
+            <a className="primary-btn" href={asLead ? '/farmers/register?as=lead' : '/farmers/register'}><Icon name="plus" />{asLead ? 'Register another lead farmer' : 'Register another farmer'}</a>
           </div>
         </div>
       </div>
@@ -466,7 +495,11 @@ function RegisterFarmerPage() {
         })}
       </ol>
 
+      <DraftNotice draft={draft}>
+        {createsLogin ? 'Your unfinished registration was restored. Type the login password again, it is never kept in a draft' : 'Your unfinished registration was restored'}
+      </DraftNotice>
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
+      <DraftStatus draft={draft} />
 
       {step === 0 && !reviewing ? (
         <section className="card">
@@ -646,7 +679,7 @@ function RegisterFarmerPage() {
           </div>
           <div className="wizard-actions">
             <button type="button" className="ghost-btn" onClick={() => { setReviewing(false); if (!uploadsKyc) setStep(2) }}><Icon name="arrowLeft" />{uploadsKyc ? 'Back to documents' : 'Back to crops'}</button>
-            <button type="button" className="primary-btn" disabled={busy || !stepValid.every(Boolean) || dirty} onClick={submit}>{busy ? 'Submitting…' : 'Submit for approval'}<Icon name="check" /></button>
+            <button type="button" className="primary-btn" disabled={busy || !stepValid.every(Boolean) || dirty} onClick={submit}>{busy ? (uploadsKyc ? 'Submitting…' : 'Completing…') : (uploadsKyc ? 'Submit for approval' : 'Complete registration')}<Icon name="check" /></button>
           </div>
         </section>
       ) : null}

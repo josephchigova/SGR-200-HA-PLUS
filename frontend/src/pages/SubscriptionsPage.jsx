@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import { Meter } from './ClusterDashboard'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
+import { DraftNotice } from '../components/ui'
+import { useFormDraft } from '../drafts'
 
 const PAGE_SIZE = 25
 
@@ -54,6 +56,19 @@ function SubscriptionsPage({ selectedSeason }) {
   const [paymentDate, setPaymentDate] = useState(today)
   const [saving, setSaving] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  const paymentValue = useMemo(() => ({ farmerId, paidAmount, paymentMethod, paymentReference, paymentNotes, paymentDate }), [farmerId, paidAmount, paymentMethod, paymentReference, paymentNotes, paymentDate])
+  const paymentDraft = useFormDraft({
+    key: 'subscriptions:payment',
+    value: paymentValue,
+    onRestore: (data) => {
+      setFarmerId(data.farmerId || '')
+      setPaidAmount(data.paidAmount || '')
+      setPaymentMethod(data.paymentMethod || 'CASH')
+      setPaymentReference(data.paymentReference || '')
+      setPaymentNotes(data.paymentNotes || '')
+      if (data.paymentDate) setPaymentDate(data.paymentDate)
+    },
+  })
   const requestKey = JSON.stringify([seasonName, page, debouncedSearch, reloadKey])
   const summaryRequestKey = JSON.stringify([seasonName, reloadKey])
   const farmerStatusKey = farmerId && seasonName ? `${seasonName}:${farmerId}` : ''
@@ -189,6 +204,7 @@ function SubscriptionsPage({ selectedSeason }) {
         idempotency_key: `${farmerId}-${seasonName}-${paymentDate}-${paidAmount}-${paymentReference}-${Date.now()}`,
       })
       setFarmerStatus((current) => ({ ...current, ...response.data }))
+      paymentDraft.clear({ ...paymentValue, paidAmount: '', paymentReference: '', paymentNotes: '' })
       setPaidAmount('')
       setPaymentReference('')
       setPaymentNotes('')
@@ -223,6 +239,7 @@ function SubscriptionsPage({ selectedSeason }) {
         <div><span>Unpaid</span><strong>{currentSummary ? currentSummary.unpaid.toLocaleString() : '—'}</strong></div>
       </section>
 
+      {canReceive ? <DraftNotice draft={paymentDraft} /> : null}
       {canReceive ? <form className="workflow-form subscription-payment-form" onSubmit={submitPayment}>
         <div className="workflow-heading">
           <h4>Record or update payment</h4>

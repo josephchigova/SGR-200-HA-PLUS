@@ -21,6 +21,7 @@ from apps.farmers.serializers import _ward_from_input
 from apps.farmers.services import (
     duplicate_message,
     find_registered_farmer,
+    approve_registration,
     open_lead_cluster,
     reassign_farmer,
     sync_cluster_name,
@@ -318,6 +319,8 @@ class LeadFarmerViewSet(viewsets.ViewSet):
                 cluster.lead_farmer = account
                 cluster.save(update_fields=["lead_farmer", "updated_at"])
                 record_event(farmer, FarmerReviewEvent.UPDATED, request.user, "Registered as a lead farmer. Cluster and login created.")
+                # An administrator registered this lead farmer and checked the documents in person.
+                approve_registration(farmer, request.user, "Registered by an administrator, who checked the KYC documents in person.")
         except IntegrityError:
             # Two administrators saved the same person at the same moment.
             return Response({"national_id": ["This person was registered a moment ago. Refresh the list."]}, status=status.HTTP_400_BAD_REQUEST)

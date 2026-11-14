@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import Icon from '../components/Icon'
+import { ChangeRequestQueue } from '../components/ChangeRequests'
 import RegistrationReview from '../components/RegistrationReview'
 import TabSearch from '../components/TabSearch'
 import { EmptyState, Pill } from '../components/ui'
@@ -10,11 +12,13 @@ import { statusOf } from '../registration'
 
 const PAGE_SIZE = 25
 const VERIFICATION_QUEUE_FILTER = 'DRAFT,SUBMITTED,UNDER_REVIEW'
+const CHANGES = 'changes'
 const QUEUES = [
   [VERIFICATION_QUEUE_FILTER, 'Awaiting approval'],
   ['CORRECTIONS_REQUESTED', 'Corrections requested'],
   ['REJECTED', 'Rejected'],
   ['VERIFIED,APPROVED', 'Approved'],
+  [CHANGES, 'Change requests'],
 ]
 
 function VerificationPage() {
@@ -23,7 +27,13 @@ function VerificationPage() {
   const [farmers, setFarmers] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [queue, setQueue] = useState(VERIFICATION_QUEUE_FILTER)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [queue, setQueueState] = useState(searchParams.get('queue') === CHANGES ? CHANGES : VERIFICATION_QUEUE_FILTER)
+  const changesQueue = queue === CHANGES
+  const setQueue = (value) => {
+    setQueueState(value)
+    setSearchParams(value === CHANGES ? { queue: CHANGES } : {}, { replace: true })
+  }
   const [reviewing, setReviewing] = useState(null)
   const [notice, setNotice] = useState('')
   const [search, setSearch] = useState('')
@@ -37,6 +47,7 @@ function VerificationPage() {
   const isLastPage = currentPage >= totalPages
 
   const loadQueue = async (query = '', page = 1, statuses = queue) => {
+    if (statuses === CHANGES) return
     try {
       setLoading(true)
       const params = {
@@ -102,7 +113,7 @@ function VerificationPage() {
           <h3>Registration approvals</h3>
           <p>Check each submitted registration and its KYC documents, then approve it, reject it or ask for corrections.{canDecide ? '' : ' Your role can view the queue but not decide.'}</p>
         </div>
-        <TabSearch value={search} onChange={setSearch} placeholder="Filter verification queue..." />
+        {changesQueue ? null : <TabSearch value={search} onChange={setSearch} placeholder="Filter verification queue..." />}
       </div>
 
       <div className="chip-row" role="group" aria-label="Queue">
@@ -113,9 +124,11 @@ function VerificationPage() {
 
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
       {notice ? <div className="form-message success" role="status">{notice}</div> : null}
-      {loading ? <div className="form-message">Loading verification queue...</div> : null}
+      {loading && !changesQueue ? <div className="form-message">Loading verification queue...</div> : null}
 
-      {!loading && !error ? (
+      {changesQueue ? <ChangeRequestQueue canDecide={canDecide} /> : null}
+
+      {!changesQueue && !loading && !error ? (
         <div className="table-wrap">
           {farmers.length ? (
             <table className="data-table">

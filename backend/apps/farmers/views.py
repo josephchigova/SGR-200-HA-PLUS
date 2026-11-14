@@ -311,10 +311,41 @@ class FarmerViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Upload the required documents first: " + ", ".join(missing) + "."}, status=400)
         if not farmer.farms.exists():
             return Response({"detail": "Add the farm details before submitting."}, status=400)
+        from .services import approve_registration, can_approve
+
+        if checked_in_person and can_approve(user):
+            # The administrator captured this registration and checked the documents in person,
+            # so finishing it completes it. There is nothing left for an approval queue to check.
+            approve_registration(farmer, user, "Registered by an administrator, who checked the KYC documents in person.")
+            return Response(self.get_serializer(farmer).data)
         kyc.submit_registration(farmer, user)
         if checked_in_person:
             kyc.record_event(farmer, FarmerReviewEvent.UPDATED, user, "KYC documents checked in person by the administrator. No files uploaded.")
         return Response(self.get_serializer(farmer).data)
+
+    @action(detail=True, methods=["get", "post"], url_path="change-requests")
+    def change_requests(self, request, pk=None):
+        """A lead farmer asks for changes to a record administration holds. GET lists them."""
+        from .changes import ChangeRequestSerializer, submit_change_request
+
+        farmer = self.get_object()
+        if request.method == "GET":
+            return Response(ChangeRequestSerializer(farmer.change_requests.select_related("requested_by", "reviewed_by", "farmer__cluster")[:20], many=True).data)
+        user = request.user
+        if user.is_superuser or user.role != user.ROLE_LEAD_FARMER:
+            return Response({"detail": "Administrators edit the record directly."}, status=400)
+        if farmer.verification_status in kyc.EDITABLE_BY_REGISTRAR and kyc.kyc_upload_required(farmer):
+            return Response({"detail": "This registration is still open. Edit it directly and submit it."}, status=400)
+        change = submit_change_request(farmer, user, request.data)
+        return Response(ChangeRequestSerializer(change).data, status=201)
+
+    @action(detail=True, methods=["get"], url_path="change-requests/current")
+    def change_request_values(self, request, pk=None):
+        """The values a change request starts from, as the server compares them."""
+        from .changes import LABELS, current_values
+
+        farmer = self.get_object()
+        return Response({"values": current_values(farmer), "labels": LABELS})
 
     @action(detail=True, methods=["get"], url_path="history")
     def history(self, request, pk=None):
