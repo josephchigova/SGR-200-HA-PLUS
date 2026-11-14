@@ -81,3 +81,25 @@ def load_wards(path=DATA_FILE):
             existing[district.pk][number] = ward
             summary["wards_added"] += 1
     return summary
+
+
+MAX_WARD_NUMBER = 999
+
+
+def ward_for_number(district, number):
+    """The ward with this number in the district, added when it is not on record yet.
+
+    Wards are numbered, and some districts run past 300, so the number is typed rather
+    than chosen from a list. A ward already on record keeps its id, name and farmers.
+    """
+    number = int(number)
+    if not 1 <= number <= MAX_WARD_NUMBER:
+        raise ValueError(f"Enter a ward number from 1 to {MAX_WARD_NUMBER}.")
+    for ward in Ward.objects.filter(district=district):
+        if ward_number(ward.name) == number:
+            if not ward.active:
+                ward.active = True
+                ward.save(update_fields=["active", "updated_at"])
+            return ward
+    ward, _created = Ward.objects.get_or_create(district=district, name=f"Ward {number}")
+    return ward

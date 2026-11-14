@@ -17,6 +17,7 @@ from apps.accounts.serializers import check_password_strength
 from apps.farmers import kyc
 from apps.farmers.kyc import NATIONAL_ID_PATTERN, record_event
 from apps.farmers.models import Farmer, FarmerReviewEvent
+from apps.farmers.serializers import _ward_from_input
 from apps.farmers.services import (
     duplicate_message,
     find_registered_farmer,
@@ -56,7 +57,8 @@ class LeadFarmerCreateSerializer(_LocationMixin, serializers.Serializer):
     email = serializers.EmailField()
     province = serializers.PrimaryKeyRelatedField(queryset=Province.objects.filter(active=True))
     district = serializers.PrimaryKeyRelatedField(queryset=District.objects.filter(active=True))
-    ward = serializers.PrimaryKeyRelatedField(queryset=Ward.objects.filter(active=True))
+    ward = serializers.PrimaryKeyRelatedField(queryset=Ward.objects.filter(active=True), required=False)
+    ward_number = serializers.CharField(required=False, allow_blank=True)
     password = serializers.CharField(min_length=8, write_only=True)
 
     def validate_national_id(self, value):
@@ -78,6 +80,11 @@ class LeadFarmerCreateSerializer(_LocationMixin, serializers.Serializer):
         return check_password_strength(value)
 
     def validate(self, attrs):
+        typed = attrs.pop("ward_number", None)
+        if typed not in (None, ""):
+            attrs["ward"] = _ward_from_input(attrs.get("district"), typed)
+        if attrs.get("ward") is None:
+            raise serializers.ValidationError({"ward_number": ["Enter the ward number."]})
         self._check_location(attrs)
         for field in ("first_name", "middle_name", "surname"):
             attrs[field] = _clean_name(attrs.get(field))
@@ -93,9 +100,13 @@ class LeadFarmerUpdateSerializer(_LocationMixin, serializers.Serializer):
     province = serializers.PrimaryKeyRelatedField(queryset=Province.objects.filter(active=True), required=False)
     district = serializers.PrimaryKeyRelatedField(queryset=District.objects.filter(active=True), required=False)
     ward = serializers.PrimaryKeyRelatedField(queryset=Ward.objects.filter(active=True), required=False)
+    ward_number = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, attrs):
         lead = self.context["lead"]
+        typed = attrs.pop("ward_number", None)
+        if typed not in (None, ""):
+            attrs["ward"] = _ward_from_input(attrs.get("district", lead.district), typed)
         self._check_location(attrs, lead)
         for field in ("first_name", "middle_name", "surname"):
             if field in attrs:

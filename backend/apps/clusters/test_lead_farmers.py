@@ -246,14 +246,34 @@ class LeadFarmerClusterTests(TestCase):
         self.assertEqual(created.json()["status"], "ACTIVE")
         self.assertEqual(client.post(f"/api/lead-farmers/{cluster.pk}/login/", {"email": "old2@example.com", "password": "AnotherStrong456!"}, format="json").status_code, 400)
 
-    def test_ward_must_come_from_the_register(self):
+    def test_ward_is_a_typed_number_matched_or_added_in_the_district(self):
         john = self.register_lead()
-        typed = self.register_farmer(self.lead_user(john), "63-5555555E55", ward=None, ward_text="Ward 99")
-        self.assertEqual(typed.status_code, 400)
-        self.assertEqual(Ward.objects.filter(name="Ward 99").count(), 0)
-        matched = self.register_farmer(self.lead_user(john), "63-5555555E55", ward=None, ward_text="7")
+        account = self.lead_user(john)
+        for bad in ("abc", "0", "1000", "-3"):
+            refused = self.register_farmer(account, "63-5555555E55", ward=None, ward_number=bad)
+            self.assertEqual(refused.status_code, 400, bad)
+            self.assertIn("ward_number", refused.json())
+        matched = self.register_farmer(account, "63-5555555E55", ward=None, ward_number="7")
         self.assertEqual(matched.status_code, 201, matched.content)
         self.assertEqual(Farmer.objects.get(pk=matched.json()["id"]).ward, self.ward_two)
+        added = self.register_farmer(account, "63-6666666F66", "Ben", "Sithole", ward=None, ward_number="287")
+        self.assertEqual(added.status_code, 201, added.content)
+        self.assertEqual(Farmer.objects.get(pk=added.json()["id"]).ward.name, "Ward 287")
+        self.assertEqual(Ward.objects.filter(district=self.district, name="Ward 287").count(), 1)
+        missing = self.register_farmer(account, "63-7777777G77", ward=None)
+        self.assertEqual(missing.status_code, 400)
+        self.assertIn("ward_number", missing.json())
+
+    def test_lead_farmer_form_takes_a_ward_number(self):
+        response = self.client_for(self.admin).post("/api/lead-farmers/", {
+            "first_name": "Mary", "surname": "Dube", "national_id": "63-3333333C33", "phone_primary": "0773333333",
+            "email": "mary@example.com", "province": self.province.id, "district": self.district.id, "ward_number": "152",
+            "password": "AnotherStrong456!",
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual(response.json()["ward"]["name"], "Ward 152")
+        moved = self.client_for(self.admin).patch(f"/api/lead-farmers/{response.json()['cluster_id']}/", {"ward_number": "4"}, format="json")
+        self.assertEqual(moved.json()["ward"]["id"], self.ward.id)
 
     # 14: older records are reported, never assigned at random.
     def test_reconciliation_reports_unowned_records_and_changes_nothing_without_apply(self):
@@ -272,3 +292,91 @@ class LeadFarmerClusterTests(TestCase):
         self.assertEqual(Cluster.objects.get(pk=john["cluster_id"]).name, "JOHN MOYO")
         self.assertIsNone(Farmer.objects.get(national_id="LEG-2").cluster_id)
         self.assertEqual(Farmer.objects.get(national_id="LEG-1").cluster_id, legacy.pk)
+
+
+class SuperuserAndAccountTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.province = Province.objects.create(name="Harare Metropolitan", code="HRE")
+        cls.district = District.objects.create(province=cls.province, name="Chitungwiza")
+        cls.ward = Ward.objects.create(district=cls.district, name="Manjonjori")
+        cls.root = User.objects.create_superuser(email="root@example.com", username="root", password=PASSWORD, role=User.ROLE_SUPER_ADMIN)
+
+    def client_for(self, user):
+        client = APIClient()
+        client.force_authenticate(user=user)
+        return client
+
+    def payload(self, **changes):
+        data = {
+            "first_name": "Tendai", "surname": "Mharapara", "national_id": "63-2468246T24", "phone_primary": "0772468246",
+            "email": "tendai@example.com", "farm_name": "Mharapara Estate", "province": self.province.id, "district": self.district.id,
+            "ward": self.ward.id, "total_hectares": "200", "arable_hectares": "100", "irrigated_hectares": "100",
+            "irrigation_type": "SPRINKLER", "latitude": "-17.835622", "longitude": "31.021466", "as_draft": True, "as_lead": True,
+        }
+        data.update(changes)
+        return data
+
+    def test_a_superuser_is_offered_lead_registration_not_ordinary_registration(self):
+        permissions = self.client_for(self.root).get("/api/auth/me/").json()["permissions"]
+        self.assertFalse(permissions["farmers"]["create"])
+        self.assertTrue(permissions["lead_registration"]["create"])
+        self.assertTrue(permissions["users"]["delete"])
+
+    def test_a_superuser_registers_a_lead_farmer_with_farm_and_login_in_one_save(self):
+        client = self.client_for(self.root)
+        created = client.post("/api/farmers/", self.payload(login_password="Lead-Start-2026!"), format="json")
+        self.assertEqual(created.status_code, 201, created.content)
+        farmer = Farmer.objects.get(pk=created.json()["id"])
+        self.assertTrue(farmer.is_lead)
+        self.assertEqual(farmer.cluster.name, "TENDAI MHARAPARA")
+        self.assertEqual(farmer.farms.get().total_hectares, 200)
+        account = User.objects.get(email="tendai@example.com")
+        self.assertEqual((account.role, account.farmer_id, account.assigned_cluster_id), (User.ROLE_LEAD_FARMER, farmer.id, farmer.cluster_id))
+        self.assertTrue(account.check_password("Lead-Start-2026!"))
+        self.assertEqual(farmer.cluster.lead_farmer, account)
+        self.assertNotIn("login_password", created.json())
+
+    def test_lead_login_problems_stop_the_whole_registration(self):
+        User.objects.create_user(email="tendai@example.com", username="taken", password=PASSWORD)
+        client = self.client_for(self.root)
+        taken = client.post("/api/farmers/", self.payload(login_password="Lead-Start-2026!"), format="json")
+        self.assertEqual(taken.status_code, 400)
+        self.assertIn("email", taken.json())
+        weak = client.post("/api/farmers/", self.payload(email="other@example.com", login_password="password"), format="json")
+        self.assertEqual(weak.status_code, 400)
+        self.assertIn("login_password", weak.json())
+        self.assertFalse(Farmer.objects.exists())
+        self.assertFalse(Cluster.objects.exists())
+
+    def test_accounts_can_be_deleted_without_losing_records(self):
+        client = self.client_for(self.root)
+        client.post("/api/farmers/", self.payload(login_password="Lead-Start-2026!"), format="json")
+        account = User.objects.get(email="tendai@example.com")
+        farmer = Farmer.objects.get(national_id="63-2468246T24")
+        deleted = client.delete(f"/api/auth/users/{account.id}/")
+        self.assertEqual(deleted.status_code, 204)
+        self.assertFalse(User.objects.filter(pk=account.pk).exists())
+        farmer.refresh_from_db()
+        self.assertIsNone(farmer.cluster.lead_farmer)
+        self.assertTrue(Farmer.objects.filter(pk=farmer.pk).exists())
+        self.assertTrue(AuditLog.objects.filter(action=AuditLog.ACTION_DELETE, summary__contains="tendai@example.com").exists())
+        listed = {row["cluster_id"]: row["status"] for row in client.get("/api/lead-farmers/").json()["results"]}
+        self.assertEqual(listed[farmer.cluster_id], "NO_LOGIN")
+
+    def test_deletion_guards(self):
+        client = self.client_for(self.root)
+        self.assertEqual(client.delete(f"/api/auth/users/{self.root.id}/").status_code, 400)
+        only = User.objects.create_user(email="sa@example.com", username="sa", password=PASSWORD, role=User.ROLE_SUPER_ADMIN)
+        other = User.objects.create_user(email="sa2@example.com", username="sa2", password=PASSWORD, role=User.ROLE_SUPER_ADMIN)
+        self.assertEqual(self.client_for(other).delete(f"/api/auth/users/{only.id}/").status_code, 204)
+        User.objects.filter(pk=self.root.pk).update(is_active=False)
+        refused = self.client_for(other).delete(f"/api/auth/users/{self.root.id}/")
+        self.assertEqual(refused.status_code, 204)
+        lone = User.objects.create_user(email="lone@example.com", username="lone", password=PASSWORD, role=User.ROLE_SUPER_ADMIN)
+        executive = User.objects.create_user(email="ex@example.com", username="ex", password=PASSWORD, role=User.ROLE_SGR_EXECUTIVE)
+        self.assertEqual(self.client_for(executive).delete(f"/api/auth/users/{lone.id}/").status_code, 403)
+        self.assertEqual(self.client_for(lone).delete(f"/api/auth/users/{other.id}/").status_code, 204)
+        last = self.client_for(User.objects.create_superuser(email="su@example.com", username="su", password=PASSWORD, role=User.ROLE_VIEWER)).delete(f"/api/auth/users/{lone.id}/")
+        self.assertEqual(last.status_code, 400)
+        self.assertIn("only active Super Administrator", last.json()["detail"])

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useSearchParams } from 'react-router-dom'
 
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
@@ -11,7 +11,6 @@ import { formatNationalId, nationalIdError, statusOf, upper } from '../registrat
 import { Meter, PlaceTable } from './ClusterDashboard'
 
 const STATUS = { ACTIVE: ['Active', 'good'], INACTIVE: ['Login deactivated', 'bad'], NO_LOGIN: ['No login yet', 'warn'] }
-const EMPTY = { first_name: '', middle_name: '', surname: '', national_id: '', phone_primary: '', email: '', province: '', district: '', ward: '', password: '' }
 const listOf = (data) => (Array.isArray(data) ? data : data?.results || [])
 const wardOrder = (a, b) => (Number(a.name.replace(/\D/g, '')) || 0) - (Number(b.name.replace(/\D/g, '')) || 0) || a.name.localeCompare(b.name)
 const when = (value) => (value ? new Date(value).toLocaleDateString('en-GB', { dateStyle: 'medium' }) : '—')
@@ -77,11 +76,19 @@ function LocationFields({ form, setForm, errors = {} }) {
         placeholder={form.province ? 'Choose district' : 'Choose a province first'}
         options={form.province ? lists.districts.map((item) => ({ value: item.id, label: item.name })) : []}
         onChange={(value) => pick('district', value)} error={errors.district} />
-      <SearchSelect label="Ward" required value={form.ward} disabled={!form.district} loading={loading.wards}
-        placeholder={form.district ? 'Choose ward' : 'Choose a district first'}
-        options={form.district ? lists.wards.map((item) => ({ value: item.id, label: item.name })) : []}
-        onChange={(value) => pick('ward', value)} error={errors.ward}
-        emptyText="No wards are recorded for this district. Load the official ward list first." />
+      <label className="form-field">
+        <span>Ward number<span className="req" aria-hidden="true"> *</span></span>
+        <input
+          required inputMode="numeric" autoComplete="off" maxLength={3} disabled={!form.district}
+          className={errors.ward_number || errors.ward ? 'invalid' : ''}
+          placeholder={form.district ? 'For example 12' : 'Choose a district first'}
+          value={form.ward}
+          onChange={(event) => pick('ward', event.target.value.replace(/\D/g, '').replace(/^0+/, '').slice(0, 3))}
+        />
+        {errors.ward_number || errors.ward
+          ? <span className="field-error" role="alert">{errors.ward_number || errors.ward}</span>
+          : <span className="field-hint">Type the ward number, from 1 to 999.</span>}
+      </label>
     </>
   )
 }
@@ -131,7 +138,8 @@ function LeadForm({ initial, creating, onClose, onSaved, cluster }) {
     setSaving(true)
     setErrors({})
     setProblem('')
-    const payload = { ...form }
+    const payload = { ...form, ward_number: form.ward }
+    delete payload.ward
     if (!creating) {
       delete payload.national_id
       delete payload.password
@@ -419,7 +427,7 @@ function LeadDetail({ clusterId, seasonName, leads, canManage, onClose, onChange
           initial={{
             first_name: lead.first_name || '', middle_name: lead.middle_name || '', surname: lead.surname || '',
             phone_primary: lead.phone || '', email: lead.account?.email || lead.email || '',
-            province: String(lead.province?.id || ''), district: String(lead.district?.id || ''), ward: String(lead.ward?.id || ''),
+            province: String(lead.province?.id || ''), district: String(lead.district?.id || ''), ward: String(lead.ward?.name || '').replace(/\D/g, ''),
           }}
           onClose={() => setEditing(false)}
           onSaved={() => { setEditing(false); refresh('The details were saved. The cluster name follows the lead farmer’s name.') }}
@@ -457,6 +465,7 @@ function LeadFarmersPage({ selectedSeason = null }) {
   const [token, setToken] = useState(0)
   const [opened, setOpened] = useState(null)
   const [notice, setNotice] = useState('')
+  // Older links to the registration dialog now open the shared registration form.
   const registering = params.get('register') === '1'
   const seasonName = selectedSeason?.name || ''
 
@@ -487,12 +496,13 @@ function LeadFarmersPage({ selectedSeason = null }) {
   }, [data, filters])
 
   const overview = data?.overview
-  const closeRegistration = () => setParams({}, { replace: true })
+
+  if (registering && canManage) return <Navigate to="/farmers/register?as=lead" replace />
 
   return (
     <div className="page-card">
       <PageHead title="Lead farmers" subtitle="Each lead farmer is one cluster, named after them. Farmers join a cluster when that lead farmer registers them. There are no clusters to create.">
-        {canManage ? <button type="button" className="primary-btn" onClick={() => setParams({ register: '1' })}><Icon name="plus" />Register lead farmer</button> : <Pill tone="warn">Read only</Pill>}
+        {canManage ? <Link className="primary-btn" to="/farmers/register?as=lead"><Icon name="plus" />Register lead farmer</Link> : <Pill tone="warn">Read only</Pill>}
       </PageHead>
 
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
@@ -570,19 +580,6 @@ function LeadFarmersPage({ selectedSeason = null }) {
         </>
       ) : null}
 
-      {registering && canManage ? (
-        <LeadForm
-          creating
-          initial={EMPTY}
-          onClose={closeRegistration}
-          onSaved={(lead) => {
-            closeRegistration()
-            setNotice(`${lead.lead_farmer} is registered. Their cluster "${lead.cluster}" and login ${lead.account?.email} are ready.`)
-            setToken((value) => value + 1)
-            setOpened(lead.cluster_id)
-          }}
-        />
-      ) : null}
       {opened ? (
         <LeadDetail
           clusterId={opened}

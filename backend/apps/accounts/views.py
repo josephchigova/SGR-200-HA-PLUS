@@ -168,8 +168,12 @@ class StandardPagination(PageNumberPagination):
     max_page_size = 200
 
 
-class UserViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin, mixins.UpdateModelMixin, viewsets.GenericViewSet):
-    """Accounts are deactivated, not deleted, so their history stays attributable."""
+class UserViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.CreateModelMixin, mixins.UpdateModelMixin, mixins.DestroyModelMixin, viewsets.GenericViewSet):
+    """Accounts can be deactivated or deleted.
+
+    Deleting a login never deletes business records: every reference to a user is
+    cleared rather than cascaded, and the audit log keeps the email as text.
+    """
 
     serializer_class = ManagedUserSerializer
     permission_classes = [UserAdminPermission]
@@ -188,6 +192,27 @@ class UserViewSet(mixins.ListModelMixin, mixins.RetrieveModelMixin, mixins.Creat
         if params.get("is_active") in {"true", "false"}:
             queryset = queryset.filter(is_active=params["is_active"] == "true")
         return queryset
+
+    def destroy(self, request, *args, **kwargs):
+        from django.db.models import ProtectedError
+
+        account = self.get_object()
+        if account.pk == request.user.pk:
+            return Response({"detail": "You cannot delete your own account."}, status=status.HTTP_400_BAD_REQUEST)
+        if account.role == User.ROLE_SUPER_ADMIN and account.is_active:
+            others = User.objects.filter(role=User.ROLE_SUPER_ADMIN, is_active=True).exclude(pk=account.pk)
+            if not others.exists():
+                return Response({"detail": "This is the only active Super Administrator. Make another one before deleting it."}, status=status.HTTP_400_BAD_REQUEST)
+        email, role, label = account.email, account.role, account.get_role_display()
+        try:
+            account.delete()
+        except ProtectedError:
+            return Response({"detail": "This account is still linked to records that need it. Deactivate it instead."}, status=status.HTTP_400_BAD_REQUEST)
+        audit.record(user=request.user, action=AuditLog.ACTION_DELETE, module="users", object_id=kwargs.get("pk"),
+                     summary=f"Deleted the {label} account {email}"[:255], request=request, status_code=204)
+        if role == User.ROLE_LEAD_FARMER:
+            logger.info("Lead farmer login %s deleted. The cluster and its farmers are kept.", email)
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     @action(detail=True, methods=["post"], url_path="reset-password")
     def reset_password(self, request, pk=None):

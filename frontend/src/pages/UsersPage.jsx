@@ -39,6 +39,8 @@ function UsersPage() {
   const [saving, setSaving] = useState(false)
   const [temporary, setTemporary] = useState(null)
   const [confirmReset, setConfirmReset] = useState(null)
+  const [confirmDelete, setConfirmDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -162,6 +164,22 @@ function UsersPage() {
     }
   }
 
+  const deleteAccount = async () => {
+    const user = confirmDelete
+    setDeleting(true)
+    try {
+      await apiClient.delete(`/auth/users/${user.id}/`)
+      setNotice(`The account ${user.email} was deleted.${user.role === 'lead_farmer' ? ' The cluster and its farmers are kept; the lead farmer can be given a new login on the Lead farmers page.' : ''}`)
+      setConfirmDelete(null)
+      load()
+    } catch (requestError) {
+      setConfirmDelete(null)
+      setError(errorMessage(requestError, 'The account could not be deleted.'))
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   const pages = Math.max(Math.ceil(count / 25), 1)
 
   return (
@@ -216,6 +234,9 @@ function UsersPage() {
                             <button type="button" className="icon-btn" title="Reset password" aria-label={`Reset password for ${user.email}`} onClick={() => setConfirmReset(user)}><Icon name="lock" /></button>
                             {user.id !== profile?.id ? (
                               <button type="button" className={user.is_active ? 'ghost-btn small danger' : 'ghost-btn small'} onClick={() => toggleActive(user)}>{user.is_active ? 'Deactivate' : 'Activate'}</button>
+                            ) : null}
+                            {user.id !== profile?.id ? (
+                              <button type="button" className="icon-btn danger" title="Delete account" aria-label={`Delete ${user.email}`} onClick={() => { setNotice(''); setConfirmDelete(user) }}><Icon name="trash" /></button>
                             ) : null}
                           </div>
                         </td>
@@ -351,6 +372,26 @@ function UsersPage() {
           )}
         >
           <p className="card-sub">The current password stops working immediately.</p>
+        </Modal>
+      ) : null}
+
+      {confirmDelete ? (
+        <Modal
+          title="Delete this account?"
+          subtitle={`${confirmDelete.email} will no longer be able to sign in, and the account cannot be restored.`}
+          onClose={() => setConfirmDelete(null)}
+          footer={(
+            <>
+              <button type="button" className="ghost-btn" onClick={() => setConfirmDelete(null)}>Cancel</button>
+              <button type="button" className="primary-btn danger-solid" disabled={deleting} onClick={deleteAccount}><Icon name="trash" />{deleting ? 'Deleting…' : 'Delete account'}</button>
+            </>
+          )}
+        >
+          <p className="card-sub">
+            Records this person created stay in the system and in the audit log.
+            {confirmDelete.role === 'lead_farmer' ? ' Their cluster and farmers are kept; the cluster shows "No login yet" until a new login is created.' : ''}
+            {' '}To stop access but keep the account, deactivate it instead.
+          </p>
         </Modal>
       ) : null}
 

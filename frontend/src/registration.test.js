@@ -34,6 +34,9 @@ describe('step validation', () => {
     const farm = { province: '1', district: '2', ward: '3', total_hectares: '200', irrigated_hectares: '80', dryland_hectares: '100' }
     expect(farmErrors(farm)).toEqual({})
     expect(farmErrors({ ...farm, ward: '' }).ward).toBeTruthy()
+    expect(farmErrors({ ...farm, ward: '287' }).ward).toBeUndefined()
+    expect(farmErrors({ ...farm, ward: '0' }).ward).toBeTruthy()
+    expect(farmErrors({ ...farm, ward: '1000' }).ward).toBeTruthy()
     expect(farmErrors({ ...farm, dryland_hectares: '200' }).dryland_hectares).toMatch(/cannot be more/)
     expect(farmErrors({ ...farm, latitude: '-17.8' }).latitude).toBeTruthy()
   })

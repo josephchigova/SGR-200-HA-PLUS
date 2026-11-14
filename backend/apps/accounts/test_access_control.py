@@ -154,7 +154,7 @@ class AccessControlTests(TestCase):
         self.assertEqual(missing.status_code, 400)
         self.assertIn("district", missing.json())
         self.assertEqual(client.patch(f"/api/auth/users/{self.admin.id}/", {"is_active": False}, format="json").status_code, 400)
-        self.assertEqual(client.delete(f"/api/auth/users/{self.finance.id}/").status_code, 405)
+        self.assertEqual(client.delete(f"/api/auth/users/{self.admin.id}/").status_code, 400)
 
     def test_profile_carries_the_permission_matrix(self):
         lead = self.client_for(self.lead).get("/api/auth/me/").json()

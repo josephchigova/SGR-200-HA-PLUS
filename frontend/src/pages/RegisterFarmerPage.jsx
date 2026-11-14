@@ -26,7 +26,7 @@ const STEPS = [
 ]
 
 const EMPTY = {
-  first_name: '', middle_name: '', surname: '', national_id: '', farm_name: '', phone_primary: '', email: '', gender: '',
+  first_name: '', middle_name: '', surname: '', national_id: '', farm_name: '', phone_primary: '', email: '', gender: '', login_password: '',
   farmer_type: 'EXISTING',
   province: '', district: '', ward: '', cluster: '',
   total_hectares: '', irrigated_hectares: '0', dryland_hectares: '0', irrigation_type: 'CENTRE_PIVOT', latitude: '', longitude: '',
@@ -156,7 +156,7 @@ function RegisterFarmerPage() {
             email: record.email || '', gender: record.gender || '',
             farmer_type: record.farmer_type || 'EXISTING',
             province: String(record.province || next.province || ''), district: String(record.district || next.district || ''),
-            ward: String(record.ward || ''), cluster: String(record.cluster || next.cluster || ''),
+            ward: String(record.ward_name || '').replace(/\D/g, ''), cluster: String(record.cluster || next.cluster || ''),
             total_hectares: farm.total_hectares ? String(Number(farm.total_hectares)) : '',
             irrigated_hectares: String(irrigated), dryland_hectares: String(Math.max(arable - irrigated, 0)),
             irrigation_type: IRRIGATION.some(([code]) => code === farm.irrigation_type) ? farm.irrigation_type : 'CENTRE_PIVOT',
@@ -196,23 +196,17 @@ function RegisterFarmerPage() {
     return () => { active = false }
   }, [form.province, locked])
 
-  // Wards follow the district, from the official ward register.
-  useEffect(() => {
-    if (!form.district) return undefined
-    let active = true
-    setLoadingOptions((current) => ({ ...current, wards: true }))
-    loadAll(`/wards/?district=${form.district}&page_size=200`).then((wards) => {
-      const number = (ward) => Number(String(ward.name).replace(/\D/g, '')) || 0
-      if (active) setOptions((current) => ({ ...current, wards: wards.sort((a, b) => number(a) - number(b) || a.name.localeCompare(b.name)) }))
-    }).catch(() => {
-      if (active) setError('The wards could not be loaded. Check your connection and choose the district again.')
-    }).finally(() => {
-      if (active) setLoadingOptions((current) => ({ ...current, wards: false }))
-    })
-    return () => { active = false }
-  }, [form.district])
 
-  const errorsOne = useMemo(() => personalErrors(form), [form])
+  // Registering a lead farmer also creates their login on the first save.
+  const createsLogin = asLead && !id && !farmerId
+  const errorsOne = useMemo(() => {
+    const errors = personalErrors(form)
+    if (createsLogin) {
+      if (!String(form.email || '').trim()) errors.email = 'Enter the email the lead farmer will sign in with.'
+      if (String(form.login_password || '').length < 8) errors.login_password = 'Use at least 8 characters.'
+    }
+    return errors
+  }, [form, createsLogin])
   const errorsTwo = useMemo(() => farmErrors(form), [form])
   const cropProblems = useMemo(() => cropProblemsFor(allocations, arableLater(form)), [allocations, form])
   const uploadedCodes = new Set(documents.map((document) => document.document_type))
@@ -235,6 +229,8 @@ function RegisterFarmerPage() {
     if (['first_name', 'middle_name', 'surname', 'farm_name'].includes(name)) next = upper(value)
     if (name === 'national_id') next = formatNationalId(value)
     if (name === 'phone_primary') next = value.replace(/[^\d+ ]/g, '')
+    // A ward is a whole number. Anything else is dropped as it is typed.
+    if (name === 'ward') next = value.replace(/\D/g, '').replace(/^0+/, '').slice(0, 3)
     setTouched((current) => ({ ...current, [name]: true }))
     setForm((current) => ({
       ...current,
@@ -243,8 +239,7 @@ function RegisterFarmerPage() {
       ...(name === 'province' ? { district: '', ward: '', cluster: locked ? current.cluster : '' } : {}),
       ...(name === 'district' ? { ward: '' } : {}),
     }))
-    if (name === 'province') setOptions((current) => ({ ...current, districts: [], wards: [] }))
-    if (name === 'district') setOptions((current) => ({ ...current, wards: [] }))
+    if (name === 'province') setOptions((current) => ({ ...current, districts: [] }))
   }
   const blur = (name) => setTouched((current) => ({ ...current, [name]: true }))
   const touchAll = (names) => setTouched((current) => ({ ...current, ...Object.fromEntries(names.map((name) => [name, true])) }))
@@ -254,7 +249,7 @@ function RegisterFarmerPage() {
     first_name: form.first_name.trim(), middle_name: form.middle_name.trim(), surname: form.surname.trim(),
     national_id: form.national_id, farm_name: form.farm_name.trim(), phone_primary: phoneDigits(form.phone_primary),
     email: form.email.trim(), gender: form.gender,
-    province: form.province, district: form.district, ward: form.ward,
+    province: form.province, district: form.district, ward_number: form.ward,
     farmer_type: form.farmer_type || 'EXISTING',
     ...(asLead ? { as_lead: true } : {}),
     total_hectares: form.total_hectares, arable_hectares: String(arable), irrigated_hectares: form.irrigated_hectares || '0',
@@ -263,6 +258,7 @@ function RegisterFarmerPage() {
       : Number(form.dryland_hectares) > 0 ? 'RAINFED' : 'NONE',
     latitude: form.latitude === '' ? null : form.latitude, longitude: form.longitude === '' ? null : form.longitude,
     as_draft: true,
+    ...(createsLogin ? { login_password: form.login_password } : {}),
   })
 
   const saveDraft = async () => {
@@ -285,7 +281,7 @@ function RegisterFarmerPage() {
   }
 
   const continueFromOne = () => {
-    touchAll(Object.keys(EMPTY).slice(0, 8))
+    touchAll([...Object.keys(EMPTY).slice(0, 8), 'login_password'])
     if (stepValid[0]) setStep(1)
   }
 
@@ -428,7 +424,7 @@ function RegisterFarmerPage() {
       <PageHead
         title={id ? 'Continue registration' : asLead ? 'Register a lead farmer' : 'Register a farmer'}
         subtitle={asLead
-          ? 'Four steps. The cluster is created from this lead farmer’s name. There is no cluster to choose.'
+          ? `${steps.length === 3 ? 'Three' : 'Four'} steps. The lead farmer’s cluster is created from their name and their login is created on the first save. There is no cluster to choose.`
           : uploadsKyc
             ? 'Four steps: the farmer, the farm, the crop allocation, then the KYC documents. An administrator approves the registration after you submit it.'
             : 'Three steps: the farmer, the farm and the crop allocation. You check the KYC documents in person, so nothing is uploaded.'}
@@ -457,7 +453,8 @@ function RegisterFarmerPage() {
 
       <ol className="stepper" aria-label="Registration steps">
         {steps.map((item, index) => {
-          const state = index === step && !reviewing ? 'current' : stepValid[index] && (index < steps.length - 1 ? reachable(index + 1) || index < step : true) ? 'done' : 'todo'
+          const passed = index < step || reviewing || (index > step && index < steps.length - 1 && reachable(index + 1))
+          const state = index === step && !reviewing ? 'current' : stepValid[index] && passed ? 'done' : 'todo'
           return (
             <li key={item.key} className={state}>
               <button type="button" disabled={!reachable(index)} aria-current={state === 'current' ? 'step' : undefined} onClick={() => goTo(index)}>
@@ -481,7 +478,12 @@ function RegisterFarmerPage() {
             <Field label="National ID" name="national_id" errors={errorsOne} required autoComplete="off" placeholder="63-2330173E58" maxLength={13} hint="Type the numbers and letter. The hyphen is added for you." {...fieldProps} />
             <Field label="Farm name" name="farm_name" errors={errorsOne} required autoComplete="off" maxLength={180} {...fieldProps} />
             <Field label="Phone number" name="phone_primary" errors={errorsOne} required type="tel" inputMode="tel" placeholder="0771234567" hint="9 to 12 digits." {...fieldProps} />
-            <Field label="Email (optional)" name="email" errors={errorsOne} type="email" autoComplete="off" {...fieldProps} />
+            {createsLogin ? (
+              <>
+                <Field label="Email (sign-in address)" name="email" errors={errorsOne} required type="email" autoComplete="off" hint="The lead farmer signs in with this email." {...fieldProps} />
+                <Field label="Starting password" name="login_password" errors={errorsOne} required type="text" autoComplete="off" minLength={8} hint="Give this to the lead farmer. They must change it after signing in." {...fieldProps} />
+              </>
+            ) : <Field label="Email (optional)" name="email" errors={errorsOne} type="email" autoComplete="off" {...fieldProps} />}
             <label className="form-field">
               <span>Farmer type<span className="req" aria-hidden="true"> *</span></span>
               <select value={form.farmer_type} onChange={(event) => change('farmer_type', event.target.value)}>
@@ -509,7 +511,7 @@ function RegisterFarmerPage() {
 
       {step === 1 && !reviewing ? (
         <section className="card">
-          <div className="card-head"><div><p className="eyebrow">Step 2 of {steps.length}</p><h3>Farm details</h3><p className="card-sub">Choose the province, district and ward from the official lists, then record the land.</p></div></div>
+          <div className="card-head"><div><p className="eyebrow">Step 2 of {steps.length}</p><h3>Farm details</h3><p className="card-sub">Choose the province and district, type the ward number, then record the land.</p></div></div>
           <div className="form-grid three">
             <SearchSelect
               label="Province" required value={form.province} disabled={locked}
@@ -524,12 +526,11 @@ function RegisterFarmerPage() {
               onChange={(value) => change('district', value)} placeholder={form.province ? 'Choose district' : 'Choose a province first'}
               error={touched.district ? errorsTwo.district : ''} hint={locked && context.district ? 'Set by your cluster.' : ''}
             />
-            <SearchSelect
-              label="Ward" required value={form.ward} disabled={!form.district} loading={loadingOptions.wards}
-              options={form.district ? options.wards.map((item) => ({ value: item.id, label: item.name })) : []}
-              onChange={(value) => change('ward', value)} placeholder={form.district ? 'Choose ward' : 'Choose a district first'}
-              error={touched.ward ? errorsTwo.ward : ''}
-              emptyText="No wards are recorded for this district. Ask an administrator to load the official ward list."
+            <Field
+              label="Ward number" name="ward" errors={errorsTwo} required disabled={!form.district}
+              inputMode="numeric" autoComplete="off" maxLength={3}
+              placeholder={form.district ? 'For example 12' : 'Choose a district first'}
+              hint="Type the ward number, from 1 to 999." {...fieldProps}
             />
             <Field label="Total farm size (ha)" name="total_hectares" errors={errorsTwo} required type="number" min="0" step="0.01" inputMode="decimal" {...fieldProps} />
             <Field label="Arable irrigated (ha)" name="irrigated_hectares" errors={errorsTwo} required type="number" min="0" step="0.01" inputMode="decimal" {...fieldProps} />
@@ -633,7 +634,7 @@ function RegisterFarmerPage() {
               ['Name', fullName], ['National ID', form.national_id], ['Farmer type', form.farmer_type === 'NEW' ? 'New farmer' : 'Existing farmer'], ['Phone', form.phone_primary], ['Email', form.email || '—'], ['Farm name', form.farm_name],
             ]} />
             <ReviewBlock title="Farm" onEdit={() => goTo(1)} rows={[
-              ['Province', nameOf(options.provinces, form.province)], ['District', nameOf(options.districts, form.district)], ['Ward', nameOf(options.wards, form.ward)],
+              ['Province', nameOf(options.provinces, form.province)], ['District', nameOf(options.districts, form.district)], ['Ward', form.ward ? `Ward ${form.ward}` : '—'],
               ['Cluster', context.cluster?.name || farmer?.cluster_name || (asLead ? 'Created from the lead farmer’s name' : '—')],
               ['Total farm size', `${form.total_hectares} ha`], ['Arable irrigated', `${form.irrigated_hectares} ha`], ['Arable dryland', `${form.dryland_hectares} ha`],
               ['Coordinates', form.latitude !== '' ? `${form.latitude}, ${form.longitude}` : 'Not recorded'],

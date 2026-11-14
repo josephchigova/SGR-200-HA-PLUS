@@ -3003,3 +3003,15 @@ select.invalid,
     border-radius: 14px;
   }
 }
+
+.primary-btn.danger-solid {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+.primary-btn.danger-solid:hover:not(:disabled) {
+  filter: brightness(1.08);
+  background: var(--danger);
+  border-color: var(--danger);
+}

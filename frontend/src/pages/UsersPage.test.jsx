@@ -64,3 +64,24 @@ describe('UsersPage and lead farmer logins', () => {
     expect(payload).not.toHaveProperty('role')
   })
 })
+
+describe('UsersPage account deletion', () => {
+  beforeEach(() => {
+    apiClient.delete = vi.fn().mockResolvedValue({ status: 204 })
+    apiClient.get.mockImplementation((url) => {
+      if (String(url).startsWith('/auth/users/')) return Promise.resolve({ data: { results: [leadAccount], count: 1 } })
+      if (String(url).startsWith('/auth/roles/')) return Promise.resolve({ data: { roles: [], actions: [], modules: [] } })
+      return Promise.resolve({ data: [] })
+    })
+  })
+
+  it('asks for confirmation and deletes the account', async () => {
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete john@example.com' }))
+    expect(screen.getByText(/cannot be restored/)).toBeTruthy()
+    expect(apiClient.delete).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete account' }))
+    await waitFor(() => expect(apiClient.delete).toHaveBeenCalledWith('/auth/users/9/'))
+    expect(await screen.findByText(/The account john@example.com was deleted/)).toBeTruthy()
+  })
+})

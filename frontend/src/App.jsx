@@ -49,6 +49,7 @@ const navGroups = [
       { label: 'Overview', to: '/dashboard', icon: 'grid', module: 'dashboard' },
       { label: 'Farmers', to: '/farmers', icon: 'users', module: 'farmers', end: true },
       { label: 'Register farmer', to: '/farmers/register', icon: 'plus', module: 'farmers', action: 'create' },
+      { label: 'Register lead farmer', to: '/farmers/register?as=lead', icon: 'userCheck', module: 'lead_registration', action: 'create' },
       { label: 'Approvals', to: '/verification', icon: 'shield', module: 'verification' },
       { label: 'Lead farmers', to: '/clusters', icon: 'layers', module: 'clusters' },
       { label: 'Subscriptions', to: '/subscriptions', icon: 'dollar', module: 'subscriptions' },
@@ -165,10 +166,10 @@ function RegisterRoute() {
   const asLead = params.get('as') === 'lead'
   const lead = can('lead_registration', 'create')
   const member = can('farmers', 'create')
-  // Lead farmers are registered in one step on the Lead farmers page, with their cluster and login.
-  if (asLead && lead) return <Navigate to="/clusters?register=1" replace />
+  // An administrator registers a lead farmer with the same form, plus their login. The cluster is created from their name.
+  if (asLead && lead) return <RegisterFarmerPage key="lead" />
   if (!asLead && member) return <RegisterFarmerPage key="member" />
-  if (lead) return <Navigate to="/clusters?register=1" replace />
+  if (lead) return <Navigate to="/farmers/register?as=lead" replace />
   if (member) return <Navigate to="/farmers/register" replace />
   return <AccessDenied />
 }

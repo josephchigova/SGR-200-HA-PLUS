@@ -79,7 +79,7 @@ export function farmErrors(form) {
   const errors = {
     province: form.province ? '' : 'Choose the province.',
     district: form.district ? '' : 'Choose the district.',
-    ward: form.ward ? '' : 'Choose the ward.',
+    ward: /^[1-9]\d{0,2}$/.test(String(form.ward || '')) ? '' : 'Enter the ward number, from 1 to 999.',
     total_hectares: !(total > 0) ? 'Enter the total farm size in hectares.' : '',
     irrigated_hectares: !(irrigated >= 0) ? 'Enter the irrigated arable hectares. Use 0 if none.' : '',
     dryland_hectares: !(dryland >= 0) ? 'Enter the dryland arable hectares. Use 0 if none.' : '',

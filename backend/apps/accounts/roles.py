@@ -98,12 +98,23 @@ MATRIX = {
 ACTIONS = ("view", "create", "edit", "delete", "approve", "export")
 
 
+# Rights that belong to a role, not to rank. Only a lead farmer registers ordinary farmers,
+# so a superuser account does not receive this one automatically.
+ROLE_BOUND = {("farmers", "create")}
+
+
+def _allowed(user, module, action, roles):
+    if user.is_superuser and (module, action) not in ROLE_BOUND:
+        return True
+    return user.role in roles
+
+
 def capabilities(user):
     """Return {module: {action: bool}} for one user."""
     result = {}
     for module, role_sets in MATRIX.items():
         result[module] = {
-            action: bool(user.is_superuser or user.role in roles)
+            action: bool(_allowed(user, module, action, roles))
             for action, roles in zip(ACTIONS, role_sets)
         }
     return result
@@ -112,9 +123,7 @@ def capabilities(user):
 def can(user, module, action="view"):
     if not user or not user.is_authenticated:
         return False
-    if user.is_superuser:
-        return True
-    return user.role in MATRIX[module][ACTIONS.index(action)]
+    return _allowed(user, module, action, MATRIX[module][ACTIONS.index(action)])
 
 
 def matrix_rows():

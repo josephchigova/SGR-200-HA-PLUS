@@ -15,24 +15,21 @@ class OptionalCoordinateField(serializers.DecimalField):
         return super().to_internal_value(data)
 
 
-def _registered_ward(district, typed):
-    """Find the ward the user meant: "Ward 5", "5" or "ward 05" all mean ward 5."""
+def _ward_from_input(district, value, field="ward_number"):
+    """Turn a typed ward number ("5", "Ward 5" or 5) into the district's ward."""
     import re as _re
 
-    from apps.geography.models import Ward
+    from apps.geography.wards import MAX_WARD_NUMBER, ward_for_number
 
-    wards = list(Ward.objects.filter(district=district, active=True))
-    wanted = " ".join(typed.split()).casefold()
-    for ward in wards:
-        if ward.name.casefold() == wanted:
-            return ward
-    number = _re.search(r"\d+", typed)
-    if number:
-        for ward in wards:
-            found = _re.search(r"\d+", ward.name)
-            if found and int(found.group()) == int(number.group()):
-                return ward
-    raise serializers.ValidationError({"ward": [f"{typed} is not a ward of {district.name} on the official register. Choose a ward from the list."]})
+    if district is None:
+        raise serializers.ValidationError({field: ["Choose the district before the ward."]})
+    found = _re.fullmatch(r"\s*(?:ward\s*)?0*(\d{1,4})\s*", str(value), _re.IGNORECASE)
+    if not found:
+        raise serializers.ValidationError({field: [f"Enter the ward as a whole number from 1 to {MAX_WARD_NUMBER}."]})
+    try:
+        return ward_for_number(district, int(found.group(1)))
+    except ValueError as error:
+        raise serializers.ValidationError({field: [str(error)]}) from error
 
 
 def _follow_lead_name(farmer):
@@ -152,6 +149,7 @@ class FarmerDocumentSerializer(serializers.ModelSerializer):
 
 
 class FarmSerializer(serializers.ModelSerializer):
+    ward_number = serializers.CharField(write_only=True, required=False, allow_blank=True)
     province_name = serializers.SerializerMethodField()
     district_name = serializers.SerializerMethodField()
     ward_name = serializers.SerializerMethodField()
@@ -170,6 +168,7 @@ class FarmSerializer(serializers.ModelSerializer):
             "province",
             "district",
             "ward",
+            "ward_number",
             "physical_location",
             "latitude",
             "longitude",
@@ -201,6 +200,9 @@ class FarmSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         instance = self.instance
+        typed_ward = attrs.pop("ward_number", None)
+        if typed_ward not in (None, ""):
+            attrs["ward"] = _ward_from_input(attrs.get("district", getattr(instance, "district", None)), typed_ward)
         total = attrs.get("total_hectares", getattr(instance, "total_hectares", Decimal("0.00")))
         arable = attrs.get("arable_hectares", getattr(instance, "arable_hectares", Decimal("0.00")))
         irrigated = attrs.get("irrigated_hectares", getattr(instance, "irrigated_hectares", Decimal("0.00")))
@@ -292,7 +294,10 @@ class FarmerSerializer(serializers.ModelSerializer):
     primary_farm = serializers.SerializerMethodField()
     ward_name = serializers.CharField(source="ward.name", read_only=True, default="")
     ward_text = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    ward_number = serializers.CharField(write_only=True, required=False, allow_blank=True)
     as_lead = serializers.BooleanField(write_only=True, required=False, default=False)
+    # Registering a lead farmer can create their login in the same step.
+    login_password = serializers.CharField(write_only=True, required=False, allow_blank=True, min_length=8)
     crop_allocations = serializers.ListField(child=serializers.DictField(), write_only=True, required=False)
 
     class Meta:
@@ -319,9 +324,11 @@ class FarmerSerializer(serializers.ModelSerializer):
             "ward",
             "ward_name",
             "ward_text",
+            "ward_number",
             "farmer_type",
             "is_lead",
             "as_lead",
+            "login_password",
             "crop_allocations",
             "cluster",
             "cluster_name",
@@ -395,6 +402,30 @@ class FarmerSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         from .kyc import EDITABLE_BY_REGISTRAR, NATIONAL_ID_PATTERN
 
+        # The ward is typed as a number. "ward_text" is the older name for the same input.
+        typed_ward = attrs.pop("ward_number", None)
+        legacy_ward = str(attrs.pop("ward_text", "") or "").strip()
+        if typed_ward in (None, "") and legacy_ward:
+            typed_ward = legacy_ward
+        if typed_ward not in (None, ""):
+            attrs["ward"] = _ward_from_input(attrs.get("district", getattr(self.instance, "district", None)), typed_ward)
+        login_password = attrs.get("login_password") or ""
+        if login_password:
+            if self.instance is not None or not attrs.get("as_lead"):
+                raise serializers.ValidationError({"login_password": ["A login is created only when a lead farmer is first registered."]})
+            from apps.accounts.models import User
+            from apps.accounts.serializers import check_password_strength
+
+            email = str(attrs.get("email") or "").strip().lower()
+            if not email:
+                raise serializers.ValidationError({"email": ["Enter the email the lead farmer will sign in with."]})
+            if User.objects.filter(email__iexact=email).exists():
+                raise serializers.ValidationError({"email": ["An account with this email already exists."]})
+            attrs["email"] = email
+            try:
+                check_password_strength(login_password)
+            except serializers.ValidationError as error:
+                raise serializers.ValidationError({"login_password": error.detail}) from error
         lead = self._is_lead_farmer()
         if lead:
             user = self._registrar()
@@ -425,22 +456,15 @@ class FarmerSerializer(serializers.ModelSerializer):
             if national_id is not None and (self.instance is None or national_id != self.instance.national_id):
                 if not NATIONAL_ID_PATTERN.fullmatch(national_id):
                     raise serializers.ValidationError({"national_id": ["Enter the national ID as 63-2330173E58: two digits, a hyphen, seven digits, a letter and two digits."]})
-            typed_ward = str(attrs.pop("ward_text", "") or "").strip()
-            district = attrs.get("district", getattr(self.instance, "district", None))
-            if typed_ward:
-                if district is None:
-                    raise serializers.ValidationError({"ward_text": ["Choose the district before the ward."]})
-                # Wards come from the official register only. A typed value must match one of them.
-                attrs["ward"] = _registered_ward(district, typed_ward)
-            else:
-                attrs.pop("ward_text", None)
             ward = attrs.get("ward", getattr(self.instance, "ward", None))
             if self.instance is None and ward is None:
-                raise serializers.ValidationError({"ward": ["Enter the ward."]})
+                raise serializers.ValidationError({"ward_number": ["Enter the ward number."]})
         source = dict(self.initial_data)
         for field in ("first_name", "middle_name", "surname", "national_id", "farm_name"):
             if field in attrs and field in source:
                 source[field] = attrs[field]
+        if attrs.get("ward") is not None:
+            source["ward"] = attrs["ward"].pk
         if self.instance:
             for field in ("first_name", "surname", "national_id", "phone_primary", "province", "district", "ward"):
                 if field not in source:
@@ -507,8 +531,10 @@ class FarmerSerializer(serializers.ModelSerializer):
         longitude = validated_data.pop("longitude", None)
         additional_farms = validated_data.pop("additional_farms", [])
         as_lead = validated_data.pop("as_lead", False)
+        login_password = validated_data.pop("login_password", "")
         crop_rows = validated_data.pop("crop_allocations", None)
         validated_data.pop("ward_text", None)
+        validated_data.pop("ward_number", None)
         as_draft = validated_data.pop("as_draft", False) or self._is_lead_farmer() or as_lead
         # A draft waits for its KYC documents. Nothing is a member until an administrator approves it.
         validated_data["verification_status"] = Farmer.STATUS_DRAFT if as_draft else Farmer.STATUS_SUBMITTED
@@ -556,6 +582,18 @@ class FarmerSerializer(serializers.ModelSerializer):
 
             cluster = open_lead_cluster(farmer)
             farmer.farms.update(cluster=cluster)
+            if login_password:
+                from apps.accounts.models import User
+
+                account = User(
+                    email=farmer.email, username=farmer.email, first_name=farmer.first_name, last_name=farmer.surname,
+                    phone_number=farmer.phone_primary, role=User.ROLE_LEAD_FARMER, farmer=farmer, assigned_cluster=cluster,
+                    province=farmer.province, district=farmer.district, must_change_password=True,
+                )
+                account.set_password(login_password)
+                account.save()
+                cluster.lead_farmer = account
+                cluster.save(update_fields=["lead_farmer", "updated_at"])
         if crop_rows is not None:
             self._save_crops(farmer, crop_rows)
         return farmer
@@ -563,9 +601,11 @@ class FarmerSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         validated_data.pop("additional_farms", None)
         validated_data.pop("as_draft", None)
+        validated_data.pop("login_password", None)
         as_lead = validated_data.pop("as_lead", False)
         crop_rows = validated_data.pop("crop_allocations", None)
         validated_data.pop("ward_text", None)
+        validated_data.pop("ward_number", None)
         farm_changes = {
             name: validated_data.pop(name)
             for name in ("total_hectares", "arable_hectares", "irrigated_hectares", "irrigation_type", "farm_name")
