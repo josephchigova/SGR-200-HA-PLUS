@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { coordinateError, googleMapsUrl, parseCoordinates } from '../coordinates'
+import MapLocationPicker from './MapLocationPicker'
 
 function FarmLocationFields({ latitude, longitude, onChange }) {
   const [paste, setPaste] = useState('')
@@ -37,8 +38,16 @@ function FarmLocationFields({ latitude, longitude, onChange }) {
             aria-describedby="coordinate-help"
           />
         </label>
-        <div className="full-width">
+        <div className="full-width table-actions">
           <button type="button" className="ghost-btn small" onClick={applyPaste}>Use pasted coordinates</button>
+          <MapLocationPicker
+            latitude={latitude}
+            longitude={longitude}
+            onSelect={(coords) => {
+              onChange('latitude', coords.latitude)
+              onChange('longitude', coords.longitude)
+            }}
+          />
         </div>
         <label className="form-field">
           Latitude

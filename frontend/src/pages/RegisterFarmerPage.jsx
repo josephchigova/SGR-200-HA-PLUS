@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import Icon from '../components/Icon'
+import MapLocationPicker from '../components/MapLocationPicker'
 import SearchSelect from '../components/SearchSelect'
 import { EmptyState, PageHead, Pill, Skeleton, errorMessage } from '../components/ui'
 import { openDocument } from '../documents'
@@ -483,8 +484,11 @@ function RegisterFarmerPage() {
           </div>
           <div className="total-strip"><span>Total arable land</span><strong>{arable.toLocaleString('en-US', { maximumFractionDigits: 2 })} ha</strong></div>
 
-          <div className="card-head" style={{ marginTop: 20 }}><div><h3>Farm coordinates (optional)</h3><p className="card-sub">Stand on the farm and use this device, or type the coordinates from a map.</p></div>
-            <button type="button" className="ghost-btn small" onClick={useCurrentLocation}><Icon name="mapPin" />Use current location</button>
+          <div className="card-head" style={{ marginTop: 20 }}><div><h3>Farm coordinates (optional)</h3><p className="card-sub">Stand on the farm and use this device, pick the place on a map, or type the coordinates.</p></div>
+            <div className="table-actions">
+              <button type="button" className="ghost-btn small" onClick={useCurrentLocation}><Icon name="mapPin" />Use current location</button>
+              <MapLocationPicker latitude={form.latitude} longitude={form.longitude} onSelect={({ latitude, longitude }) => setForm((current) => ({ ...current, latitude, longitude }))} />
+            </div>
           </div>
           <div className="form-grid two">
             <Field label="Latitude" name="latitude" errors={errorsTwo} inputMode="decimal" placeholder="-17.825200" {...fieldProps} />
