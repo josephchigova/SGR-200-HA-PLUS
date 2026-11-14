@@ -412,6 +412,66 @@ class AdminRegisteredLeadTests(TestCase):
         farmer.refresh_from_db()
         return farmer, User.objects.get(email="takunda@example.com")
 
+    def test_an_administrator_registration_is_complete_when_the_farm_is_saved(self):
+        """No KYC files and no final click: saving the farmer and farm completes it."""
+        from datetime import date
+
+        from apps.production.models import FarmerProduction
+        from apps.programmes.models import Crop, Season
+
+        admin = self.client_for(self.admin)
+        created = admin.post("/api/farmers/", {
+            "first_name": "Rudo", "surname": "Moyo", "national_id": "63-2353535E34", "phone_primary": "0771111222",
+            "email": "rudo@example.com", "farm_name": "Moyo Farm", "province": self.province.id, "district": self.district.id,
+            "ward_number": "4", "total_hectares": "100", "arable_hectares": "100", "irrigated_hectares": "0",
+            "as_draft": True, "as_lead": True, "login_password": "Lead-Start-2026!",
+        }, format="json")
+        self.assertEqual(created.status_code, 201, created.content)
+        self.assertEqual(created.json()["verification_status"], Farmer.STATUS_VERIFIED)
+        self.assertFalse(created.json()["kyc_upload_required"])
+        farmer = Farmer.objects.get(pk=created.json()["id"])
+        self.assertEqual(farmer.membership_status, Farmer.MEMBERSHIP_ACTIVE)
+        self.assertFalse(admin.get("/api/farmers/", {"verification_status": "DRAFT"}).json()["results"])
+
+        # Crops can still be added afterwards, and reach production straight away.
+        season = Season.objects.create(name="2026/2027 Summer", start_date=date(2026, 5, 1), end_date=date(2026, 10, 31), status=Season.STATUS_ACTIVE)
+        crop = Crop.objects.create(name="Maize", category=Crop.CATEGORY_SUMMER)
+        crops = admin.patch(f"/api/farmers/{farmer.id}/", {"crop_allocations": [{"crop": crop.id, "season": season.id, "hectares": "40"}]}, format="json")
+        self.assertEqual(crops.status_code, 200, crops.content)
+        self.assertTrue(FarmerProduction.objects.filter(farmer=farmer, crop="Maize").exists())
+
+        # Finishing the wizard afterwards only confirms it.
+        finished = admin.post(f"/api/farmers/{farmer.id}/submit/")
+        self.assertEqual(finished.status_code, 200, finished.content)
+        self.assertEqual(finished.json()["verification_status"], Farmer.STATUS_VERIFIED)
+        self.assertEqual(farmer.review_events.filter(action=FarmerReviewEvent.APPROVED).count(), 1)
+
+    def test_open_administrator_records_are_repaired(self):
+        from importlib import import_module
+
+        from django.apps import apps as global_apps
+
+        lead_user = User.objects.create_user(email="lead2@example.com", username="lead2", password=PASSWORD, role=User.ROLE_LEAD_FARMER)
+        def make(national_id, registrar, with_farm=True, status=Farmer.STATUS_DRAFT):
+            farmer = Farmer.objects.create(
+                first_name="A", surname=national_id[-3:], national_id=national_id, province=self.province, district=self.district,
+                verification_status=status, registered_by=registrar,
+            )
+            if with_farm:
+                farmer.farms.create(farm_name="F", total_hectares=10, arable_hectares=10, province=self.province, district=self.district)
+            return farmer
+
+        stuck = make("63-1111111A11", self.admin)
+        captured_by_lead = make("63-2222222B22", lead_user)
+        no_farm = make("63-3333333C33", self.admin, with_farm=False)
+        rejected = make("63-4444444D44", self.admin, status=Farmer.STATUS_REJECTED)
+        import_module("apps.farmers.migrations.0012_complete_open_admin_registrations").complete(global_apps, None)
+        states = {f.pk: f.verification_status for f in Farmer.objects.filter(pk__in=[stuck.pk, captured_by_lead.pk, no_farm.pk, rejected.pk])}
+        self.assertEqual(states[stuck.pk], Farmer.STATUS_VERIFIED)
+        self.assertEqual(states[captured_by_lead.pk], Farmer.STATUS_DRAFT)
+        self.assertEqual(states[no_farm.pk], Farmer.STATUS_DRAFT)
+        self.assertEqual(states[rejected.pk], Farmer.STATUS_REJECTED)
+
     def test_finishing_an_administrator_registration_completes_it(self):
         farmer, _ = self.register_lead_with_wizard()
         self.assertEqual(farmer.verification_status, Farmer.STATUS_VERIFIED)
@@ -433,7 +493,11 @@ class AdminRegisteredLeadTests(TestCase):
         farmer, lead = self.register_lead_with_wizard()
         client = self.client_for(lead)
         self.assertEqual(client.patch(f"/api/farmers/{farmer.id}/", {"phone_primary": "0779999999"}, format="json").status_code, 400)
-        self.assertEqual(client.post(f"/api/farmers/{farmer.id}/submit/").status_code, 400)
+        # The registration is already complete. Submitting again confirms it and does not ask for KYC files.
+        confirmed = client.post(f"/api/farmers/{farmer.id}/submit/")
+        self.assertEqual(confirmed.status_code, 200, confirmed.content)
+        self.assertEqual(confirmed.json()["verification_status"], Farmer.STATUS_VERIFIED)
+        self.assertFalse(confirmed.json()["kyc_upload_required"])
         farm = farmer.farms.get()
         self.assertEqual(client.patch(f"/api/farms/{farm.id}/", {"total_hectares": "300"}, format="json").status_code, 400)
 
@@ -506,3 +570,77 @@ class AdminRegisteredLeadTests(TestCase):
         other = User.objects.create_user(email="o@example.com", username="o", password=PASSWORD, role=User.ROLE_LEAD_FARMER,
                                          farmer=other_record, assigned_cluster=open_lead_cluster(other_record))
         self.assertEqual(self.client_for(other).post(f"/api/farmers/{farmer.id}/change-requests/", {"phone_primary": "0770000000"}, format="json").status_code, 404)
+
+    def test_a_lead_farmer_is_complete_without_kyc_documents(self):
+        """Missing KYC files must not leave an administrator's lead farmer incomplete."""
+        from importlib import import_module
+
+        from django.apps import apps as global_apps
+
+        from apps.farmers.kyc import kyc_upload_required, missing_required_documents
+
+        registrar = User.objects.create_user(email="lead-registrar@example.com", username="lead-registrar", password=PASSWORD, role=User.ROLE_LEAD_FARMER)
+        lead = Farmer.objects.create(
+            first_name="TAKUNDA", middle_name="JOSHUA", surname="MUTENJE", national_id="63-2353535E34",
+            province=self.province, district=self.district, phone_primary="0771111222",
+            verification_status=Farmer.STATUS_DRAFT, membership_status=Farmer.MEMBERSHIP_INACTIVE,
+            registered_by=registrar, is_lead=True,
+        )
+        lead.farms.create(farm_name="Mutenje Farm", total_hectares=100, arable_hectares=100, province=self.province, district=self.district)
+        Cluster.objects.create(name="TAKUNDA JOSHUA MUTENJE", province=self.province, district=self.district, lead_member=lead)
+        # The flag was never set, which is how older lead records stayed on the farmers list.
+        unmarked = Farmer.objects.create(
+            first_name="UNMARKED", surname="LEAD", national_id="63-1010101U10", province=self.province, district=self.district,
+            verification_status=Farmer.STATUS_DRAFT, registered_by=None, is_lead=False,
+        )
+        Cluster.objects.create(name="UNMARKED LEAD", province=self.province, lead_member=unmarked)
+        member = Farmer.objects.create(
+            first_name="MEMBER", surname="DRAFT", national_id="63-2020202M20", province=self.province, district=self.district,
+            verification_status=Farmer.STATUS_DRAFT, registered_by=registrar, is_lead=False,
+        )
+        member.farms.create(farm_name="Member Farm", total_hectares=20, arable_hectares=20, province=self.province, district=self.district)
+        rejected = Farmer.objects.create(
+            first_name="REJECTED", surname="LEAD", national_id="63-3030303R30", province=self.province,
+            verification_status=Farmer.STATUS_REJECTED, is_lead=True, registered_by=self.admin,
+        )
+
+        self.assertFalse(kyc_upload_required(lead))
+        self.assertEqual(missing_required_documents(lead), [])
+        self.assertTrue(kyc_upload_required(member))
+
+        import_module("apps.farmers.migrations.0013_complete_lead_farmers_without_kyc").complete(global_apps, None)
+        lead.refresh_from_db()
+        unmarked.refresh_from_db()
+        member.refresh_from_db()
+        rejected.refresh_from_db()
+        self.assertEqual(lead.verification_status, Farmer.STATUS_VERIFIED)
+        self.assertEqual(lead.membership_status, Farmer.MEMBERSHIP_ACTIVE)
+        self.assertEqual(lead.farms.get().verification_status, "VERIFIED")
+        self.assertTrue(unmarked.is_lead)
+        self.assertEqual(unmarked.verification_status, Farmer.STATUS_VERIFIED)
+        self.assertEqual(member.verification_status, Farmer.STATUS_DRAFT)
+        self.assertEqual(rejected.verification_status, Farmer.STATUS_REJECTED)
+
+        admin = self.client_for(self.admin)
+        incomplete = [row["id"] for row in admin.get("/api/farmers/", {"verification_status": "DRAFT"}).json()["results"]]
+        approved = [row["id"] for row in admin.get("/api/farmers/", {"verification_status": "VERIFIED"}).json()["results"]]
+        self.assertIn(member.id, incomplete)
+        self.assertNotIn(lead.id, incomplete)
+        self.assertIn(lead.id, approved)
+        listed = admin.get(f"/api/farmers/{lead.id}/").json()
+        self.assertEqual(listed["verification_status"], Farmer.STATUS_VERIFIED)
+        self.assertFalse(listed["kyc_upload_required"])
+        self.assertEqual(listed["documents_summary"]["required"], 0)
+
+    def test_saving_a_lead_without_a_registrar_completes_it_without_documents(self):
+        farmer = Farmer.objects.create(
+            first_name="RUDO", surname="MOYO", national_id="63-4040404R40", province=self.province, district=self.district,
+            verification_status=Farmer.STATUS_DRAFT, is_lead=True, registered_by=None,
+        )
+        saved = self.client_for(self.admin).patch(f"/api/farmers/{farmer.id}/", {"phone_primary": "0771234567"}, format="json")
+        self.assertEqual(saved.status_code, 200, saved.content)
+        self.assertEqual(saved.json()["verification_status"], Farmer.STATUS_VERIFIED)
+        self.assertFalse(saved.json()["kyc_upload_required"])
+        self.assertEqual(saved.json()["documents_summary"]["required"], 0)
+        farmer.refresh_from_db()
+        self.assertEqual(farmer.membership_status, Farmer.MEMBERSHIP_ACTIVE)

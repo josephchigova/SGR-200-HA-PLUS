@@ -139,7 +139,7 @@ function ClusterDashboard({ selectedSeason = null, periodStatus = 'ready' }) {
                     <Link className="task-item" key={row.id} to={`/farmers/${row.id}/edit`}>
                       <span>
                         <strong>{row.name}</strong> <Pill tone={tone}>{label}</Pill>
-                        <small>{row.review_remarks || (row.verification_status === 'DRAFT' ? `${row.documents_uploaded} of ${row.documents_required} required documents uploaded. Finish and submit.` : 'Open to correct and resubmit.')}</small>
+                        <small>{row.review_remarks || (row.verification_status === 'DRAFT' ? (row.documents_required ? `${row.documents_uploaded} of ${row.documents_required} required documents uploaded. Finish and submit.` : 'Finish and submit this registration. KYC files are not required.') : 'Open to correct and resubmit.')}</small>
                       </span>
                       <Icon name="chevronRight" />
                     </Link>

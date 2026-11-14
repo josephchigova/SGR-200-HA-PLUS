@@ -15,7 +15,9 @@ import {
   formatNationalId,
   personalErrors,
   phoneDigits,
+  registrationFormKey,
   statusOf,
+  submitBlockReason,
   upper,
 } from '../registration'
 
@@ -166,7 +168,7 @@ function RegisterFarmerPage() {
           setFarmer(record)
           setDocuments(documentRows)
           setAllocations((record.crop_allocations || []).map((row) => ({ crop: String(row.crop), season: String(row.season), hectares: String(Number(row.hectares)) })))
-          setSaved(JSON.stringify(next))
+          setSaved(registrationFormKey(next))
           // A registration an administrator captured has no upload step: the documents are checked in person.
           setStep(record.kyc_upload_required ? 3 : 2)
         }
@@ -216,13 +218,20 @@ function RegisterFarmerPage() {
   const steps = uploadsKyc ? STEPS : STEPS.slice(0, 3)
   const missing = required.filter((item) => !uploadedCodes.has(item.code))
   const stepValid = [!Object.keys(errorsOne).length, !Object.keys(errorsTwo).length, !cropProblems.length, !uploadsKyc || !missing.length]
-  const dirty = saved !== JSON.stringify(form)
-  // A step opens only when every step before it is valid and saved.
-  const reachable = (index) => index === 0 || (index === 1 && stepValid[0]) || (index === 2 && stepValid[0] && stepValid[1] && Boolean(farmerId) && !dirty) || (index === 3 && reachableCrops())
+  const dirty = saved !== registrationFormKey(form)
+  const submitReason = submitBlockReason({
+    personal: errorsOne, farm: errorsTwo, crops: cropProblems, uploadsKyc, missingLabels: missing.map((item) => item.label),
+  })
+  // A later step opens once the earlier details are valid and the farmer exists.
+  // Unsaved edits do not block it: submitting saves them first.
+  const reachable = (index) => index === 0 || (index === 1 && stepValid[0]) || (index === 2 && stepValid[0] && stepValid[1] && Boolean(farmerId)) || (index === 3 && reachableCrops())
   function reachableCrops() {
-    return stepValid[0] && stepValid[1] && stepValid[2] && Boolean(farmerId) && !dirty
+    return stepValid[0] && stepValid[1] && stepValid[2] && Boolean(farmerId)
   }
-  const editable = !farmer || EDITABLE.includes(farmer.verification_status)
+  // An administrator's registration is complete once the farm is saved, and stays open to
+  // the administrator here so crops can still be added.
+  const completedByAdmin = Boolean(farmer) && !uploadsKyc && ['VERIFIED', 'APPROVED'].includes(farmer.verification_status) && profile?.role !== 'lead_farmer'
+  const editable = !farmer || EDITABLE.includes(farmer.verification_status) || completedByAdmin
 
   // The whole wizard is kept as a draft, so a refresh or a stray click loses nothing.
   // The lead farmer's login password is never part of it.
@@ -237,7 +246,7 @@ function RegisterFarmerPage() {
       if (Array.isArray(data.allocations)) setAllocations(data.allocations)
       const wanted = Number.isInteger(data.step) ? data.step : 0
       // Steps after the farm need the farm saved first.
-      setStep(saved === JSON.stringify(restoredForm) ? wanted : Math.min(wanted, 1))
+      setStep(saved === registrationFormKey(restoredForm) ? wanted : Math.min(wanted, 1))
       setReviewing(false)
     },
   })
@@ -280,22 +289,27 @@ function RegisterFarmerPage() {
     ...(createsLogin ? { login_password: form.login_password } : {}),
   })
 
+  const persist = async () => {
+    const response = farmerId
+      ? await apiClient.patch(`/farmers/${farmerId}/`, payload())
+      : await apiClient.post('/farmers/', payload())
+    if (!farmerId) {
+      // The record now exists. Its address replaces the blank form's, so a refresh
+      // reopens this registration instead of starting a new one.
+      draft.clear()
+      window.history.replaceState(window.history.state, '', `/farmers/${response.data.id}/edit${asLead ? '?as=lead' : ''}`)
+    }
+    setFarmer(response.data)
+    setFarmerId(String(response.data.id))
+    setSaved(registrationFormKey(form))
+    return response.data
+  }
+
   const saveDraft = async () => {
     setBusy(true)
     setError('')
     try {
-      const response = farmerId
-        ? await apiClient.patch(`/farmers/${farmerId}/`, payload())
-        : await apiClient.post('/farmers/', payload())
-      if (!farmerId) {
-        // The record now exists. Its address replaces the blank form's, so a refresh
-        // reopens this registration instead of starting a new one.
-        draft.clear()
-        window.history.replaceState(window.history.state, '', `/farmers/${response.data.id}/edit${asLead ? '?as=lead' : ''}`)
-      }
-      setFarmer(response.data)
-      setFarmerId(String(response.data.id))
-      setSaved(JSON.stringify(form))
+      await persist()
       return true
     } catch (requestError) {
       setError(errorMessage(requestError, 'The registration could not be saved.'))
@@ -385,9 +399,13 @@ function RegisterFarmerPage() {
   }, [context, farmerId])
 
   const submit = async () => {
+    if (submitReason) return
     setBusy(true)
     setError('')
     try {
+      // A finished review can still hold edits that were not written on an earlier step.
+      // Save them, then submit. The button stays available once the details are valid.
+      if (dirty) await persist()
       const response = await apiClient.post(`/farmers/${farmerId}/submit/`)
       draft.clear()
       setFarmer(response.data)
@@ -453,10 +471,10 @@ function RegisterFarmerPage() {
       <PageHead
         title={id ? 'Continue registration' : asLead ? 'Register a lead farmer' : 'Register a farmer'}
         subtitle={asLead
-          ? `${steps.length === 3 ? 'Three' : 'Four'} steps. The lead farmer’s cluster is created from their name and their login is created on the first save. There is no cluster to choose.`
+          ? `${steps.length === 3 ? 'Three' : 'Four'} steps. The lead farmer’s cluster is created from their name and their login is created on the first save. There is no cluster to choose. You check the KYC documents in person, so the registration is complete as soon as the farm is saved.`
           : uploadsKyc
             ? 'Four steps: the farmer, the farm, the crop allocation, then the KYC documents. An administrator approves the registration after you submit it.'
-            : 'Three steps: the farmer, the farm and the crop allocation. You check the KYC documents in person, so nothing is uploaded.'}
+            : 'Three steps: the farmer, the farm and the crop allocation. You check the KYC documents in person, so nothing is uploaded and the registration is complete as soon as the farm is saved.'}
       >
         <Link className="ghost-btn" to="/farmers"><Icon name="arrowLeft" />Back to farmers</Link>
       </PageHead>
@@ -498,6 +516,7 @@ function RegisterFarmerPage() {
       <DraftNotice draft={draft}>
         {createsLogin ? 'Your unfinished registration was restored. Type the login password again, it is never kept in a draft' : 'Your unfinished registration was restored'}
       </DraftNotice>
+      {completedByAdmin ? <div className="form-message success" role="status">The registration is complete and approved. No KYC files are needed because you checked the documents in person. Adding crops is optional.</div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
       <DraftStatus draft={draft} />
 
@@ -679,7 +698,8 @@ function RegisterFarmerPage() {
           </div>
           <div className="wizard-actions">
             <button type="button" className="ghost-btn" onClick={() => { setReviewing(false); if (!uploadsKyc) setStep(2) }}><Icon name="arrowLeft" />{uploadsKyc ? 'Back to documents' : 'Back to crops'}</button>
-            <button type="button" className="primary-btn" disabled={busy || !stepValid.every(Boolean) || dirty} onClick={submit}>{busy ? (uploadsKyc ? 'Submitting…' : 'Completing…') : (uploadsKyc ? 'Submit for approval' : 'Complete registration')}<Icon name="check" /></button>
+            <span className="card-sub">{submitReason || (dirty ? 'Unsaved details are saved when you submit.' : uploadsKyc ? 'All required documents are uploaded.' : 'No KYC files are required. The documents were checked in person.')}</span>
+            <button type="button" className="primary-btn" disabled={busy || Boolean(submitReason)} onClick={submit}>{busy ? (uploadsKyc ? 'Submitting…' : 'Completing…') : (uploadsKyc ? 'Submit for approval' : 'Complete registration')}<Icon name="check" /></button>
           </div>
         </section>
       ) : null}

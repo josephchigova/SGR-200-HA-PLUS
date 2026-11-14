@@ -115,6 +115,26 @@ function clean(errors) {
   return Object.fromEntries(Object.entries(errors).filter(([, message]) => message))
 }
 
+// Field order and number-versus-text differences are not unsaved changes.
+export function registrationFormKey(value) {
+  return JSON.stringify(
+    Object.entries(value || {})
+      .filter(([key]) => key !== 'login_password')
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, item == null ? '' : String(item)]),
+  )
+}
+
+// KYC files block submission only when this registration actually uploads them.
+// An administrator's registration, including a lead farmer, does not.
+export function submitBlockReason({ personal = {}, farm = {}, crops = [], uploadsKyc = false, missingLabels = [] } = {}) {
+  if (Object.keys(personal).length) return 'Personal details are still incomplete.'
+  if (Object.keys(farm).length) return 'Farm details are still incomplete.'
+  if (crops.length) return crops[0]
+  if (uploadsKyc && missingLabels.length) return `Upload the remaining documents: ${missingLabels.join(', ')}.`
+  return ''
+}
+
 export const STATUS_LABELS = {
   DRAFT: ['Incomplete', ''],
   PENDING: ['Awaiting approval', 'warn'],

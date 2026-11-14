@@ -33,11 +33,14 @@ DOCUMENT_LABELS = {item["code"]: item["label"] for item in DOCUMENT_TYPES}
 
 
 def kyc_upload_required(farmer):
-    """Uploaded KYC files are needed only when a lead farmer captured the registration.
+    """Uploaded KYC files are needed only when a lead farmer registers an ordinary farmer.
 
-    An administrator who registers a farmer checks the documents in person, so nothing
-    is uploaded for those registrations.
+    A lead farmer's own registration never uploads KYC. An administrator who registers
+    anyone checks the documents in person, so nothing is uploaded for those registrations.
+    Missing files must not leave either of those records incomplete.
     """
+    if getattr(farmer, "is_lead", False):
+        return False
     registrar = getattr(farmer, "registered_by", None)
     return bool(registrar is not None and not registrar.is_superuser and registrar.role == "lead_farmer")
 

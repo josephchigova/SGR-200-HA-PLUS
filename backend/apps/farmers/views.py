@@ -299,9 +299,13 @@ class FarmerViewSet(viewsets.ModelViewSet):
     def submit(self, request, pk=None):
         """Send a draft or corrected registration to the approval queue."""
         farmer = self.get_object()
+        checked_in_person = not kyc.kyc_upload_required(farmer)
+        if checked_in_person and farmer.verification_status in {Farmer.STATUS_VERIFIED, Farmer.STATUS_APPROVED}:
+            # An administrator's registration completes when it is first saved. Finishing the
+            # wizard afterwards only confirms it.
+            return Response(self.get_serializer(farmer).data)
         if farmer.verification_status not in kyc.EDITABLE_BY_REGISTRAR:
             return Response({"detail": "This registration is already with the administrator."}, status=400)
-        checked_in_person = not kyc.kyc_upload_required(farmer)
         user = request.user
         if checked_in_person and not user.is_superuser and user.role == user.ROLE_LEAD_FARMER:
             # This record was captured by an administrator, who also completes it.
@@ -311,12 +315,12 @@ class FarmerViewSet(viewsets.ModelViewSet):
             return Response({"detail": "Upload the required documents first: " + ", ".join(missing) + "."}, status=400)
         if not farmer.farms.exists():
             return Response({"detail": "Add the farm details before submitting."}, status=400)
-        from .services import approve_registration, can_approve
+        from .services import ADMIN_REGISTRATION_NOTE, approve_registration, can_approve
 
         if checked_in_person and can_approve(user):
             # The administrator captured this registration and checked the documents in person,
             # so finishing it completes it. There is nothing left for an approval queue to check.
-            approve_registration(farmer, user, "Registered by an administrator, who checked the KYC documents in person.")
+            approve_registration(farmer, user, ADMIN_REGISTRATION_NOTE)
             return Response(self.get_serializer(farmer).data)
         kyc.submit_registration(farmer, user)
         if checked_in_person:

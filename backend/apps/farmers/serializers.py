@@ -395,6 +395,31 @@ class FarmerSerializer(serializers.ModelSerializer):
         user = getattr(request, "user", None)
         return user if user is not None and user.is_authenticated else None
 
+    def _admin_capture(self, farmer):
+        """True when this registration does not upload KYC and the current user may approve.
+
+        A lead farmer's own record counts even when no registrar was stored. An ordinary
+        farmer still needs the administrator who captured it.
+        """
+        from .kyc import kyc_upload_required
+        from .services import can_approve
+
+        if kyc_upload_required(farmer) or not can_approve(self._registrar()):
+            return False
+        return bool(farmer.registered_by_id or farmer.is_lead)
+
+    def _complete_admin_capture(self, farmer):
+        """An administrator's registration is complete once it is saved.
+
+        A lead farmer is complete without a farm. An ordinary farmer is complete once
+        the farm exists. Neither waits on uploaded KYC files.
+        """
+        from .kyc import EDITABLE_BY_REGISTRAR
+        from .services import ADMIN_REGISTRATION_NOTE, approve_registration
+
+        if farmer.verification_status in EDITABLE_BY_REGISTRAR and self._admin_capture(farmer) and (farmer.is_lead or farmer.farms.exists()):
+            approve_registration(farmer, self._registrar(), ADMIN_REGISTRATION_NOTE)
+
     def _is_lead_farmer(self):
         user = self._registrar()
         return bool(user and not user.is_superuser and user.role == user.ROLE_LEAD_FARMER)
@@ -601,6 +626,7 @@ class FarmerSerializer(serializers.ModelSerializer):
                 cluster.save(update_fields=["lead_farmer", "updated_at"])
         if crop_rows is not None:
             self._save_crops(farmer, crop_rows)
+        self._complete_admin_capture(farmer)
         return farmer
 
     def update(self, instance, validated_data):
@@ -622,7 +648,7 @@ class FarmerSerializer(serializers.ModelSerializer):
         farmer = super().update(instance, validated_data)
         from .kyc import EDITABLE_BY_REGISTRAR
 
-        if farm_changes and farmer.verification_status in EDITABLE_BY_REGISTRAR:
+        if farm_changes and (farmer.verification_status in EDITABLE_BY_REGISTRAR or self._admin_capture(farmer)):
             # While a registration is still being prepared, its first farm follows the form.
             farm = farmer.farms.order_by("id").first()
             if farm is None and "total_hectares" in farm_changes:
@@ -648,6 +674,12 @@ class FarmerSerializer(serializers.ModelSerializer):
             _follow_lead_name(farmer)
         if crop_rows is not None:
             self._save_crops(farmer, crop_rows)
+            if farmer.verification_status in {Farmer.STATUS_VERIFIED, Farmer.STATUS_APPROVED}:
+                # Crops added after approval go straight to seasonal planting and production.
+                from .services import publish_registration_crops
+
+                publish_registration_crops(farmer)
+        self._complete_admin_capture(farmer)
         return farmer
 
     def _save_crops(self, farmer, rows):

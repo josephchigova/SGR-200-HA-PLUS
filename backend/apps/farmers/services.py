@@ -457,6 +457,9 @@ def publish_registration_crops(farmer):
         )
 
 
+ADMIN_REGISTRATION_NOTE = "Registered by an administrator, who checked the KYC documents in person."
+
+
 def approve_registration(farmer, user, remarks=""):
     """Make a registration an approved, active membership. Used by every approval path."""
     from django.utils import timezone

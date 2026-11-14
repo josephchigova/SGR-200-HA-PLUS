@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { NATIONAL_ID_PATTERN, farmErrors, fileError, formatNationalId, nationalIdError, personalErrors } from './registration'
+import { NATIONAL_ID_PATTERN, farmErrors, fileError, formatNationalId, nationalIdError, personalErrors, registrationFormKey, statusOf, submitBlockReason } from './registration'
 
 describe('national ID formatting', () => {
   it('inserts the hyphen and capital letter as the user types', () => {
@@ -45,5 +45,26 @@ describe('step validation', () => {
     expect(fileError({ name: 'id.pdf', type: 'application/pdf', size: 1000 })).toBe('')
     expect(fileError({ name: 'id.docx', type: '', size: 1000 })).toMatch(/PDF/)
     expect(fileError({ name: 'id.png', type: 'image/png', size: 11 * 1024 * 1024 })).toMatch(/larger/)
+  })
+})
+
+describe('submitting a finished registration', () => {
+  const ready = { personal: {}, farm: {}, crops: [] }
+
+  it('stays available when the details are complete, including when KYC files are not required', () => {
+    expect(submitBlockReason(ready)).toBe('')
+    expect(submitBlockReason({ ...ready, uploadsKyc: false, missingLabels: ['National ID copy'] })).toBe('')
+    expect(statusOf('DRAFT')[0]).toBe('Incomplete')
+    expect(statusOf('VERIFIED')[0]).toBe('Approved')
+  })
+
+  it('blocks a lead farmer only while a required document is still missing', () => {
+    expect(submitBlockReason({ ...ready, uploadsKyc: true, missingLabels: ['Proof of land'] })).toMatch(/Proof of land/)
+    expect(submitBlockReason({ ...ready, uploadsKyc: true, missingLabels: [] })).toBe('')
+    expect(submitBlockReason({ ...ready, personal: { phone_primary: 'Enter the phone number.' } })).toMatch(/Personal details/)
+  })
+
+  it('does not treat field order or numeric text as an unsaved change', () => {
+    expect(registrationFormKey({ b: '1', a: 2, login_password: 'secret' })).toBe(registrationFormKey({ a: '2', b: '1' }))
   })
 })
