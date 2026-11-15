@@ -406,7 +406,7 @@ function LeadDetail({ clusterId, seasonName, leads, canManage, onClose, onChange
             {farmers.length ? (
               <div className="table-wrap">
                 <table className="data-table">
-                  <thead><tr><th>Farmer</th><th>Registered</th><th>Status</th><th>Crop allocation</th><th>Subscription compliance</th><th>Cropping</th>{canManage ? <th>Action</th> : null}</tr></thead>
+                  <thead><tr><th>Farmer</th><th>Registered</th><th>Status</th><th>Crop allocation</th><th title="Subscription paid as a percentage of the amount due">Subscription paid (%)</th><th>Planting recorded</th>{canManage ? <th>Action</th> : null}</tr></thead>
                   <tbody>
                     {farmers.map((row) => {
                       const [rowLabel, rowTone] = statusOf(row.verification_status)
@@ -536,15 +536,14 @@ function LeadFarmersPage({ selectedSeason = null }) {
 
       {overview ? (
         <section className="kpi-grid" aria-label="Cluster overview">
-          <StatCard label="Lead farmers" value={overview.lead_farmers} hint={`${overview.active_logins} with an active login`} icon="userCheck" />
-          <StatCard label="Clusters" value={overview.clusters} hint="One per lead farmer" icon="layers" />
-          <StatCard label="Registered farmers" value={overview.farmers} hint="In lead farmer clusters" icon="users" />
-          <StatCard label="Average per lead farmer" value={overview.average_cluster_size} icon="chart" />
-          <StatCard label="Largest cluster" value={overview.largest_cluster?.farmers ?? 0} hint={overview.largest_cluster?.lead_farmer || '—'} />
-          <StatCard label="Smallest cluster" value={overview.smallest_cluster?.farmers ?? 0} hint={overview.smallest_cluster?.lead_farmer || '—'} />
-          <StatCard label="Approved farmers" value={overview.approved} tone="good" icon="shield" />
-          <StatCard label="Pending registrations" value={overview.pending} icon="history" />
-          <StatCard label="Rejected registrations" value={overview.rejected} tone={overview.rejected ? 'bad' : ''} />
+          <StatCard label="Total lead farmers" value={overview.lead_farmers} hint={`${overview.active_logins} with an active login`} icon="userCheck" />
+          <StatCard label="Total clusters" value={overview.clusters} hint="One cluster per lead farmer" icon="layers" />
+          <StatCard label="Total farmers registered across all lead farmers" value={overview.farmers} hint="Lead farmers' own records not counted" icon="users" />
+          <StatCard label="Largest cluster (farmers)" value={overview.largest_cluster?.farmers ?? 0} hint={overview.largest_cluster?.lead_farmer || '—'} />
+          <StatCard label="Smallest cluster (farmers)" value={overview.smallest_cluster?.farmers ?? 0} hint={overview.smallest_cluster?.lead_farmer || '—'} />
+          <StatCard label="Total approved farmers" value={overview.approved} tone="good" icon="shield" />
+          <StatCard label="Total pending farmer registrations" value={overview.pending} hint="Waiting for administrator approval" icon="history" />
+          <StatCard label="Total rejected farmer registrations" value={overview.rejected} tone={overview.rejected ? 'bad' : ''} />
         </section>
       ) : null}
 
@@ -566,7 +565,7 @@ function LeadFarmersPage({ selectedSeason = null }) {
           <div className="table-wrap">
             {rows.length ? (
               <table className="data-table">
-                <thead><tr><th>Lead farmer / cluster</th><th>Province</th><th>District</th><th>Ward</th><th className="num">Farmers</th><th className="num">Approved</th><th className="num">Pending</th><th className="num">Rejected</th><th>Status</th><th>Action</th></tr></thead>
+                <thead><tr><th>Lead farmer / cluster</th><th>Province</th><th>District</th><th>Ward</th><th className="num">Farmers registered</th><th className="num">Approved farmers</th><th className="num">Pending registrations</th><th className="num">Rejected registrations</th><th>Login status</th><th>Action</th></tr></thead>
                 <tbody>
                   {rows.map((row) => {
                     const [label, tone] = STATUS[row.status] || ['—', '']

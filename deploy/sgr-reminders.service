@@ -1,0 +1,9 @@
+[Unit]
+Description=SGR 200HA+ subscription deadline reminders
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sgr/backend
+EnvironmentFile=/opt/sgr/backend/.env
+ExecStart=/opt/sgr/backend/.venv/bin/python manage.py send_subscription_reminders

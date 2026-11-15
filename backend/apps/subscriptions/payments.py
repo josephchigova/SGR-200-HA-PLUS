@@ -35,7 +35,7 @@ def receive_subscription_payment(*, farmer, season, amount, payment_date, method
     if existing:
         return existing.subscription, existing, False
 
-    _, category, expected_amount = SubscriptionPaymentService.farmer_subscription_details(farmer)
+    _, category, expected_amount = SubscriptionPaymentService.farmer_subscription_details(farmer, season)
     subscription, _created = FarmerSubscription.objects.get_or_create(
         farmer=farmer,
         season=season,

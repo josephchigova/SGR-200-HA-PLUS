@@ -4,6 +4,7 @@ import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import { Meter } from './ClusterDashboard'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
+import SubscriptionDeadlines from '../components/SubscriptionDeadlines'
 import { DraftNotice } from '../components/ui'
 import { useFormDraft } from '../drafts'
 
@@ -228,6 +229,8 @@ function SubscriptionsPage({ selectedSeason }) {
         <span className="subscription-record-count">{visibleCount.toLocaleString()} farmers</span>
       </header>
 
+      <SubscriptionDeadlines seasonName={seasonName} />
+
       {!seasonName ? <div className="form-message">Choose a season to view payment statuses.</div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
       {feedback ? <div className="form-message" role="status">{feedback}</div> : null}
@@ -272,10 +275,11 @@ function SubscriptionsPage({ selectedSeason }) {
             />
           </label>
           <label className="form-field">
-            Registered arable hectares
+            Allocated crop hectares
             <input
-              aria-label="Registered arable hectares"
-              value={farmerStatusLoading ? '' : currentFarmerStatus?.farmer_arable_hectares || ''}
+              aria-label="Allocated crop hectares"
+              title="All crops allocated to this farmer for the agri year, summer and winter together. 200 ha or more is 200HA+."
+              value={farmerStatusLoading ? '' : currentFarmerStatus?.allocated_hectares ?? currentFarmerStatus?.farmer_arable_hectares ?? ''}
               readOnly
             />
           </label>
@@ -360,7 +364,7 @@ function SubscriptionsPage({ selectedSeason }) {
               <thead>
                 <tr>
                   <th>Farmer</th>
-                  <th>Arable ha</th>
+                  <th title="All crops allocated for the agri year">Allocated ha</th>
                   <th>Category</th>
                   {showMoney ? <><th>Expected</th><th>Paid to date</th><th>Balance</th></> : <th>Subscription compliance</th>}
                   <th>Status</th>
@@ -375,7 +379,7 @@ function SubscriptionsPage({ selectedSeason }) {
                       <strong>{row.farmer_name}</strong>
                       <small>{row.national_id || row.membership_number || row.phone_primary || 'No identifier'}</small>
                     </td>
-                    <td>{row.farmer_arable_hectares}</td>
+                    <td>{row.allocated_hectares ?? row.farmer_arable_hectares}</td>
                     <td>{row.category}</td>
                     {showMoney ? (
                       <>

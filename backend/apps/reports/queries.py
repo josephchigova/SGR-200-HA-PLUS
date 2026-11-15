@@ -283,16 +283,15 @@ def _apply_subscription_mode(qs, mode, outstanding_field="outstanding_amount"):
 def _subscription_roster(spec, params, year_name):
     """Classify every farmer in scope for one agricultural year.
 
-    This follows the subscription screen: the expected amount comes from active
-    arable hectares, and a farmer with no payment record is unpaid. Geography
+    This follows the subscription screen: the expected amount comes from the crop
+    hectares allocated for the year, and a farmer with no payment record is unpaid. Geography
     filters are applied to the farmer before that classification.
     """
     from apps.production.seasonal_services import SeasonalSubscriptionService
 
+    from apps.subscriptions.services import allocated_hectares_expression
+
     money = DecimalField(max_digits=14, decimal_places=2)
-    arable = Farm.objects.filter(farmer_id=OuterRef("pk"), is_active=True).values("farmer_id").annotate(
-        total=Sum("arable_hectares")
-    ).values("total")[:1]
     paid = FarmerSubscription.objects.filter(farmer_id=OuterRef("pk"), season__iexact=year_name).order_by("pk")
     farmers = scope_queryset(Farmer.objects.all(), params.user, "province_id", "district_id", "cluster_id")
     if params.province_id:
@@ -310,7 +309,8 @@ def _subscription_roster(spec, params, year_name):
     farmers = farmers.annotate(
         paid_amount=Coalesce(Subquery(paid.values("paid_amount")[:1], output_field=money), Value(Decimal("0.00")), output_field=money),
         payment_date=Subquery(paid.values("payment_date")[:1]),
-        summary_arable=Coalesce(Subquery(arable, output_field=money), Value(Decimal("0.00")), output_field=money),
+        # The rate follows the crop hectares allocated for the year, not the farm size.
+        summary_arable=allocated_hectares_expression(year_name),
     ).annotate(
         expected_amount=Case(
             When(summary_arable__gte=SeasonalSubscriptionService.LARGE_FARM_THRESHOLD, then=Value(SeasonalSubscriptionService.LARGE_FARM_SUBSCRIPTION_AMOUNT)),
@@ -431,15 +431,16 @@ def crops(spec, params):
 
 
 def crop_requirements(spec, params):
-    qs = apply_common(CropInputRequirement.objects.select_related("crop"), spec, params)
-    return qs.annotate(crop_name=F("crop__name"), crop_category=F("crop__category")).values(
-        "id", "crop_name", "crop_category", "group_name", "item_name", "rate_per_hectare", "unit",
+    qs = apply_common(CropInputRequirement.objects.select_related("crop", "programme"), spec, params)
+    return qs.annotate(crop_name=F("crop__name"), crop_category=F("crop__category"), programme_name=F("programme__name")).values(
+        "id", "crop_name", "crop_category", "programme_name", "input_category", "group_name", "item_name", "rate_per_hectare", "unit",
         "cost_per_unit", "cost_per_hectare", "cost_type", "active",
     ).order_by("crop_name", "group_name", "item_name", "id")
 
 
 def crop_costs(spec, params):
-    included = Q(input_requirements__active=True)
+    # The general catalogue: programme prices for the same crop would otherwise be added together.
+    included = Q(input_requirements__active=True, input_requirements__programme__isnull=True)
     qs = apply_common(Crop.objects.all(), spec, params)
     return qs.annotate(
         inputs=Count("input_requirements", filter=included, distinct=True),

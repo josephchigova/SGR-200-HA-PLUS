@@ -60,7 +60,8 @@ class FarmerSubscriptionSerializer(MoneyPrivacyMixin, serializers.ModelSerialize
         if paid_amount > 0 and payment_date is None:
             raise serializers.ValidationError({"payment_date": ["A payment date is required when an amount has been paid."]})
 
-        _, _, expected_amount = SubscriptionPaymentService.farmer_subscription_details(farmer)
+        season = attrs.get("season", getattr(self.instance, "season", ""))
+        _, _, expected_amount = SubscriptionPaymentService.farmer_subscription_details(farmer, season)
         self._payment_summary(expected_amount, paid_amount)
         return attrs
 
@@ -69,7 +70,7 @@ class FarmerSubscriptionSerializer(MoneyPrivacyMixin, serializers.ModelSerialize
         season = validated_data["season"]
         paid_amount = validated_data["paid_amount"]
         payment_date = validated_data.get("payment_date")
-        _, category, expected_amount = SubscriptionPaymentService.farmer_subscription_details(farmer)
+        _, category, expected_amount = SubscriptionPaymentService.farmer_subscription_details(farmer, season)
         summary = self._payment_summary(expected_amount, paid_amount)
         subscription, created = FarmerSubscription.objects.update_or_create(
             farmer=farmer,
@@ -88,7 +89,8 @@ class FarmerSubscriptionSerializer(MoneyPrivacyMixin, serializers.ModelSerialize
     def update(self, instance, validated_data):
         paid_amount = validated_data.get("paid_amount", instance.paid_amount)
         farmer = validated_data.get("farmer", instance.farmer)
-        _, category, expected_amount = SubscriptionPaymentService.farmer_subscription_details(farmer)
+        season = validated_data.get("season", instance.season)
+        _, category, expected_amount = SubscriptionPaymentService.farmer_subscription_details(farmer, season)
         summary = self._payment_summary(expected_amount, paid_amount)
         for field, value in {**validated_data, "category": category, "expected_amount": expected_amount, **summary}.items():
             setattr(instance, field, value)
@@ -103,7 +105,9 @@ class FarmerSubscriptionStatusSerializer(serializers.Serializer):
     membership_number = serializers.CharField(allow_blank=True)
     national_id = serializers.CharField(allow_blank=True)
     phone_primary = serializers.CharField(allow_blank=True)
+    # Kept under its old name for older screens. Both hold the allocated crop hectares.
     farmer_arable_hectares = serializers.DecimalField(max_digits=14, decimal_places=2)
+    allocated_hectares = serializers.DecimalField(max_digits=14, decimal_places=2)
     category = serializers.CharField()
     expected_amount = serializers.DecimalField(max_digits=14, decimal_places=2)
     paid_amount = serializers.DecimalField(max_digits=14, decimal_places=2)

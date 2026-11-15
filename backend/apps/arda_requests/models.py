@@ -120,3 +120,68 @@ class ARDARequest(models.Model):
 
     def __str__(self):
         return f"{self.farmer.full_name} - {self.get_request_type_display()}"
+
+
+class RequestBatchInput(models.Model):
+    """One input product in a request batch: how much was requested and how much is allocated.
+
+    Stock belongs to its batch, so the same product in another programme's batch is a
+    separate balance. allocated_quantity is only changed by the stock ledger, under a lock.
+    """
+
+    batch = models.ForeignKey(ARDARequestBatch, on_delete=models.PROTECT, related_name="inputs")
+    input_product = models.ForeignKey("inputs.Input", on_delete=models.PROTECT, related_name="batch_lines")
+    input_category = models.CharField(max_length=20, choices=[("SEED", "Seed"), ("FERTILIZER", "Fertilizer"), ("CHEMICALS", "Chemicals")])
+    unit = models.CharField(max_length=40, blank=True, default="")
+    requested_quantity = models.DecimalField(max_digits=16, decimal_places=4, default=Decimal("0.0000"))
+    allocated_quantity = models.DecimalField(max_digits=16, decimal_places=4, default=Decimal("0.0000"))
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["batch_id", "input_category", "input_product__name"]
+        constraints = [
+            models.UniqueConstraint(fields=["batch", "input_product"], name="unique_batch_input_product"),
+            models.CheckConstraint(condition=models.Q(allocated_quantity__gte=0), name="batch_input_allocated_not_negative"),
+            models.CheckConstraint(condition=models.Q(allocated_quantity__lte=models.F("requested_quantity")), name="batch_input_within_requested"),
+        ]
+
+    @property
+    def available_quantity(self):
+        return self.requested_quantity - self.allocated_quantity
+
+    def __str__(self):
+        return f"{self.batch.request_number} - {self.input_product.name}"
+
+
+class BatchStockMovement(models.Model):
+    """The audit trail of a batch input's balance. Rows are only ever added."""
+
+    KIND_OPENING = "OPENING"
+    KIND_ADJUSTMENT = "ADJUSTMENT"
+    KIND_ALLOCATION = "ALLOCATION"
+    KIND_REVERSAL = "REVERSAL"
+    KIND_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (KIND_OPENING, "Quantity requested"),
+        (KIND_ADJUSTMENT, "Requested quantity changed"),
+        (KIND_ALLOCATION, "Allocated to a farmer"),
+        (KIND_REVERSAL, "Allocation reversed"),
+    ]
+
+    batch_input = models.ForeignKey(RequestBatchInput, on_delete=models.PROTECT, related_name="movements")
+    kind = models.CharField(max_length=20, choices=KIND_CHOICES)
+    # The change to the available balance: positive adds stock, negative takes it away.
+    quantity = models.DecimalField(max_digits=16, decimal_places=4)
+    available_after = models.DecimalField(max_digits=16, decimal_places=4)
+    allocation = models.ForeignKey("inputs.InputAllocation", on_delete=models.PROTECT, related_name="stock_movements", null=True, blank=True)
+    allocation_line = models.ForeignKey("inputs.InputAllocationLine", on_delete=models.PROTECT, related_name="stock_movements", null=True, blank=True)
+    reason = models.TextField(blank=True)
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="batch_stock_movements")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+
+    def __str__(self):
+        return f"{self.get_kind_display()} {self.quantity} ({self.batch_input})"

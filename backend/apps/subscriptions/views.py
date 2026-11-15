@@ -21,14 +21,14 @@ from rest_framework.response import Response
 
 from apps.accounts.permissions import SubscriptionWorkflowPermission
 from apps.accounts.privacy import compliance_label, compliance_percent, hides_money
-from apps.farmers.models import Farm, Farmer
+from apps.farmers.models import Farmer
 from apps.recovery.models import InputDebt
 from apps.production.seasonal_services import SeasonalSubscriptionService
 
 from .models import FarmerSubscription, Subscription, SubscriptionPayment
 from .payments import receive_subscription_payment
 from .serializers import FarmerSubscriptionSerializer, FarmerSubscriptionStatusSerializer, SubscriptionSerializer
-from .services import SubscriptionPaymentService
+from .services import SubscriptionPaymentService, allocated_hectares, allocated_hectares_expression
 
 
 class FarmerSubscriptionPagination(PageNumberPagination):
@@ -58,20 +58,14 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
     @staticmethod
     def with_season_payment_status(farmers, season):
         money_field = DecimalField(max_digits=14, decimal_places=2)
-        farm_totals = Farm.objects.filter(farmer_id=OuterRef("pk"), is_active=True).values("farmer_id").annotate(
-            total=Sum("arable_hectares")
-        ).values("total")[:1]
         season_payments = FarmerSubscription.objects.filter(
             farmer_id=OuterRef("pk"),
             season__iexact=season,
         ).order_by("pk").values("paid_amount")[:1]
 
         return farmers.annotate(
-            summary_arable_hectares=Coalesce(
-                Subquery(farm_totals, output_field=money_field),
-                Value(Decimal("0.00")),
-                output_field=money_field,
-            ),
+            # The rate follows the crop hectares allocated for this agricultural year.
+            summary_arable_hectares=allocated_hectares_expression(season),
             summary_paid_amount=Coalesce(
                 Subquery(season_payments, output_field=money_field),
                 Value(Decimal("0.00")),
@@ -114,13 +108,7 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
         if not season:
             return super().list(request, *args, **kwargs)
 
-        farmers = Farmer.objects.annotate(
-            arable_hectares=Coalesce(
-                Sum("farms__arable_hectares", filter=Q(farms__is_active=True)),
-                Value(Decimal("0.00")),
-                output_field=DecimalField(max_digits=14, decimal_places=2),
-            )
-        )
+        farmers = Farmer.objects.annotate(allocated_hectares=allocated_hectares_expression(season))
         farmers = self.scope_farmers_to_user(farmers, request.user)
 
         farmer_id = request.query_params.get("farmer") or request.query_params.get("farmer_id")
@@ -153,7 +141,7 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
         rows = []
         for farmer in page_farmers:
             subscription = subscriptions.get(farmer.pk)
-            hectares, category, expected_amount = SubscriptionPaymentService.subscription_details(farmer.arable_hectares)
+            hectares, category, expected_amount = SubscriptionPaymentService.subscription_details(farmer.allocated_hectares)
             paid_amount = subscription.paid_amount if subscription else Decimal("0.00")
             summary = SubscriptionPaymentService.calculate_display_summary(expected_amount, paid_amount)
             rows.append({
@@ -164,6 +152,7 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
                 "national_id": farmer.national_id or "",
                 "phone_primary": farmer.phone_primary or "",
                 "farmer_arable_hectares": hectares,
+                "allocated_hectares": hectares,
                 "category": category,
                 "expected_amount": expected_amount,
                 "paid_amount": paid_amount,
@@ -201,6 +190,68 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
             unpaid=Count("pk", filter=Q(summary_payment_status="UNPAID")),
         )
         return Response(summary)
+
+    @action(detail=False, methods=["get", "post"], url_path="deadline")
+    def deadline(self, request):
+        """The date the agricultural year's subscriptions must be paid by. Finance and administrators set it."""
+        from apps.accounts.roles import can
+        from apps.programmes.models import Season
+
+        name = request.data.get("season") if request.method == "POST" else (request.query_params.get("season_name") or request.query_params.get("season"))
+        season = Season.objects.filter(name__iexact=str(name or "")).first()
+        if season is None:
+            return Response({"season": ["Choose an agricultural year."]}, status=status.HTTP_400_BAD_REQUEST)
+        if request.method == "POST":
+            if not can(request.user, "subscriptions", "edit"):
+                return Response({"detail": "Your role cannot set the subscription due date."}, status=status.HTTP_403_FORBIDDEN)
+            from django.utils.dateparse import parse_date
+
+            raw = request.data.get("due_date")
+            due = parse_date(str(raw)) if raw else None
+            if raw and due is None:
+                return Response({"due_date": ["Enter the date as YYYY-MM-DD."]}, status=status.HTTP_400_BAD_REQUEST)
+            season.subscription_due_date = due
+            season.save(update_fields=["subscription_due_date", "updated_at"])
+        return Response({"season": season.name, "due_date": season.subscription_due_date.isoformat() if season.subscription_due_date else None})
+
+    @action(detail=False, methods=["get"], url_path="overdue")
+    def overdue(self, request):
+        """Approved farmers who have not fully paid this year's subscription, with how late they are."""
+        from django.utils import timezone
+
+        from apps.programmes.models import Season
+
+        name = request.query_params.get("season_name") or request.query_params.get("season")
+        season = Season.objects.filter(name__iexact=str(name or "")).first()
+        if season is None:
+            return Response({"season": ["Choose an agricultural year."]}, status=status.HTTP_400_BAD_REQUEST)
+        due = season.subscription_due_date
+        today = timezone.localdate()
+        farmers = list(self.scope_farmers_to_user(Farmer.objects.filter(verification_status__in=[Farmer.STATUS_VERIFIED, Farmer.STATUS_APPROVED], is_active=True), request.user).order_by("surname", "first_name"))
+        ids = [farmer.pk for farmer in farmers]
+        paid = dict(FarmerSubscription.objects.filter(farmer_id__in=ids, season__iexact=season.name).values_list("farmer_id", "paid_amount"))
+        hectares = allocated_hectares(ids, season.name)
+        private = hides_money(request.user)
+        rows = []
+        for farmer in farmers:
+            _, category, expected = SubscriptionPaymentService.subscription_details(hectares.get(farmer.pk, Decimal("0")))
+            summary = SubscriptionPaymentService.calculate_display_summary(expected, paid.get(farmer.pk, Decimal("0")))
+            if summary["payment_status"] == "PAID":
+                continue
+            row = {
+                "farmer": farmer.pk, "farmer_name": farmer.full_name, "membership_number": farmer.membership_number or "",
+                "category": category, "payment_status": summary["payment_status"],
+                "days_overdue": max((today - due).days, 0) if due else 0,
+                "compliance_percent": compliance_percent(expected, paid.get(farmer.pk, 0)),
+            }
+            if not private:
+                row["amount_due"] = str(summary["outstanding_amount"])
+            rows.append(row)
+        rows.sort(key=lambda row: (-row["days_overdue"], row["farmer_name"]))
+        return Response({
+            "season": season.name, "due_date": due.isoformat() if due else None,
+            "is_overdue": bool(due and today > due), "count": len(rows), "results": rows,
+        })
 
     @action(detail=False, methods=["post"], url_path="receive")
     def receive(self, request):

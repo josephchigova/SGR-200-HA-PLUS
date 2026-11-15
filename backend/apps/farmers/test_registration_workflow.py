@@ -217,6 +217,16 @@ class RegistrationWorkflowTests(TestCase):
         farmer = self.register()
         Farmer.objects.filter(pk=farmer.pk).update(verification_status=Farmer.STATUS_VERIFIED)
         FarmerSubscription.objects.create(farmer=farmer, season="2026/2027", expected_amount=1000, paid_amount=300, outstanding_amount=700, payment_status="PARTIAL")
+        # 120 ha of maize and 90 ha of wheat: 210 ha allocated, so the 200 ha+ rate of 1,000 is due.
+        from datetime import date
+
+        from apps.farmers.models import RegistrationCropAllocation
+        from apps.programmes.models import Crop, Season
+
+        year, _ = Season.objects.get_or_create(name="2026/2027", defaults={"start_date": date(2026, 10, 1), "end_date": date(2027, 9, 30)})
+        for name, hectares in (("Maize", 120), ("Wheat", 90)):
+            crop, _ = Crop.objects.get_or_create(name=name, defaults={"category": Crop.CATEGORY_SUMMER})
+            RegistrationCropAllocation.objects.create(farmer=farmer, crop=crop, season=year, hectares=hectares)
         lead = self.client_for(self.lead)
         listed = lead.get("/api/farmer-subscriptions/?season_name=2026/2027").json()["results"][0]
         self.assertEqual(listed["compliance_percent"], 30)

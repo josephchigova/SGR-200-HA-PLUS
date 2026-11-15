@@ -3,7 +3,7 @@ from django.urls import include, path, re_path
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 
 from apps.accounts.drafts import FormDraftView
-from apps.accounts.views import AuditLogViewSet, NotificationsView
+from apps.accounts.views import AuditLogViewSet, NotificationInboxView, NotificationsView
 from apps.search_views import GlobalSearchView
 from config.views import health, spa_index
 
@@ -14,6 +14,7 @@ urlpatterns = [
     path("api/search/", GlobalSearchView.as_view(), name="global-search"),
     path("api/drafts/", FormDraftView.as_view(), name="form-drafts"),
     path("api/notifications/", NotificationsView.as_view(), name="notifications"),
+    path("api/notifications/inbox/", NotificationInboxView.as_view(), name="notification-inbox"),
     path("api/audit-logs/", AuditLogViewSet.as_view({"get": "list"}), name="audit-log-list"),
     path("api/audit-logs/modules/", AuditLogViewSet.as_view({"get": "modules"}), name="audit-log-modules"),
     path("api/audit-logs/export/", AuditLogViewSet.as_view({"get": "export"}), name="audit-log-export"),

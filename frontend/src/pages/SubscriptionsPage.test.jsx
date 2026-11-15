@@ -8,6 +8,9 @@ vi.mock('../api/client', () => ({
   default: { get: vi.fn(), post: vi.fn() },
 }))
 
+// The deadline panel has its own data; this test covers the payment screen.
+vi.mock('../components/SubscriptionDeadlines', () => ({ default: () => null }))
+
 vi.mock('../components/FarmerAutocomplete', () => ({
   default: ({ value, onChange, disabled }) => (
     <label>

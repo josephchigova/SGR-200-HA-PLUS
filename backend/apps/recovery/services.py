@@ -111,11 +111,14 @@ class RecoveryCalculationService:
         remaining = Decimal(str(delivery.recovery_tonnes))
         if remaining <= 0:
             return
-        debts = InputDebt.objects.select_for_update().filter(
+        # Allocations sourced per input category record their year themselves; older ones use the programme's.
+        # The matching ids are found first, then those rows are locked (a lock cannot cross the outer join).
+        matching = InputDebt.objects.filter(
+            Q(programme__season=delivery.season) | Q(input_allocation__season=delivery.season),
             farmer=delivery.farmer,
-            programme__season=delivery.season,
             crop__iexact=delivery.crop,
-        ).order_by("created_at")
+        ).exclude(status=InputDebt.STATUS_CANCELLED).values_list("pk", flat=True)
+        debts = InputDebt.objects.select_for_update().filter(pk__in=list(matching)).order_by("created_at")
         if not debts.exists():
             raise ValueError("No matching recovery debt exists for this farmer, crop, and season.")
         for debt in debts:

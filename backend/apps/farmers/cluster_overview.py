@@ -8,7 +8,7 @@ from apps.accounts.privacy import compliance_label, compliance_percent
 from apps.inputs.models import InputAllocation
 from apps.production.models import FarmerProduction, SeasonalPlantingPlan
 from apps.subscriptions.models import FarmerSubscription
-from apps.subscriptions.services import SubscriptionPaymentService
+from apps.subscriptions.services import SubscriptionPaymentService, allocated_hectares, cluster_compliance
 
 from . import kyc
 from .models import Farm, Farmer, FarmerDocument, RegistrationCropAllocation
@@ -30,6 +30,7 @@ def build_cluster_overview(farmers, user, season_name, cluster=None):
         row["farmer_id"]: row["total"] or Decimal("0")
         for row in Farm.objects.filter(farmer_id__in=ids, is_active=True).values("farmer_id").annotate(total=Sum("arable_hectares"))
     }
+    allocated_ha = allocated_hectares(ids, season_name)
     paid = {}
     if season_name:
         for subscription in FarmerSubscription.objects.filter(farmer_id__in=ids, season__iexact=season_name):
@@ -57,10 +58,13 @@ def build_cluster_overview(farmers, user, season_name, cluster=None):
     required_for = {farmer.pk: kyc.required_codes_for(farmer) for farmer in rows}
     farmer_rows = []
     compliance_values = []
+    expected_by_farmer = {}
     for farmer in rows:
         percent = None
         if farmer.pk in approved_ids:
-            _, _, expected = SubscriptionPaymentService.subscription_details(arable.get(farmer.pk, Decimal("0")))
+            # The rate follows the crop hectares allocated for the year, not the farm size.
+            _, _, expected = SubscriptionPaymentService.subscription_details(allocated_ha.get(farmer.pk, Decimal("0")))
+            expected_by_farmer[farmer.pk] = expected
             percent = compliance_percent(expected, paid.get(farmer.pk, 0))
             compliance_values.append(percent)
         docs = documents.get(farmer.pk, {"uploaded": set(), "verified": set()})
@@ -76,6 +80,7 @@ def build_cluster_overview(farmers, user, season_name, cluster=None):
             "verification_status": farmer.verification_status,
             "review_remarks": farmer.review_remarks,
             "arable_hectares": str(arable.get(farmer.pk, Decimal("0"))),
+            "allocated_hectares": str(allocated_ha.get(farmer.pk, Decimal("0"))),
             "subscription_compliance": percent,
             "subscription_status": compliance_label(percent) if percent is not None else "Awaiting approval",
             "documents_uploaded": len(docs["uploaded"]),
@@ -115,7 +120,8 @@ def build_cluster_overview(farmers, user, season_name, cluster=None):
             "registration_progress": _percent(len(approved) + awaiting, total),
             "approval_progress": _percent(len(approved), total),
             "kyc_progress": _percent(kyc_complete, total),
-            "subscription_compliance": int(round(sum(compliance_values) / len(compliance_values))) if compliance_values else 0,
+            # Amount paid over the amount that must be paid, across the cluster's approved farmers.
+            "subscription_compliance": cluster_compliance(expected_by_farmer, paid),
             "subscription_complete": sum(1 for value in compliance_values if value >= 100),
             "subscription_in_progress": sum(1 for value in compliance_values if 0 < value < 100),
             "subscription_not_started": sum(1 for value in compliance_values if value == 0),
@@ -125,32 +131,32 @@ def build_cluster_overview(farmers, user, season_name, cluster=None):
             "crop_allocation": _percent(len(set(crops) & set(ids)), total),
         },
         "farmers": farmer_rows,
-        "by_district": _places(farmer_rows, "district"),
-        "by_ward": _places(farmer_rows, "ward"),
+        "by_district": _places(farmer_rows, "district", expected_by_farmer, paid),
+        "by_ward": _places(farmer_rows, "ward", expected_by_farmer, paid),
     }
 
 
-def _places(rows, field):
+def _places(rows, field, expected_by_farmer, paid):
     groups = {}
     for row in rows:
         label = row.get(field) or "Not recorded"
-        bucket = groups.setdefault(label, {"label": label, "farmers": 0, "approved": 0, "pending": 0, "compliance": [], "participating": 0, "with_crops": 0})
+        bucket = groups.setdefault(label, {"label": label, "farmers": 0, "approved": 0, "pending": 0, "expected": {}, "participating": 0, "with_crops": 0})
         bucket["farmers"] += 1
         if row.get("crop_allocated"):
             bucket["with_crops"] += 1
         if row["verification_status"] in kyc.APPROVED_STATES:
             bucket["approved"] += 1
-            if row["subscription_compliance"] is not None:
-                bucket["compliance"].append(row["subscription_compliance"])
+            if row["id"] in expected_by_farmer:
+                bucket["expected"][row["id"]] = expected_by_farmer[row["id"]]
             if row["planting_recorded"]:
                 bucket["participating"] += 1
         elif row["verification_status"] in kyc.AWAITING_REVIEW:
             bucket["pending"] += 1
     result = []
     for bucket in groups.values():
-        values = bucket.pop("compliance")
         approved = bucket["approved"]
-        bucket["subscription_compliance"] = int(round(sum(values) / len(values))) if values else 0
+        # Amount paid over the amount due. Only the percentage leaves this function.
+        bucket["subscription_compliance"] = cluster_compliance(bucket.pop("expected"), paid)
         bucket["agricultural_participation"] = _percent(bucket.pop("participating"), approved)
         bucket["crop_allocation"] = _percent(bucket.pop("with_crops"), bucket["farmers"])
         result.append(bucket)

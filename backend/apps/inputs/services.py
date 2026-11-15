@@ -182,7 +182,8 @@ class InputAllocationService:
 
     @staticmethod
     def _calculate_lines(*, crop, hectares):
-        requirements = list(CropInputRequirement.objects.filter(crop=crop, active=True).order_by("group_name", "item_name", "id"))
+        # The general catalogue only. Programme catalogues are used by allocations sourced per category.
+        requirements = list(CropInputRequirement.objects.filter(crop=crop, active=True, programme__isnull=True).order_by("group_name", "item_name", "id"))
         if not requirements:
             raise ValueError(f"No active crop input requirements are configured for {crop.name}.")
         missing_prices = [

@@ -126,9 +126,20 @@ class SubscriptionTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("payment_date", response.data)
 
-    def test_subscription_tier_uses_registered_arable_hectares_at_200_boundary(self):
-        self.farm.arable_hectares = "199.99"
-        self.farm.save(update_fields=["arable_hectares"])
+    def allocate(self, season_name, **crops):
+        """Give the farmer crop hectares for one agricultural year, as registration does."""
+        from datetime import date
+
+        from apps.farmers.models import RegistrationCropAllocation
+        from apps.programmes.models import Crop, Season
+
+        season, _ = Season.objects.get_or_create(name=season_name, defaults={"start_date": date(2026, 10, 1), "end_date": date(2027, 9, 30)})
+        for name, hectares in crops.items():
+            crop, _ = Crop.objects.get_or_create(name=name.title(), defaults={"category": Crop.CATEGORY_SUMMER})
+            RegistrationCropAllocation.objects.create(farmer=self.farmer, crop=crop, season=season, hectares=hectares)
+
+    def test_subscription_tier_follows_allocated_crop_hectares_at_200_boundary(self):
+        self.allocate("199.99 season", maize="100.00", sorghum="99.99")
         under_threshold = self.client.post(
             reverse("farmer-subscription-list"),
             self.payment_data("0.00", season="199.99 season"),
@@ -137,8 +148,7 @@ class SubscriptionTests(TestCase):
         self.assertEqual(under_threshold.status_code, 201, under_threshold.data)
         self.assertEqual(under_threshold.data["expected_amount"], "500.00")
 
-        self.farm.arable_hectares = "200.00"
-        self.farm.save(update_fields=["arable_hectares"])
+        self.allocate("200.00 season", maize="100.00", sorghum="100.00")
         at_threshold = self.client.post(
             reverse("farmer-subscription-list"),
             self.payment_data("0.00", season="200.00 season"),
@@ -148,39 +158,36 @@ class SubscriptionTests(TestCase):
         self.assertEqual(at_threshold.data["expected_amount"], "1000.00")
         self.assertEqual(at_threshold.data["category"], "200HA+")
 
-    def test_subscription_tier_for_350_registered_arable_hectares(self):
+    def test_crops_not_farm_size_decide_the_tier(self):
+        """50 ha of maize and 180 ha of sorghum is 230 ha: 200HA+, even on a 10 ha arable farm."""
+        self.allocate("2026/2027", maize="50.00", sorghum="180.00")
+        response = self.client.post(reverse("farmer-subscription-list"), self.payment_data("0.00"), format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        self.assertEqual(response.data["expected_amount"], "1000.00")
+        self.assertEqual(response.data["category"], "200HA+")
+        listed = self.client.get(reverse("farmer-subscription-list"), {"season_name": "2026/2027"}).data["results"][0]
+        self.assertEqual(listed["allocated_hectares"], "230.00")
+        self.assertEqual(listed["category"], "200HA+")
+
+        # A large farm with a small crop allocation pays the standard rate.
         self.farm.arable_hectares = "350.00"
         self.farm.save(update_fields=["arable_hectares"])
+        self.allocate("2027/2028", maize="40.00")
+        small = self.client.post(reverse("farmer-subscription-list"), self.payment_data("0.00", season="2027/2028"), format="json")
+        self.assertEqual(small.data["expected_amount"], "500.00")
+        self.assertEqual(small.data["category"], "UNDER_200HA")
 
-        response = self.client.post(
-            reverse("farmer-subscription-list"),
-            self.payment_data("0.00", season="350 hectare season"),
-            format="json",
-        )
+    def test_production_records_are_used_when_there_is_no_allocation(self):
+        from datetime import date
 
-        self.assertEqual(response.status_code, 201, response.data)
+        from apps.production.models import FarmerProduction
+        from apps.programmes.models import Season
+
+        season = Season.objects.create(name="Production year", start_date=date(2026, 10, 1), end_date=date(2027, 9, 30))
+        FarmerProduction.objects.create(farmer=self.farmer, farm=self.farm, season=season, crop="Maize", contracted_hectares="120.00")
+        FarmerProduction.objects.create(farmer=self.farmer, farm=self.farm, season=season, crop="Wheat", contracted_hectares="90.00")
+        response = self.client.post(reverse("farmer-subscription-list"), self.payment_data("0.00", season="Production year"), format="json")
         self.assertEqual(response.data["expected_amount"], "1000.00")
-        self.assertEqual(response.data["category"], "200HA+")
-
-    def test_subscription_tier_sums_arable_area_across_farms(self):
-        self.farm.arable_hectares = "200.00"
-        self.farm.save(update_fields=["arable_hectares"])
-        Farm.objects.create(
-            farmer=self.farmer,
-            farm_name="Second Tariro Farm",
-            total_hectares="1.00",
-            arable_hectares="1.00",
-        )
-
-        response = self.client.post(
-            reverse("farmer-subscription-list"),
-            self.payment_data("0.00", season="multi-farm"),
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 201, response.data)
-        self.assertEqual(response.data["expected_amount"], "1000.00")
-        self.assertEqual(response.data["category"], "200HA+")
 
     def test_reposting_payment_updates_farmer_season_aggregate(self):
         url = reverse("farmer-subscription-list")
@@ -314,3 +321,15 @@ class SubscriptionTests(TestCase):
         revenue = LedgerAccount.objects.get(code="4000")
         credited = JournalLine.objects.filter(account=revenue, entry__status="POSTED").aggregate(total=Sum("credit"))["total"]
         self.assertEqual(credited, Decimal("500.00"))
+
+
+class ClusterComplianceTests(TestCase):
+    def test_compliance_is_amount_paid_over_amount_due(self):
+        from apps.subscriptions.services import cluster_compliance
+
+        # One 200 ha+ farmer paid in full (1,000) and one standard farmer paid nothing (500 due):
+        # 1,000 of 1,500 is 66%, where an average of the two farmers' percentages would say 50%.
+        self.assertEqual(cluster_compliance({1: 1000, 2: 500}, {1: 1000}), 66)
+        # An overpayment by one farmer does not cover another farmer's arrears.
+        self.assertEqual(cluster_compliance({1: 500, 2: 500}, {1: 900, 2: 0}), 50)
+        self.assertEqual(cluster_compliance({}, {}), 0)

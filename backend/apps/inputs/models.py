@@ -11,6 +11,8 @@ from apps.programmes.models import Crop
 class Input(models.Model):
     CATEGORY_SEED = "SEED"
     CATEGORY_FERTILIZER = "FERTILIZER"
+    CATEGORY_CHEMICALS = "CHEMICALS"
+    # Older names. Pesticides are now part of Chemicals.
     CATEGORY_PESTICIDE = "PESTICIDE"
     CATEGORY_TOOLKIT = "TOOLKIT"
     CATEGORY_OTHER = "OTHER"
@@ -18,6 +20,7 @@ class Input(models.Model):
     CATEGORY_CHOICES: ClassVar[list[tuple[str, str]]] = [
         (CATEGORY_SEED, "Seed"),
         (CATEGORY_FERTILIZER, "Fertilizer"),
+        (CATEGORY_CHEMICALS, "Chemicals"),
         (CATEGORY_PESTICIDE, "Pesticide"),
         (CATEGORY_TOOLKIT, "Toolkit"),
         (CATEGORY_OTHER, "Other"),
@@ -97,6 +100,14 @@ class InputAllocation(models.Model):
     allocation_reference = models.CharField(max_length=120, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
     collection_date = models.DateField(null=True, blank=True)
+    # Allocations made per input category name their agricultural year here, because each
+    # category can come from a different programme. Older allocations use programme.season.
+    season = models.ForeignKey("programmes.Season", on_delete=models.PROTECT, related_name="input_allocations", null=True, blank=True)
+    sourced_by_category = models.BooleanField(default=False)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+    cancelled_by = models.ForeignKey("accounts.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="cancelled_allocations")
+    cancellation_reason = models.TextField(blank=True)
+    created_by = models.ForeignKey("accounts.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="created_allocations")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -110,6 +121,14 @@ class InputAllocation(models.Model):
 class InputAllocationLine(models.Model):
     allocation = models.ForeignKey(InputAllocation, on_delete=models.CASCADE, related_name="calculation_lines")
     source_requirement = models.ForeignKey("programmes.CropInputRequirement", on_delete=models.SET_NULL, null=True, blank=True, related_name="allocation_lines")
+    # Where this line's input comes from. The price below is a snapshot taken when the
+    # allocation was made, so later catalogue price changes do not alter it.
+    input_category = models.CharField(max_length=20, blank=True, default="")
+    programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="allocation_lines", null=True, blank=True)
+    input_product = models.ForeignKey(Input, on_delete=models.PROTECT, related_name="allocation_lines", null=True, blank=True)
+    batch_input = models.ForeignKey(
+        "arda_requests.RequestBatchInput", on_delete=models.PROTECT, related_name="allocation_lines", null=True, blank=True,
+    )
     group_name = models.CharField(max_length=140)
     item_name = models.CharField(max_length=180)
     unit = models.CharField(max_length=40, blank=True, default="")

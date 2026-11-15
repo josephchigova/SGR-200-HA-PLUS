@@ -221,3 +221,8 @@ SPECTACULAR_SETTINGS = {
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
+
+# Subscription reminders: how many days before the due date to start reminding, and how
+# often to remind again while a subscription stays unpaid after it.
+SUBSCRIPTION_REMINDER_DAYS = int(os.environ.get("SUBSCRIPTION_REMINDER_DAYS", "7"))
+SUBSCRIPTION_STILL_UNPAID_DAYS = int(os.environ.get("SUBSCRIPTION_STILL_UNPAID_DAYS", "30"))

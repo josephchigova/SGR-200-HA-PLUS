@@ -156,3 +156,69 @@ class FormDraft(models.Model):
 
     def __str__(self):
         return f"{self.user_id}:{self.key}"
+
+
+class Notification(models.Model):
+    """A notice for one user, kept so it is shown once, tracked and never sent twice.
+
+    dedupe_key names the event (for example a farmer's subscription becoming overdue), so a
+    scheduled check that runs again does not repeat it.
+    """
+
+    KIND_SUBSCRIPTION_UPCOMING = "SUBSCRIPTION_UPCOMING"
+    KIND_SUBSCRIPTION_DUE = "SUBSCRIPTION_DUE"
+    KIND_SUBSCRIPTION_OVERDUE = "SUBSCRIPTION_OVERDUE"
+    KIND_SUBSCRIPTION_STILL_UNPAID = "SUBSCRIPTION_STILL_UNPAID"
+    KIND_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (KIND_SUBSCRIPTION_UPCOMING, "Subscription due soon"),
+        (KIND_SUBSCRIPTION_DUE, "Subscription due today"),
+        (KIND_SUBSCRIPTION_OVERDUE, "Subscription overdue"),
+        (KIND_SUBSCRIPTION_STILL_UNPAID, "Subscription still unpaid"),
+    ]
+    STATUS_PENDING = "PENDING"
+    STATUS_DELIVERED = "DELIVERED"
+    STATUS_READ = "READ"
+    STATUS_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (STATUS_PENDING, "Not yet shown"),
+        (STATUS_DELIVERED, "Shown"),
+        (STATUS_READ, "Read"),
+    ]
+
+    recipient = models.ForeignKey(User, on_delete=models.CASCADE, related_name="notifications")
+    kind = models.CharField(max_length=40, choices=KIND_CHOICES)
+    dedupe_key = models.CharField(max_length=200)
+    title = models.CharField(max_length=200)
+    body = models.TextField(blank=True)
+    url = models.CharField(max_length=200, blank=True)
+    tone = models.CharField(max_length=20, default="warning")
+    farmer = models.ForeignKey("farmers.Farmer", on_delete=models.CASCADE, null=True, blank=True, related_name="notifications")
+    season_name = models.CharField(max_length=80, blank=True)
+    due_date = models.DateField(null=True, blank=True)
+    days_overdue = models.IntegerField(default=0)
+    payment_status = models.CharField(max_length=20, blank=True)
+    # Only filled in for recipients allowed to see money. Lead farmers see the status only.
+    amount_due = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    delivered_at = models.DateTimeField(null=True, blank=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [models.UniqueConstraint(fields=["recipient", "dedupe_key"], name="unique_notification_per_event")]
+        indexes = [models.Index(fields=["recipient", "status"], name="notification_inbox_idx")]
+
+    def __str__(self):
+        return f"{self.recipient_id}: {self.title}"
+
+
+class ScheduledJobRun(models.Model):
+    """When a scheduled job last ran, so a backstop run never repeats a recent one."""
+
+    name = models.CharField(max_length=80, unique=True)
+    last_started_at = models.DateTimeField(null=True, blank=True)
+    last_finished_at = models.DateTimeField(null=True, blank=True)
+    last_result = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return self.name

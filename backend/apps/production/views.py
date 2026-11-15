@@ -355,7 +355,15 @@ class CropInputRequirementViewSet(viewsets.ModelViewSet):
         crop_id = self.request.query_params.get("crop")
         if crop_id:
             queryset = queryset.filter(crop_id=crop_id)
-        return queryset
+        programme = self.request.query_params.get("programme")
+        if programme == "none":
+            queryset = queryset.filter(programme__isnull=True)
+        elif programme and programme.isdigit():
+            queryset = queryset.filter(programme_id=int(programme))
+        category = self.request.query_params.get("input_category")
+        if category:
+            queryset = queryset.filter(input_category=category.upper())
+        return queryset.select_related("programme", "input_product")
 
     def perform_destroy(self, instance):
         from apps.inputs.models import InputAllocationLine

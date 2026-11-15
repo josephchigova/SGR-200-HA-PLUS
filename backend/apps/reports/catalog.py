@@ -251,11 +251,11 @@ def _reports():
     reports += [
         _spec("crops-configured", "crops", "Configured crops", "Crops configured in the catalogue.", OPERATIONS, "portrait", ("season", "status"), [C("name", "Crop"), C("category", "Season"), C("active", "Active", "bool")], "crops", crop_category_field="category", status_field="active", status_options=[["true", "Active"], ["false", "Inactive"]], gap="The active filter accepts true or false. Crop rows are not tied to an agricultural year."),
         _spec("crop-inputs", "crops", "Crop input requirements", "Input groups, items, rates, and costs configured for each crop.", OPERATIONS, "landscape", ("season", "crop", "status"), [
-            C("crop_name", "Crop"), C("crop_category", "Season"), C("group_name", "Input group"), C("item_name", "Item"),
+            C("crop_name", "Crop"), C("crop_category", "Season"), C("programme_name", "Programme"), C("group_name", "Input group"), C("item_name", "Item"),
             C("rate_per_hectare", "Rate per hectare", "rate"), C("unit", "Unit"), C("cost_per_unit", "Cost per unit", "money"),
-            C("cost_per_hectare", "Cost per hectare", "money", True), C("cost_type", "Type"), C("active", "Active", "bool"),
+            C("cost_per_hectare", "Cost per hectare", "money", False), C("cost_type", "Type"), C("active", "Active", "bool"),
         ], "crop_requirements", crop_field="crop__name", crop_category_field="crop__category", status_field="active", status_options=[["true", "Active"], ["false", "Inactive"]]),
-        _spec("crop-costs", "crops", "Total configured input cost by crop", "Active input requirements that are included in the input cost, totalled per crop.", OPERATIONS, "portrait", ("season",), [
+        _spec("crop-costs", "crops", "Total configured input cost by crop", "Active general-catalogue input requirements, totalled per crop. Programme prices are listed in Crop input requirements.", OPERATIONS, "portrait", ("season",), [
             C("name", "Crop"), C("category", "Season"), C("active", "Active", "bool"), C("inputs", "Inputs", "count", True),
             C("total_cost_per_hectare", "Total input cost per hectare", "money", True),
         ], "crop_costs", crop_category_field="category"),

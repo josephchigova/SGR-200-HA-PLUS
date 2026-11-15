@@ -24,6 +24,8 @@ class Season(models.Model):
     end_date = models.DateField()
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     notes = models.TextField(blank=True)
+    # The date this agricultural year's membership subscriptions must be paid by.
+    subscription_due_date = models.DateField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -69,7 +71,8 @@ class Crop(models.Model):
 
     @property
     def total_input_cost_per_hectare(self):
-        return self.input_requirements.filter(active=True).aggregate(
+        # Programmes price the same crop differently, so this total is the general catalogue's.
+        return self.input_requirements.filter(active=True, programme__isnull=True).aggregate(
             total=Sum("cost_per_hectare")
         )["total"] or Decimal("0.00")
 
@@ -81,7 +84,27 @@ class Crop(models.Model):
         return f"{self.name} ({self.get_category_display()})"
 
 
+# The three input categories a programme can supply. Each is sourced and priced on its own.
+INPUT_SEED = "SEED"
+INPUT_FERTILIZER = "FERTILIZER"
+INPUT_CHEMICALS = "CHEMICALS"
+INPUT_CATEGORY_CHOICES: list[tuple[str, str]] = [
+    (INPUT_SEED, "Seed"),
+    (INPUT_FERTILIZER, "Fertilizer"),
+    (INPUT_CHEMICALS, "Chemicals"),
+]
+INPUT_CATEGORIES = [code for code, _ in INPUT_CATEGORY_CHOICES]
+
+
 class CropInputRequirement(models.Model):
+    """What one hectare of a crop needs, and what it costs.
+
+    A row with a programme belongs to that programme's catalogue: crop -> programme ->
+    category -> input product -> quantity per hectare -> unit price. The same crop can
+    need different products at different prices under different programmes. Rows with no
+    programme are the general catalogue that allocations made before programmes used.
+    """
+
     COST_TYPE_CROP_INPUT = "CROP_INPUT"
     COST_TYPE_FARM_EQUIPMENT = "FARM_EQUIPMENT"
     # Older code and imports used these names. They now store the two supported types.
@@ -105,6 +128,13 @@ class CropInputRequirement(models.Model):
     }
 
     crop = models.ForeignKey(Crop, on_delete=models.CASCADE, related_name="input_requirements")
+    programme = models.ForeignKey(
+        "programmes.Programme", on_delete=models.PROTECT, related_name="input_requirements", null=True, blank=True,
+    )
+    input_category = models.CharField(max_length=20, choices=INPUT_CATEGORY_CHOICES, blank=True, default="")
+    input_product = models.ForeignKey(
+        "inputs.Input", on_delete=models.PROTECT, related_name="crop_requirements", null=True, blank=True,
+    )
     group_name = models.CharField(max_length=140)
     item_name = models.CharField(max_length=180)
     rate_per_hectare = models.DecimalField(max_digits=14, decimal_places=4, default=Decimal("0.0000"))
@@ -120,9 +150,17 @@ class CropInputRequirement(models.Model):
     class Meta:
         ordering = ["crop__name", "group_name", "item_name", "id"]
         constraints = [
+            # The general catalogue: one row per crop, group, item and cost type.
             models.UniqueConstraint(
                 fields=["crop", "group_name", "item_name", "cost_type"],
+                condition=models.Q(programme__isnull=True),
                 name="unique_crop_input_requirement",
+            ),
+            # A programme lists each product once per crop.
+            models.UniqueConstraint(
+                fields=["crop", "programme", "input_product"],
+                condition=models.Q(programme__isnull=False),
+                name="unique_programme_crop_input_product",
             ),
         ]
 
@@ -201,6 +239,8 @@ class Programme(models.Model):
     end_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True)
     total_allocated_hectares = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0.00"))
+    # Which of Seed, Fertilizer and Chemicals this programme supplies. A programme may supply one, two or all three.
+    input_categories = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

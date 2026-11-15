@@ -4,6 +4,7 @@ import apiClient from '../api/client'
 import Icon from '../components/Icon'
 import { useAuth } from '../auth'
 import { addDecimal, multiplyDecimal } from '../decimal'
+import ProgrammeCatalogue from '../components/ProgrammeCatalogue'
 import { DraftNotice } from '../components/ui'
 import { useFormDraft } from '../drafts'
 
@@ -135,7 +136,8 @@ function CropCataloguePage() {
       setRequirements([])
       return
     }
-    setRequirements(await getAllPages(`/crop-input-requirements/?crop=${cropId}`))
+    // The general catalogue. Programme lines are shown in the programme catalogue above it.
+    setRequirements(await getAllPages(`/crop-input-requirements/?crop=${cropId}&programme=none`))
   }
 
   const loadPrices = async (cropId) => {
@@ -340,7 +342,7 @@ function CropCataloguePage() {
 
       <div className="table-wrap">
         <table className="data-table">
-          <thead><tr><th>Crop</th><th>Input Cost/Ha</th><th>Inputs</th><th>Status</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Crop</th><th title="Programme prices are set per programme below">General catalogue cost/ha</th><th>Input lines (all programmes)</th><th>Status</th><th>Actions</th></tr></thead>
           <tbody>
             {crops.map((crop) => (
               <tr key={crop.id}>
@@ -356,9 +358,12 @@ function CropCataloguePage() {
         </table>
       </div>
 
+      <ProgrammeCatalogue crop={selectedCrop} readOnly={readOnly} />
+
       <form className="workflow-form" onSubmit={submitRequirement} hidden={readOnly}>
         <DraftNotice draft={requirementDraft} />
-        <h4>{selectedCrop ? `${selectedCrop.name.toUpperCase()} - INPUT REQUIREMENTS` : 'Input Requirements'}</h4>
+        <h4>{selectedCrop ? `${selectedCrop.name}: general catalogue (no programme)` : 'General catalogue (no programme)'}</h4>
+        <p className="card-sub">Used by allocations made before programme catalogues. New allocations take each input category from a programme above.</p>
         <div className="workflow-fields">
           <label className="form-field">Group
             <input value={requirementForm.group_name} onChange={(event) => setRequirementForm((current) => ({ ...current, group_name: event.target.value }))} required />

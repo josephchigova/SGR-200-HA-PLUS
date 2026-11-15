@@ -8,8 +8,14 @@ from apps.accounts.permissions import ProgrammeWorkflowPermission
 from apps.accounts.scoping import scope_by_farmer
 from apps.programmes.period import filter_by_agricultural_year, filter_by_crop_name, parse_crop_season
 
-from .models import ARDAFarmerRequest, ARDARequest, ARDARequestBatch
-from .serializers import ARDAFarmerRequestSerializer, ARDARequestBatchSerializer, ARDARequestSerializer
+from .models import ARDAFarmerRequest, ARDARequest, ARDARequestBatch, BatchStockMovement, RequestBatchInput
+from .serializers import (
+    ARDAFarmerRequestSerializer,
+    ARDARequestBatchSerializer,
+    ARDARequestSerializer,
+    BatchStockMovementSerializer,
+    RequestBatchInputSerializer,
+)
 
 
 class ARDARequestViewSet(viewsets.ModelViewSet):
@@ -107,3 +113,33 @@ class ARDAFarmerRequestViewSet(viewsets.ModelViewSet):
         except (InvalidOperation, ValueError):
             return Response({"approved_hectares": ["Enter a valid decimal amount."]}, status=400)
         return Response(self.get_serializer(request_line).data)
+
+
+class RequestBatchInputViewSet(viewsets.ModelViewSet):
+    """Input products in request batches. Quantities change only through the stock ledger."""
+
+    serializer_class = RequestBatchInputSerializer
+    permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
+
+    def get_queryset(self):
+        queryset = RequestBatchInput.objects.select_related("batch__programme", "batch__season", "input_product")
+        params = self.request.query_params
+        for param, field in (("batch", "batch_id"), ("programme", "batch__programme_id"), ("season", "batch__season_id"), ("input_product", "input_product_id")):
+            if params.get(param):
+                queryset = queryset.filter(**{field: params[param]})
+        if params.get("category"):
+            queryset = queryset.filter(input_category=params["category"].upper())
+        return queryset
+
+    def perform_destroy(self, instance):
+        if instance.allocated_quantity > 0 or instance.movements.filter(kind=BatchStockMovement.KIND_ALLOCATION).exists():
+            raise ValidationError({"detail": ["Inputs from this line were allocated. Lower the requested quantity instead of removing it."]})
+        instance.movements.all().delete()
+        instance.delete()
+
+    @action(detail=True, methods=["get"], url_path="movements")
+    def movements(self, request, pk=None):
+        line = self.get_object()
+        rows = line.movements.select_related("allocation__farmer", "created_by")[:200]
+        return Response(BatchStockMovementSerializer(rows, many=True).data)

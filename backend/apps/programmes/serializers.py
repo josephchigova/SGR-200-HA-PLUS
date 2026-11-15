@@ -3,7 +3,7 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from .calendar import crop_seasons_for_date, season_is_current_year, season_is_selectable
-from .models import Crop, CropInputRequirement, CropSellingPrice, Programme, ProgrammeAllocation, Season
+from .models import INPUT_CATEGORIES, INPUT_CATEGORY_CHOICES, Crop, CropInputRequirement, CropSellingPrice, Programme, ProgrammeAllocation, Season
 
 
 class SeasonSerializer(serializers.ModelSerializer):
@@ -20,6 +20,7 @@ class SeasonSerializer(serializers.ModelSerializer):
             "end_date",
             "status",
             "notes",
+            "subscription_due_date",
             "created_at",
             "updated_at",
             "is_current",
@@ -63,7 +64,15 @@ class ProgrammeSerializer(serializers.ModelSerializer):
             "start_date",
             "end_date",
             "is_active",
+            "input_categories",
         ]
+
+    def validate_input_categories(self, value):
+        chosen = [str(item).upper() for item in (value or [])]
+        unknown = sorted(set(chosen) - set(INPUT_CATEGORIES))
+        if unknown:
+            raise serializers.ValidationError(f"Use Seed, Fertilizer or Chemicals, not {', '.join(unknown)}.")
+        return [code for code in INPUT_CATEGORIES if code in chosen]
         read_only_fields = ["total_allocated_hectares", "remaining_capacity", "season_name"]
 
     def get_season_name(self, obj):
@@ -152,6 +161,8 @@ class CropSerializer(serializers.ModelSerializer):
 
 class CropInputRequirementSerializer(serializers.ModelSerializer):
     crop_name = serializers.CharField(source="crop.name", read_only=True)
+    programme_name = serializers.CharField(source="programme.name", read_only=True, default="")
+    input_product_name = serializers.CharField(source="input_product.name", read_only=True, default="")
 
     class Meta:
         model = CropInputRequirement
@@ -159,6 +170,11 @@ class CropInputRequirementSerializer(serializers.ModelSerializer):
             "id",
             "crop",
             "crop_name",
+            "programme",
+            "programme_name",
+            "input_category",
+            "input_product",
+            "input_product_name",
             "group_name",
             "item_name",
             "rate_per_hectare",
@@ -171,6 +187,9 @@ class CropInputRequirementSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+        extra_kwargs = {"group_name": {"required": False}, "item_name": {"required": False}}
+        # Duplicates are checked in validate(), separately for the general and programme catalogues.
+        validators = []
 
     def to_internal_value(self, data):
         incoming = data.copy() if hasattr(data, "copy") else dict(data)
@@ -214,7 +233,50 @@ class CropInputRequirementSerializer(serializers.ModelSerializer):
                 "cost_per_unit": ["Enter a unit cost greater than zero. Financial calculations are blocked until this price is configured."],
             })
 
+        programme = attrs.get("programme", getattr(instance, "programme", None))
+        if programme is None:
+            for name, label in (("group_name", "Group"), ("item_name", "Item")):
+                if not str(attrs.get(name, getattr(instance, name, "")) or "").strip():
+                    raise serializers.ValidationError({name: [f"{label} is required."]})
+            duplicate = CropInputRequirement.objects.filter(
+                programme__isnull=True,
+                crop=attrs.get("crop", getattr(instance, "crop", None)),
+                group_name=attrs.get("group_name", getattr(instance, "group_name", "")),
+                item_name=attrs.get("item_name", getattr(instance, "item_name", "")),
+                cost_type=attrs["cost_type"],
+            )
+            if instance is not None:
+                duplicate = duplicate.exclude(pk=instance.pk)
+            if duplicate.exists():
+                raise serializers.ValidationError({"non_field_errors": ["The fields crop, group_name, item_name, cost_type must make a unique set."]})
+        if programme is not None:
+            # Programme catalogue: crop -> programme -> category -> product -> quantity -> price.
+            category = attrs.get("input_category", getattr(instance, "input_category", ""))
+            product = attrs.get("input_product", getattr(instance, "input_product", None))
+            if category not in INPUT_CATEGORIES:
+                raise serializers.ValidationError({"input_category": ["Choose Seed, Fertilizer or Chemicals."]})
+            if product is None:
+                raise serializers.ValidationError({"input_product": ["Choose the input product."]})
+            if product.category in INPUT_CATEGORIES and product.category != category:
+                raise serializers.ValidationError({"input_product": [f"{product.name} is a {product.get_category_display().lower()} product, not {dict(INPUT_CATEGORY_CHOICES)[category].lower()}."]})
+            crop = attrs.get("crop", getattr(instance, "crop", None))
+            duplicate = CropInputRequirement.objects.filter(crop=crop, programme=programme, input_product=product)
+            if instance is not None:
+                duplicate = duplicate.exclude(pk=instance.pk)
+            if duplicate.exists():
+                raise serializers.ValidationError({"input_product": [f"{product.name} is already in {programme.name}'s catalogue for {crop.name}. Edit that line instead."]})
+            attrs["group_name"] = dict(INPUT_CATEGORY_CHOICES)[category]
+            attrs["item_name"] = product.name
+            attrs["cost_type"] = CropInputRequirement.COST_TYPE_CROP_INPUT
+            if not attrs.get("unit", getattr(instance, "unit", "")):
+                attrs["unit"] = product.unit
         return attrs
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if not data.get("programme"):
+            data["programme_name"] = ""
+        return data
 
 
 class CropSellingPriceSerializer(serializers.ModelSerializer):

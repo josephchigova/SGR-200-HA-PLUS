@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 
 import apiClient from '../api/client'
@@ -259,6 +259,11 @@ function RegisterFarmerPage() {
     if (name === 'phone_primary') next = value.replace(/[^\d+ ]/g, '')
     // A ward is a whole number. Anything else is dropped as it is typed.
     if (name === 'ward') next = value.replace(/\D/g, '').replace(/^0+/, '').slice(0, 3)
+    // Typing coordinates replaces any device reading still on its way.
+    if (name === 'latitude' || name === 'longitude') {
+      locationRequest.current += 1
+      setLocating(false)
+    }
     setTouched((current) => ({ ...current, [name]: true }))
     setForm((current) => ({
       ...current,
@@ -360,14 +365,34 @@ function RegisterFarmerPage() {
     setStep(index)
   }
 
+  // The device's location can take seconds to arrive (a permission prompt, a slow GPS fix).
+  // A point picked on the map or typed in the meantime wins: a late device reading is dropped.
+  const locationRequest = useRef(0)
+  const [locating, setLocating] = useState(false)
+  const setCoordinates = (latitude, longitude) => {
+    locationRequest.current += 1
+    setLocating(false)
+    setTouched((current) => ({ ...current, latitude: true, longitude: true }))
+    setForm((current) => ({ ...current, latitude, longitude }))
+  }
   const useCurrentLocation = () => {
     if (!navigator.geolocation) {
       setError('This device cannot give its location. Type the coordinates instead.')
       return
     }
+    locationRequest.current += 1
+    const request = locationRequest.current
+    setLocating(true)
     navigator.geolocation.getCurrentPosition(
-      (position) => setForm((current) => ({ ...current, latitude: position.coords.latitude.toFixed(6), longitude: position.coords.longitude.toFixed(6) })),
-      () => setError('The location could not be read. Allow location access, or type the coordinates.'),
+      (position) => {
+        if (request !== locationRequest.current) return
+        setCoordinates(position.coords.latitude.toFixed(6), position.coords.longitude.toFixed(6))
+      },
+      () => {
+        if (request !== locationRequest.current) return
+        setLocating(false)
+        setError('The location could not be read. Allow location access, or type the coordinates.')
+      },
       { enableHighAccuracy: true, timeout: 15000 },
     )
   }
@@ -600,8 +625,8 @@ function RegisterFarmerPage() {
 
           <div className="card-head" style={{ marginTop: 20 }}><div><h3>Farm coordinates (optional)</h3><p className="card-sub">Stand on the farm and use this device, pick the place on a map, or type the coordinates.</p></div>
             <div className="table-actions">
-              <button type="button" className="ghost-btn small" onClick={useCurrentLocation}><Icon name="mapPin" />Use current location</button>
-              <MapLocationPicker latitude={form.latitude} longitude={form.longitude} onSelect={({ latitude, longitude }) => setForm((current) => ({ ...current, latitude, longitude }))} />
+              <button type="button" className="ghost-btn small" onClick={useCurrentLocation} disabled={locating}><Icon name="mapPin" />{locating ? 'Finding your location…' : 'Use current location'}</button>
+              <MapLocationPicker latitude={form.latitude} longitude={form.longitude} onSelect={({ latitude, longitude }) => setCoordinates(latitude, longitude)} />
             </div>
           </div>
           <div className="form-grid two">

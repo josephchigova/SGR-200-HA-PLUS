@@ -10,11 +10,13 @@ class InputDebt(models.Model):
     STATUS_NOT_RECOVERED = "NOT_RECOVERED"
     STATUS_PARTIALLY_RECOVERED = "PARTIALLY_RECOVERED"
     STATUS_FULLY_RECOVERED = "FULLY_RECOVERED"
+    STATUS_CANCELLED = "CANCELLED"
 
     STATUS_CHOICES: ClassVar[list[tuple[str, str]]] = [
         (STATUS_NOT_RECOVERED, "Not recovered"),
         (STATUS_PARTIALLY_RECOVERED, "Partially recovered"),
         (STATUS_FULLY_RECOVERED, "Fully recovered"),
+        (STATUS_CANCELLED, "Cancelled: allocation reversed"),
     ]
 
     input_allocation = models.OneToOneField("inputs.InputAllocation", on_delete=models.SET_NULL, null=True, blank=True, related_name="debt")

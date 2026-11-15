@@ -2,12 +2,11 @@
 
 from decimal import Decimal
 
-from django.db.models import Sum
+from django.db.models import Q, Sum
 
-from apps.accounts.privacy import compliance_percent
 from apps.production.models import FarmerProduction, SeasonalPlantingPlan
 from apps.subscriptions.models import FarmerSubscription
-from apps.subscriptions.services import SubscriptionPaymentService
+from apps.subscriptions.services import SubscriptionPaymentService, allocated_hectares, cluster_compliance
 
 from . import kyc
 from .models import Farm, Farmer
@@ -47,10 +46,8 @@ def build_cluster_performance(queryset, request):
         .order_by("cluster__name", "surname")
     )
     ids = [farmer.pk for farmer in farmers]
-    arable = {
-        row["farmer_id"]: row["total"] or Decimal("0")
-        for row in Farm.objects.filter(farmer_id__in=ids, is_active=True).values("farmer_id").annotate(total=Sum("arable_hectares"))
-    }
+    # The rate follows the crop hectares allocated for the year, not the farm size.
+    allocated_ha = allocated_hectares(ids, season_name)
     paid = {}
     if season_name:
         for subscription in FarmerSubscription.objects.filter(farmer_id__in=ids, season__iexact=season_name):
@@ -77,7 +74,7 @@ def build_cluster_performance(queryset, request):
                 "approved": 0,
                 "pending": 0,
                 "incomplete": 0,
-                "_compliance": [],
+                "_expected": {},
                 "_participating": 0,
             }
             groups[key] = group
@@ -86,8 +83,8 @@ def build_cluster_performance(queryset, request):
         group["farmers"] += 1
         if farmer.verification_status in kyc.APPROVED_STATES:
             group["approved"] += 1
-            _, _, expected = SubscriptionPaymentService.subscription_details(arable.get(farmer.pk, Decimal("0")))
-            group["_compliance"].append(compliance_percent(expected, paid.get(farmer.pk, 0)))
+            _, _, expected = SubscriptionPaymentService.subscription_details(allocated_ha.get(farmer.pk, Decimal("0")))
+            group["_expected"][farmer.pk] = expected
             if farmer.pk in planting or farmer.pk in producing:
                 group["_participating"] += 1
         elif farmer.verification_status in kyc.AWAITING_REVIEW:
@@ -97,10 +94,11 @@ def build_cluster_performance(queryset, request):
 
     rows = []
     for group in groups.values():
-        values = group.pop("_compliance")
+        expected_by_farmer = group.pop("_expected")
         participating = group.pop("_participating")
         approved = group["approved"]
-        group["subscription_compliance"] = int(round(sum(values) / len(values))) if values else 0
+        # Amount paid over the amount that must be paid, across the group's approved farmers.
+        group["subscription_compliance"] = cluster_compliance(expected_by_farmer, paid)
         group["agricultural_participation"] = _percent(participating, approved)
         pieces = [group["subscription_compliance"], group["agricultural_participation"], _percent(approved, group["farmers"])]
         group["performance"] = int(round(sum(pieces) / len(pieces))) if group["farmers"] else 0
@@ -109,6 +107,7 @@ def build_cluster_performance(queryset, request):
 
     sizes = [row["farmers"] for row in rows if row["cluster_id"]]
     counted = [farmer for farmer in farmers if not (farmer.cluster_id and farmer.cluster.lead_member_id == farmer.pk)]
+    land = _land_and_production([farmer.pk for farmer in counted], season_name, allocated_ha)
     return {
         "season": season_name,
         "overview": {
@@ -121,6 +120,7 @@ def build_cluster_performance(queryset, request):
             "awaiting_approval": sum(row["pending"] for row in rows),
             "approved": sum(row["approved"] for row in rows),
             "incomplete": sum(row["incomplete"] for row in rows),
+            **land,
         },
         "clusters": rows,
         "by_province": _distribution(counted, "province"),
@@ -136,3 +136,27 @@ def _distribution(farmers, field):
         label = place.name if place is not None else "Not recorded"
         counts[label] = counts.get(label, 0) + 1
     return [{"label": label, "farmers": count} for label, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))]
+
+
+def _land_and_production(ids, season_name, allocated_ha):
+    """Hectares and tonnes for the filtered farmers, from their own records."""
+    zero = Decimal("0.00")
+    irrigated = Farm.objects.filter(farmer_id__in=ids, is_active=True).aggregate(total=Sum("irrigated_hectares"))["total"] or zero
+    production = {"actual": zero, "estimated": zero, "harvested_area": zero}
+    if season_name and ids:
+        totals = FarmerProduction.objects.filter(farmer_id__in=ids, season__name__iexact=season_name).aggregate(
+            actual=Sum("actual_production"),
+            estimated=Sum("estimated_production"),
+            # Yield is measured on land that has been harvested, so crops still growing do not lower it.
+            harvested_area=Sum("planted_hectares", filter=Q(actual_production__gt=0)),
+        )
+        production = {key: value or zero for key, value in totals.items()}
+    crop_hectares = sum((allocated_ha.get(farmer_id, zero) for farmer_id in ids), zero)
+    average_yield = (production["actual"] / production["harvested_area"]) if production["harvested_area"] else zero
+    return {
+        "crop_hectares": f"{crop_hectares.quantize(Decimal('0.01'))}",
+        "irrigated_hectares": f"{Decimal(irrigated).quantize(Decimal('0.01'))}",
+        "production_tonnes": f"{production['actual'].quantize(Decimal('0.01'))}",
+        "estimated_production_tonnes": f"{production['estimated'].quantize(Decimal('0.01'))}",
+        "average_yield_tonnes_per_hectare": f"{Decimal(average_yield).quantize(Decimal('0.01'))}",
+    }

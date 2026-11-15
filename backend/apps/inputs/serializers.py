@@ -6,11 +6,19 @@ from .models import Input, InputAllocation, InputAllocationLine, InputIssue
 
 class InputAllocationLineSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
     money_fields = ('cost_per_unit', 'cost_per_hectare', 'calculated_cost')
+    programme_name = serializers.CharField(source="programme.name", read_only=True, default="")
+    batch_number = serializers.CharField(source="batch_input.batch.request_number", read_only=True, default="")
 
     class Meta:
         model = InputAllocationLine
         fields = [
             "id",
+            "input_category",
+            "programme",
+            "programme_name",
+            "input_product",
+            "batch_input",
+            "batch_number",
             "group_name",
             "item_name",
             "rate_per_hectare",
@@ -57,13 +65,17 @@ class InputAllocationSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
     programme_name = serializers.CharField(source="programme.name", read_only=True)
     crop_name = serializers.CharField(source="crop_reference.name", read_only=True)
     calculation_lines = InputAllocationLineSerializer(many=True, read_only=True)
+    season_name = serializers.SerializerMethodField()
+    membership_number = serializers.CharField(source="farmer.membership_number", read_only=True)
+    cancelled_by_name = serializers.SerializerMethodField()
 
     class Meta:
         model = InputAllocation
         fields = [
-            "id", "farmer", "farmer_name", "farm", "programme", "programme_name", "crop_reference", "crop_name",
+            "id", "farmer", "farmer_name", "membership_number", "farm", "programme", "programme_name", "crop_reference", "crop_name",
             "crop", "hectares", "calculated_input_cost_per_hectare", "total_input_cost",
             "allocation_date", "allocation_reference", "status", "collection_date", "created_at", "updated_at",
+            "season", "season_name", "sourced_by_category", "cancelled_at", "cancelled_by_name", "cancellation_reason",
             "calculation_lines",
         ]
         read_only_fields = [
@@ -76,7 +88,19 @@ class InputAllocationSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
             "status",
             "collection_date",
             "calculation_lines",
+            "season",
+            "sourced_by_category",
+            "cancelled_at",
+            "cancellation_reason",
         ]
+
+    def get_season_name(self, obj):
+        season = obj.season or getattr(obj.programme, "season", None)
+        return season.name if season else ""
+
+    def get_cancelled_by_name(self, obj):
+        user = obj.cancelled_by
+        return (f"{user.first_name} {user.last_name}".strip() or user.email) if user else ""
 
     def validate(self, attrs):
         crop_reference = attrs.get("crop_reference", getattr(self.instance, "crop_reference", None))
@@ -88,6 +112,8 @@ class InputAllocationSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
         return self._save_with_service(validated_data)
 
     def update(self, instance, validated_data):
+        if instance.sourced_by_category:
+            raise serializers.ValidationError({"detail": ["Allocations sourced per input category cannot be edited. Cancel it and allocate again."]})
         data = {
             field: validated_data.get(field, getattr(instance, field))
             for field in ("farmer", "farm", "programme", "crop_reference", "crop", "hectares")

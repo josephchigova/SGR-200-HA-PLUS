@@ -39,6 +39,7 @@ import SubscriptionsPage from './pages/SubscriptionsPage'
 import UsersPage from './pages/UsersPage'
 import VerificationPage from './pages/VerificationPage'
 import WorkflowPage from './pages/WorkflowPage'
+import BatchStock from './components/BatchStock'
 import { workflowPages } from './pages/workflowConfig'
 import { watchMobileTables } from './components/labelMobileTables'
 
@@ -197,7 +198,7 @@ function Workspace() {
   const [periodError, setPeriodError] = useState('')
   const [navOpen, setNavOpen] = useState(false)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(SIDEBAR_KEY) === '1')
-  const [notices, setNotices] = useState({ count: 0, items: [] })
+  const [notices, setNotices] = useState({ count: 0, items: [], notices: [], unread_notices: 0 })
   const [userOpen, setUserOpen, userRef] = usePopover()
   const [noticeOpen, setNoticeOpen, noticeRef] = usePopover()
 
@@ -217,7 +218,7 @@ function Workspace() {
     let cancelled = false
     const load = () => {
       apiClient.get('/notifications/').then((response) => {
-        if (!cancelled && response.data?.items) setNotices(response.data)
+        if (!cancelled && response.data?.items) setNotices({ notices: [], unread_notices: 0, ...response.data })
       }).catch(() => {})
     }
     load()
@@ -422,9 +423,9 @@ function Workspace() {
           </form>
 
           <div className="popover-anchor" ref={noticeRef}>
-            <button type="button" className="icon-btn" aria-label={`Notifications, ${notices.items.length} waiting`} aria-haspopup="true" aria-expanded={noticeOpen} onClick={() => setNoticeOpen((open) => !open)}>
+            <button type="button" className="icon-btn" aria-label={`Notifications, ${notices.items.length + notices.unread_notices} waiting`} aria-haspopup="true" aria-expanded={noticeOpen} onClick={() => setNoticeOpen((open) => !open)}>
               <Icon name="bell" />
-              {notices.items.length ? <span className="badge-dot">{notices.items.length}</span> : null}
+              {notices.items.length + notices.unread_notices ? <span className="badge-dot">{notices.items.length + notices.unread_notices}</span> : null}
             </button>
             {noticeOpen ? (
               <div className="popover notice-list">
@@ -434,7 +435,34 @@ function Workspace() {
                     <i aria-hidden="true" />
                     <span><strong>{item.title}</strong><small>{item.detail}</small></span>
                   </Link>
-                )) : <p className="card-sub" style={{ padding: '10px 12px' }}>Nothing is waiting for you.</p>}
+                )) : null}
+                {notices.notices.length ? (
+                  <>
+                    <div className="popover-head notice-subhead">
+                      <strong>Reminders</strong>
+                      <button type="button" className="link-btn" onClick={() => {
+                        apiClient.post('/notifications/inbox/', {}).catch(() => {})
+                        setNotices((current) => ({ ...current, notices: [], unread_notices: 0 }))
+                      }}>Mark all read</button>
+                    </div>
+                    {notices.notices.map((notice) => (
+                      <Link
+                        key={notice.id}
+                        to={notice.url || '/subscriptions'}
+                        className={`notice-item ${notice.tone}`}
+                        onClick={() => {
+                          setNoticeOpen(false)
+                          apiClient.post('/notifications/inbox/', { ids: [notice.id] }).catch(() => {})
+                          setNotices((current) => ({ ...current, notices: current.notices.filter((item) => item.id !== notice.id), unread_notices: Math.max(current.unread_notices - 1, 0) }))
+                        }}
+                      >
+                        <i aria-hidden="true" />
+                        <span><strong>{notice.title}</strong><small>{notice.body}</small></span>
+                      </Link>
+                    ))}
+                  </>
+                ) : null}
+                {!notices.items.length && !notices.notices.length ? <p className="card-sub" style={{ padding: '10px 12px' }}>Nothing is waiting for you.</p> : null}
               </div>
             ) : null}
           </div>
@@ -464,7 +492,7 @@ function Workspace() {
             <Route path="/subscriptions" element={<Guard module="subscriptions"><SubscriptionsPage selectedSeason={selectedSeason} /></Guard>} />
             <Route path="/crops" element={<Guard module="crops"><CropCataloguePage /></Guard>} />
             <Route path="/programmes" element={<Guard module="programmes"><WorkflowPage {...workflowPages.programmes} {...period} module="programmes" /></Guard>} />
-            <Route path="/arda-requests" element={<Guard module="arda"><WorkflowPage {...workflowPages.arda} {...period} module="arda" /></Guard>} />
+            <Route path="/arda-requests" element={<Guard module="arda"><><WorkflowPage {...workflowPages.arda} {...period} module="arda" /><BatchStock selectedSeason={period.selectedSeason} /></></Guard>} />
             <Route path="/input-allocations" element={<Guard module="allocations"><InputAllocationsPage {...period} /></Guard>} />
             <Route path="/production" element={<Guard module="production"><ProductionPage {...period} /></Guard>} />
             <Route path="/seasonal-planting" element={<Guard module="planting"><WorkflowPage {...workflowPages.seasonalPlanting} {...period} module="planting" /></Guard>} />

@@ -33,6 +33,8 @@ function MapDialog({ latitude, longitude, onClose, onSelect }) {
   const [results, setResults] = useState([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState('')
+  const [finding, setFinding] = useState(false)
+  const hereRef = useRef(null)
 
   useEffect(() => {
     const container = node.current
@@ -70,11 +72,42 @@ function MapDialog({ latitude, longitude, onClose, onSelect }) {
       map.remove()
       mapRef.current = null
       markerRef.current = null
+      hereRef.current = null
       placeRef.current = () => {}
     }
     // The map is created for the coordinates present when the dialog opens.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // The device's location only moves the view so the user can find the farm.
+  // It never becomes the chosen point: only a click, a drag or a search result does.
+  const showMyLocation = () => {
+    if (!navigator.geolocation) {
+      setSearchError('This device cannot give its location. Search or click the map instead.')
+      return
+    }
+    setFinding(true)
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setFinding(false)
+        const map = mapRef.current
+        if (!map) return
+        const here = L.latLng(position.coords.latitude, position.coords.longitude)
+        if (!hereRef.current) {
+          hereRef.current = L.circleMarker(here, { radius: 7, color: '#2563eb', fillColor: '#3b82f6', fillOpacity: 0.6, weight: 2 }).addTo(map)
+          hereRef.current.bindTooltip('You are here')
+        } else {
+          hereRef.current.setLatLng(here)
+        }
+        map.setView(here, Math.max(map.getZoom(), 14))
+      },
+      () => {
+        setFinding(false)
+        setSearchError('Your location could not be read. Search or click the map instead.')
+      },
+      { enableHighAccuracy: true, timeout: 15000 },
+    )
+  }
 
   const searchPlace = async (event) => {
     event.preventDefault()
@@ -125,6 +158,9 @@ function MapDialog({ latitude, longitude, onClose, onSelect }) {
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ward, village or landmark" />
         </label>
         <button type="submit" className="ghost-btn" disabled={searching || query.trim().length < 2}>{searching ? 'Searching…' : 'Search'}</button>
+        <button type="button" className="ghost-btn" onClick={showMyLocation} disabled={finding} title="Moves the map to where you are. It does not choose the point.">
+          <Icon name="mapPin" />{finding ? 'Finding…' : 'Go to my location'}
+        </button>
       </form>
       {searchError ? <p className="field-hint" role="status">{searchError}</p> : null}
       {results.length ? (
@@ -145,7 +181,7 @@ function MapDialog({ latitude, longitude, onClose, onSelect }) {
         </ul>
       ) : null}
       <div ref={node} className="location-map" role="application" aria-label="Farm map" />
-      <p className="field-hint">{point ? `${point[0].toFixed(6)}, ${point[1].toFixed(6)}` : 'No point chosen yet.'}</p>
+      <p className="field-hint" aria-live="polite">{point ? `Selected point: ${point[0].toFixed(6)}, ${point[1].toFixed(6)}` : 'No point chosen yet. Click the map to choose the farm.'}</p>
     </Modal>
   )
 }

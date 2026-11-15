@@ -23,7 +23,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 from . import audit
-from .models import AuditLog
+from .models import AuditLog, Notification
 from .permissions import AuditReadPermission, UserAdminPermission
 from .roles import can, matrix_rows
 from .serializers import (
@@ -323,4 +323,64 @@ class NotificationsView(APIView):
         if can(user, "users", "edit"):
             waiting = User.objects.filter(is_active=False, last_login__isnull=True).count()
             add("accounts", waiting, f"{waiting} account request{'s' if waiting != 1 else ''} awaiting approval", "Assign a role and activate the account.", "/users", "warning")
-        return Response({"count": sum(1 for _ in items), "items": items})
+
+        # Stored notices, such as subscription deadline reminders. The daily job creates them;
+        # this backstop runs the check if the job has not run for six hours.
+        if can(user, "subscriptions"):
+            try:
+                from apps.subscriptions.reminders import run_if_due
+
+                run_if_due()
+            except Exception:  # noqa: BLE001 - a reminder problem must never break the bell
+                logger.exception("Subscription reminder check failed")
+        inbox = Notification.objects.filter(recipient=user).exclude(status=Notification.STATUS_READ)
+        unread = inbox.count()
+        latest = list(inbox[:20])
+        Notification.objects.filter(pk__in=[notice.pk for notice in latest], status=Notification.STATUS_PENDING).update(
+            status=Notification.STATUS_DELIVERED, delivered_at=timezone.now(),
+        )
+        notices = [_notice(notice) for notice in latest]
+        return Response({"count": sum(1 for _ in items) + unread, "items": items, "notices": notices, "unread_notices": unread})
+
+
+def _notice(notice):
+    return {
+        "id": notice.id, "kind": notice.kind, "kind_label": notice.get_kind_display(), "title": notice.title, "body": notice.body,
+        "url": notice.url, "tone": notice.tone, "farmer": notice.farmer_id, "season": notice.season_name,
+        "due_date": notice.due_date.isoformat() if notice.due_date else None, "days_overdue": notice.days_overdue,
+        "payment_status": notice.payment_status, "amount_due": str(notice.amount_due) if notice.amount_due is not None else None,
+        "status": notice.status, "created_at": notice.created_at.isoformat(),
+        "delivered_at": notice.delivered_at.isoformat() if notice.delivered_at else None,
+        "read_at": notice.read_at.isoformat() if notice.read_at else None,
+    }
+
+
+class NotificationInboxView(APIView):
+    """The signed-in user's stored notices. POST marks them read: one by id, or all."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        notices = Notification.objects.filter(recipient=request.user)
+        kind = request.query_params.get("kind")
+        if kind:
+            notices = notices.filter(kind__startswith=kind.upper())
+        if request.query_params.get("unread") in {"1", "true"}:
+            notices = notices.exclude(status=Notification.STATUS_READ)
+        try:
+            limit = min(max(int(request.query_params.get("limit", 100)), 1), 500)
+        except ValueError:
+            limit = 100
+        return Response({"count": notices.count(), "results": [_notice(notice) for notice in notices[:limit]]})
+
+    def post(self, request):
+        notices = Notification.objects.filter(recipient=request.user).exclude(status=Notification.STATUS_READ)
+        ids = request.data.get("ids")
+        if ids is not None:
+            if not isinstance(ids, list):
+                return Response({"ids": ["Send a list of notice ids."]}, status=400)
+            notices = notices.filter(pk__in=[value for value in ids if str(value).isdigit()])
+        now = timezone.now()
+        notices.filter(delivered_at__isnull=True).update(delivered_at=now)
+        updated = notices.update(status=Notification.STATUS_READ, read_at=now)
+        return Response({"marked_read": updated})

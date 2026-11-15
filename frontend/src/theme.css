@@ -3272,3 +3272,307 @@ select.invalid,
 #production-form h4:first-of-type {
   margin-top: 0;
 }
+
+/* Sidebar brand: the name and subtitle stay inside the sidebar at every width
+   (for example 1920×1080 at 150% scaling, which is a 1280×720 viewport). */
+.side-brand > div {
+  min-width: 0;
+}
+
+.side-brand small {
+  white-space: normal;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 1024px) and (max-width: 1440px),
+       (min-width: 1024px) and (max-height: 860px) {
+  .side-brand {
+    gap: 10px;
+    padding: 0 12px;
+  }
+
+  .side-brand .brand-logo-image {
+    width: 34px;
+    height: 34px;
+  }
+
+  .side-brand strong {
+    font-size: 0.9rem;
+  }
+
+  .side-brand small {
+    font-size: 0.7rem;
+  }
+}
+
+/* Programme catalogue, batch stock and per-category allocation ------------------------ */
+.programme-catalogue,
+.batch-stock,
+.allocation-form,
+.subscription-deadlines {
+  display: grid;
+  gap: 14px;
+}
+
+.programme-catalogue-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 16px;
+}
+
+.programme-catalogue-picker > :first-child {
+  flex: 1 1 320px;
+  max-width: 520px;
+}
+
+.category-chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.category-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.category-panel {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+
+.category-panel.muted {
+  border-color: var(--border);
+  background: var(--surface);
+}
+
+.category-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.category-panel h4 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.category-panel h4 svg,
+.batch-stock h3 svg,
+.allocation-form h3 svg,
+.subscription-deadlines h3 svg {
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+}
+
+.batch-stock h3,
+.allocation-form h3,
+.subscription-deadlines h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.category-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.category-form > label:first-child,
+.category-form .new-product,
+.category-form .link-btn,
+.category-form-actions {
+  grid-column: 1 / -1;
+}
+
+.new-product {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.new-product input {
+  flex: 1 1 120px;
+}
+
+.category-form-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.link-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.inactive-row td {
+  opacity: 0.55;
+}
+
+.batch-picker {
+  max-width: 560px;
+}
+
+.batch-meta {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.allocation-steps {
+  display: grid;
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.allocation-steps > li > h4 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 10px;
+}
+
+.allocation-steps > li > h4 span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 0.8rem;
+}
+
+.source-products {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.84rem;
+}
+
+.source-products li {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2, var(--surface));
+}
+
+.source-products span {
+  color: var(--text-muted);
+}
+
+.allocation-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.allocation-summary ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.shortage-row td {
+  color: var(--danger);
+}
+
+.category-total td {
+  font-weight: 600;
+  background: var(--surface-2, var(--surface));
+}
+
+.allocation-lines > td {
+  padding: 10px 14px 16px;
+  background: var(--surface-2, var(--surface));
+}
+
+.block-hint {
+  display: block;
+  color: var(--text-muted);
+}
+
+.due-date-form {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+}
+
+.notice-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-top: 1px solid var(--border);
+}
+
+.lead-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .category-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.allocation-page .card-head > select {
+  width: auto;
+  min-width: 180px;
+}
+
+/* The catalogue tables need the width: stack the three categories below wide desktop sizes. */
+@media (max-width: 1700px) {
+  .programme-catalogue .category-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .programme-catalogue .category-panel {
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .programme-catalogue .category-panel > header {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 1100px) {
+  .programme-catalogue .category-panel {
+    grid-template-columns: 1fr;
+  }
+}
