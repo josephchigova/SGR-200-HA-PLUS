@@ -448,6 +448,100 @@ class ProgrammeCrudTests(ChainMixin, TestCase):
         self.assertTrue(Programme.objects.filter(pk=arda.id).exists())
 
 
+class RequestProductLineTests(ChainMixin, TestCase):
+    """Requests name the exact products and varieties, each with its own hectares."""
+
+    @classmethod
+    def setUpTestData(cls):
+        make_world(cls)
+
+    def setUp(self):
+        self.client = self.api()
+        self.seedco = self.programme("SEEDCO", [self.maize], ["SEED", "FERTILIZER"])
+        self.mbizi_line = self.line(self.seedco, self.maize, "SEED", self.mbizi, "25", "2.00")
+        self.shumba_line = self.line(self.seedco, self.maize, "SEED", self.shumba, "20", "3.00")
+        self.compound_line = self.line(self.seedco, self.maize, "FERTILIZER", self.compound_d, "400", pack_size="50", pack_price="32", pack_label="50 kg bag")
+
+    def create(self, hectares, lines, programme=None):
+        return self.client.post(reverse("arda-request-batch-list"), {
+            "programme": (programme or self.seedco).id, "season": self.season.id, "crop": "Maize", "requested_hectares": hectares,
+            "lines": [{"requirement": requirement.id, "requested_hectares": value} for requirement, value in lines],
+        }, format="json")
+
+    def request_with_varieties(self):
+        made = self.create("20", [(self.mbizi_line, "8"), (self.shumba_line, "7"), (self.compound_line, "20")])
+        self.assertEqual(made.status_code, 201, made.data)
+        return ARDARequestBatch.objects.get(pk=made.data["id"])
+
+    def products(self, batch):
+        return {row["product_name"]: row for row in self.batch_row(batch)["products"]}
+
+    def test_request_names_products_from_the_programme_catalogue(self):
+        # Seed varieties share the land, so they cannot add up to more than the request.
+        too_much_seed = self.create("20", [(self.mbizi_line, "15"), (self.shumba_line, "10")])
+        self.assertEqual(too_much_seed.status_code, 400)
+        self.assertIn("seed varieties add up to 25", str(too_much_seed.data))
+        self.assertFalse(ARDARequestBatch.objects.exists())  # nothing half-saved
+        batch = self.request_with_varieties()
+        rows = self.products(batch)
+        self.assertEqual(set(rows), {"Mbizi", "Shumba", "Compound D"})
+        # Unit, rate and price come from the catalogue line, not from the request.
+        self.assertEqual((rows["Mbizi"]["input_category"], rows["Mbizi"]["unit"], rows["Mbizi"]["rate_per_hectare"], rows["Mbizi"]["unit_price"]), ("SEED", "kg", "25.0000", "2.0000"))
+        self.assertEqual((rows["Mbizi"]["requested_hectares"], rows["Shumba"]["requested_hectares"]), ("8.00", "7.00"))
+        too_big = self.create("10", [(self.compound_line, "12")], programme=self.programme("Other", [self.maize], ["FERTILIZER"]))
+        self.assertEqual(too_big.status_code, 400)
+        other = self.programme("ARDA", [self.maize], ["SEED"])
+        foreign = self.create("10", [(self.mbizi_line, "5")], programme=other)
+        self.assertEqual(foreign.status_code, 400)
+        self.assertIn("ARDA's Maize catalogue", str(foreign.data))
+        # A catalogue line named in a request cannot be deleted.
+        self.assertEqual(self.client.delete(reverse("crop-input-requirement-detail", kwargs={"pk": self.shumba_line.id})).status_code, 400)
+
+    def test_each_product_is_approved_and_allocated_within_its_own_hectares(self):
+        batch = self.request_with_varieties()
+        self.client.post(reverse("arda-request-batch-submit", kwargs={"pk": batch.id}))
+        mbizi, shumba = batch.lines.get(requirement=self.mbizi_line), batch.lines.get(requirement=self.shumba_line)
+        over = self.client.post(reverse("arda-request-batch-approve", kwargs={"pk": batch.id}), {"approved_hectares": "20", "lines": {str(mbizi.id): "9"}}, format="json")
+        self.assertEqual(over.status_code, 400)
+        approved = self.client.post(reverse("arda-request-batch-approve", kwargs={"pk": batch.id}), {"approved_hectares": "20", "lines": {str(mbizi.id): "6"}}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.data)
+        rows = self.products(batch)
+        self.assertEqual((rows["Mbizi"]["approved_hectares"], rows["Shumba"]["approved_hectares"], rows["Compound D"]["approved_hectares"]), ("6.00", "7.00", "20.00"))
+
+        # Two seed varieties on the same land, or no choice when there are two, is refused.
+        self.assertEqual(self.allocate(self.seedco, batch, hectares="5").status_code, 400)
+        both = self.client.post(reverse("input-allocation-programme-allocate"), {**self.payload(self.seedco, batch, hectares="5"), "request_lines": [mbizi.id, shumba.id]}, format="json")
+        self.assertEqual(both.status_code, 400)
+        compound = batch.lines.get(requirement=self.compound_line)
+        made = self.client.post(reverse("input-allocation-programme-allocate"), {**self.payload(self.seedco, batch, hectares="5"), "request_lines": [mbizi.id, compound.id]}, format="json")
+        self.assertEqual(made.status_code, 201, made.data)
+        allocation = InputAllocation.objects.get(pk=made.data["id"])
+        self.assertEqual({line.item_name: line.request_line_id for line in allocation.calculation_lines.all()}, {"Mbizi": mbizi.id, "Compound D": compound.id})
+        self.assertEqual(allocation.total_input_cost, Decimal("1530.00"))  # 125 kg x 2.00 + 2000 kg x 0.64
+        rows = self.products(batch)
+        self.assertEqual((rows["Mbizi"]["remaining_hectares"], rows["Shumba"]["remaining_hectares"], rows["Compound D"]["remaining_hectares"]), ("1.00", "7.00", "15.00"))
+
+        # Mbizi has 1 ha left, so the next farmer cannot get 5 ha of it, but can get Shumba.
+        plan = self.client.post(reverse("input-allocation-programme-preview"), {**self.payload(self.seedco, batch, hectares="5", farmer=self.other_farmer), "request_lines": [mbizi.id]}, format="json")
+        self.assertFalse(plan.data["can_confirm"])
+        self.assertIn("Mbizi has 1 ha of its 6 approved hectares left", plan.data["problems"][0])
+        made = self.client.post(reverse("input-allocation-programme-allocate"), {**self.payload(self.seedco, batch, hectares="5", farmer=self.other_farmer), "request_lines": [shumba.id]}, format="json")
+        self.assertEqual(made.status_code, 201, made.data)
+        options = self.client.get(reverse("input-allocation-programme-options"), {"crop": self.maize.id, "season": self.season.id}).data
+        offered = {product["name"]: product["remaining_hectares"] for product in options["options"][0]["batches"][0]["products"]}
+        self.assertEqual(offered, {"Mbizi": "1.00", "Shumba": "2.00", "Compound D": "15.00"})
+
+        # Cancelling gives the product's hectares back.
+        first = InputAllocation.objects.filter(farmer=self.farmer).get()
+        self.client.post(reverse("input-allocation-cancel", kwargs={"pk": first.id}), {"reason": "Wrong farmer"}, format="json")
+        self.assertEqual(self.products(batch)["Mbizi"]["remaining_hectares"], "6.00")
+
+    def test_requests_without_products_keep_working(self):
+        batch = self.approve(self.request(self.seedco, self.maize, "20"))
+        made = self.allocate(self.seedco, batch, hectares="5", categories=["FERTILIZER"])
+        self.assertEqual(made.status_code, 201, made.data)
+
+
 class ConcurrentAllocationTests(ChainMixin, TransactionTestCase):
     """Two officers allocating the last approved hectares at the same moment."""
 

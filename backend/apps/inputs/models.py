@@ -134,6 +134,10 @@ class InputAllocationLine(models.Model):
     batch_input = models.ForeignKey(
         "arda_requests.RequestBatchInput", on_delete=models.PROTECT, related_name="allocation_lines", null=True, blank=True,
     )
+    # The approved request line (product or variety) this input was allocated from.
+    request_line = models.ForeignKey(
+        "arda_requests.RequestBatchLine", on_delete=models.PROTECT, related_name="allocation_lines", null=True, blank=True,
+    )
     group_name = models.CharField(max_length=140)
     item_name = models.CharField(max_length=180)
     unit = models.CharField(max_length=40, blank=True, default="")

@@ -151,12 +151,16 @@ class InputAllocationViewSet(viewsets.ModelViewSet):
         categories = data.get("input_categories") or None
         if categories is not None and not isinstance(categories, list):
             raise ValidationError({"input_categories": ["Send the input types as a list."]})
+        request_lines = data.get("request_lines") or None
+        if request_lines is not None and not isinstance(request_lines, list):
+            raise ValidationError({"request_lines": ["Send the chosen request products as a list."]})
         return {
             "farmer": farmer, "farm": farm, "season": by_id(Season, data.get("season")), "crop": by_id(Crop, data.get("crop")),
             "hectares": data.get("hectares"), "programme": by_id(Programme, data.get("programme")),
             "batch": ARDARequestBatch.objects.select_related("programme", "season").filter(pk=data.get("request_batch")).first()
             if str(data.get("request_batch") or "").isdigit() else None,
             "input_categories": categories,
+            "request_lines": request_lines,
         }
 
     def perform_destroy(self, instance):

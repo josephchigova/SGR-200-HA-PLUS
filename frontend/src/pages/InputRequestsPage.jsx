@@ -11,9 +11,13 @@ import { useAuth } from '../auth'
 import Icon from '../components/Icon'
 import { DraftNotice, EmptyState, Modal, PageHead, Pill, errorMessage } from '../components/ui'
 import { useFormDraft } from '../drafts'
-import { CATEGORY_LABEL, REQUEST_STATUS, hectares, loadAll } from '../programmeData'
+import { CATEGORIES } from '../inputCategories'
+import { CATEGORY_LABEL, REQUEST_STATUS, hectares, loadAll, money, qty } from '../programmeData'
 
-const EMPTY = { programme: '', crop: '', input_category: '', requested_hectares: '', notes: '' }
+const EMPTY = { programme: '', crop: '', input_category: '', requested_hectares: '', notes: '', lines: {} }
+const CATEGORY_ORDER = Object.fromEntries(CATEGORIES.map(([code], index) => [code, index]))
+// Seed first, then fertilizer, then chemicals, as on the catalogue.
+const ordered = (lines = []) => [...lines].sort((a, b) => (CATEGORY_ORDER[a.input_category] ?? 9) - (CATEGORY_ORDER[b.input_category] ?? 9) || a.product_name.localeCompare(b.product_name))
 
 function InputRequestsPage({ selectedSeason = null, cropSeason = '', periodStatus = 'ready' }) {
   const { can } = useAuth()
@@ -29,6 +33,7 @@ function InputRequestsPage({ selectedSeason = null, cropSeason = '', periodStatu
   const [notice, setNotice] = useState('')
   const [editing, setEditing] = useState(null)
   const [deciding, setDeciding] = useState(null)
+  const [expanded, setExpanded] = useState(null)
   const blocked = periodStatus !== 'ready' || !selectedSeason
   const readOnlyYear = Boolean(selectedSeason?.status && selectedSeason.status !== 'ACTIVE')
   const requestKey = JSON.stringify([selectedSeason?.id, cropSeason, filters, token])
@@ -90,7 +95,7 @@ function InputRequestsPage({ selectedSeason = null, cropSeason = '', periodStatu
 
   return (
     <div className="page-card input-requests-page">
-      <PageHead title="Input requests" subtitle="Hectares requested from a programme for one crop and agricultural year. Only approved hectares can be allocated to farmers; remaining hectares are approved capacity not yet allocated, not stock." />
+      <PageHead title="Input requests" subtitle="Hectares requested from a programme for one crop and agricultural year, split by the exact products and varieties in the programme's catalogue. Only approved hectares can be allocated to farmers; remaining hectares are approved capacity, not stock." />
       {blocked ? <div className="form-message">Choose an agricultural year in the header.</div> : null}
       {readOnlyYear ? <div className="form-message">{selectedSeason.name} is not the active agricultural year, so its requests are read-only.</div> : null}
       {notice ? <div className="form-message success" role="status">{notice}</div> : null}
@@ -137,7 +142,8 @@ function InputRequestsPage({ selectedSeason = null, cropSeason = '', periodStatu
                   const [label, tone] = REQUEST_STATUS[row.status] || [row.status_label, '']
                   const editable = !readOnlyYear && row.status === 'PENDING'
                   return (
-                    <tr key={row.id} className={row.status === 'REJECTED' ? 'inactive-row' : ''}>
+                    <RequestRows key={row.id} open={expanded === row.id} row={row}>
+                    <tr className={row.status === 'REJECTED' ? 'inactive-row' : ''}>
                       <td><strong>{row.request_number}</strong>{row.decision_notes ? <small className="block-hint">{row.decision_notes}</small> : null}</td>
                       <td>{row.programme_name}{row.programme_active === false ? <small className="block-hint">Inactive programme</small> : null}</td>
                       <td>{row.crop || '—'}</td>
@@ -151,6 +157,7 @@ function InputRequestsPage({ selectedSeason = null, cropSeason = '', periodStatu
                       <td><Pill tone={tone}>{label}</Pill>{row.approved_by_name ? <small className="block-hint">by {row.approved_by_name}</small> : null}</td>
                       <td>
                         <span className="table-actions">
+                          <button type="button" className="icon-btn" title={expanded === row.id ? 'Hide products' : 'Show products'} aria-label={`${expanded === row.id ? 'Hide' : 'Show'} products in ${row.request_number}`} onClick={() => setExpanded(expanded === row.id ? null : row.id)}><Icon name="eye" /></button>
                           {editable && canCreate ? <button type="button" className="icon-btn" title="Edit draft" aria-label={`Edit ${row.request_number}`} onClick={() => setEditing(row)}><Icon name="pencil" /></button> : null}
                           {editable && canCreate ? <button type="button" className="ghost-btn small" onClick={() => act(row, 'submit', null, `${row.request_number} submitted for approval.`)}>Submit</button> : null}
                           {!readOnlyYear && canApprove && row.status === 'SUBMITTED' ? <button type="button" className="primary-btn small" onClick={() => setDeciding(row)}>Approve or reject</button> : null}
@@ -158,6 +165,7 @@ function InputRequestsPage({ selectedSeason = null, cropSeason = '', periodStatu
                         </span>
                       </td>
                     </tr>
+                    </RequestRows>
                   )
                 })}
               </tbody>
@@ -175,8 +183,8 @@ function InputRequestsPage({ selectedSeason = null, cropSeason = '', periodStatu
         <Decision
           request={deciding}
           onClose={() => setDeciding(null)}
-          onApprove={async (hectaresApproved, notes) => {
-            if (await act(deciding, 'approve', { approved_hectares: hectaresApproved, notes }, `${deciding.request_number} approved for ${hectares(hectaresApproved)}. Those hectares can now be allocated to farmers.`)) setDeciding(null)
+          onApprove={async (hectaresApproved, notes, lines) => {
+            if (await act(deciding, 'approve', { approved_hectares: hectaresApproved, notes, lines }, `${deciding.request_number} approved for ${hectares(hectaresApproved)}. Those hectares can now be allocated to farmers.`)) setDeciding(null)
           }}
           onReject={async (notes) => {
             if (await act(deciding, 'reject', { notes }, `${deciding.request_number} rejected.`)) setDeciding(null)
@@ -189,20 +197,43 @@ function InputRequestsPage({ selectedSeason = null, cropSeason = '', periodStatu
 
 function RequestForm({ request = null, season, programmes, onSaved, onCancel }) {
   const initial = request
-    ? { programme: String(request.programme), crop: request.crop || '', input_category: request.input_category || '', requested_hectares: request.requested_hectares, notes: request.notes || '' }
+    ? {
+        programme: String(request.programme), crop: request.crop || '', input_category: request.input_category || '',
+        requested_hectares: request.requested_hectares, notes: request.notes || '',
+        lines: Object.fromEntries((request.products || []).map((line) => [String(line.requirement), String(Number(line.requested_hectares))])),
+      }
     : EMPTY
   const [form, setForm] = useState(initial)
+  const [catalogue, setCatalogue] = useState({ key: '', rows: [] })
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState({})
-  const draft = useFormDraft({ key: `input-request:${season.id}:${request?.id || 'new'}`, value: form, enabled: !request, onRestore: (data) => setForm((current) => ({ ...current, ...data })) })
+  const draft = useFormDraft({ key: `input-request:${season.id}:${request?.id || 'new'}`, value: form, enabled: !request, onRestore: (data) => setForm((current) => ({ ...current, lines: {}, ...data })) })
   const open = programmes.filter((programme) => programme.capacity_status === 'ACTIVE' || String(programme.id) === String(form.programme))
   const programme = programmes.find((item) => String(item.id) === String(form.programme))
+  const cropId = programme ? (programme.crops || [])[(programme.crop_names || []).indexOf(form.crop)] : null
+  const catalogueKey = `${form.programme}:${cropId}`
+
+  // The products and varieties come from the programme's own catalogue for this crop.
+  useEffect(() => {
+    if (!form.programme || !cropId) return undefined
+    let active = true
+    loadAll('/crop-input-requirements/', { programme: form.programme, crop: cropId })
+      .then((rows) => { if (active) setCatalogue({ key: catalogueKey, rows: rows.filter((row) => row.active) }) })
+      .catch(() => { if (active) setCatalogue({ key: catalogueKey, rows: [] }) })
+    return () => { active = false }
+  }, [form.programme, cropId, catalogueKey])
+  const products = catalogue.key === catalogueKey ? catalogue.rows.filter((row) => !form.input_category || row.input_category === form.input_category) : []
+  const setLine = (requirement, value) => setForm((current) => ({ ...current, lines: { ...current.lines, [requirement]: value } }))
+  const seedTotal = products.filter((row) => row.input_category === 'SEED').reduce((sum, row) => sum + Number(form.lines[row.id] || 0), 0)
 
   const submit = async (event) => {
     event.preventDefault()
     setSaving(true)
     setErrors({})
-    const payload = { ...form, programme: Number(form.programme), season: season.id }
+    const lines = products
+      .filter((row) => Number(form.lines[row.id]) > 0)
+      .map((row) => ({ requirement: row.id, requested_hectares: form.lines[row.id] }))
+    const payload = { programme: Number(form.programme), season: season.id, crop: form.crop, input_category: form.input_category, requested_hectares: form.requested_hectares, notes: form.notes, lines }
     try {
       const response = request ? await apiClient.patch(`/arda-request-batches/${request.id}/`, payload) : await apiClient.post('/arda-request-batches/', payload)
       if (!request) {
@@ -225,14 +256,14 @@ function RequestForm({ request = null, season, programmes, onSaved, onCancel }) 
       {errors.non_field_errors || errors.detail ? <div className="form-message error" role="alert">{errors.non_field_errors || errors.detail}</div> : null}
       <div className="workflow-fields">
         <label className="form-field">Programme
-          <select required value={form.programme} onChange={(event) => setForm({ ...form, programme: event.target.value, crop: '', input_category: '' })}>
+          <select required value={form.programme} onChange={(event) => setForm({ ...form, programme: event.target.value, crop: '', input_category: '', lines: {} })}>
             <option value="">{open.length ? 'Choose an active programme' : `No active programme for ${season.name}`}</option>
             {open.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
           {errors.programme ? <span className="field-error">{errors.programme}</span> : null}
         </label>
         <label className="form-field">Crop
-          <select required value={form.crop} disabled={!programme} onChange={(event) => setForm({ ...form, crop: event.target.value })}>
+          <select required value={form.crop} disabled={!programme} onChange={(event) => setForm({ ...form, crop: event.target.value, lines: {} })}>
             <option value="">{programme ? 'Choose one of the programme’s crops' : 'Choose the programme first'}</option>
             {(programme?.crop_names || []).map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
@@ -246,12 +277,38 @@ function RequestForm({ request = null, season, programmes, onSaved, onCancel }) 
           {errors.input_category ? <span className="field-error">{errors.input_category}</span> : null}
         </label>
         <label className="form-field">Requested hectares
-          <input required type="number" min="0.01" step="0.01" value={form.requested_hectares} onChange={(event) => setForm({ ...form, requested_hectares: event.target.value })} />
+          <input required type="number" min="0.01" step="any" value={form.requested_hectares} onChange={(event) => setForm({ ...form, requested_hectares: event.target.value })} />
           {errors.requested_hectares ? <span className="field-error">{errors.requested_hectares}</span> : null}
         </label>
         <label className="form-field">Agricultural year<input value={season.name} readOnly title="Change the agricultural year in the header" /></label>
         <label className="form-field">Notes<input value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} placeholder="Optional" /></label>
       </div>
+      {programme && form.crop ? (
+        <fieldset className="request-products">
+          <legend>Products and varieties from {programme.name}’s {form.crop} catalogue</legend>
+          <p className="field-hint">Enter the hectares wanted for each product. Leave a product empty to leave it out. Seed varieties share the land, so together they cannot exceed the requested hectares.</p>
+          {!products.length ? <div className="form-message">{catalogue.key === catalogueKey ? `${programme.name} has no ${form.input_category ? CATEGORY_LABEL[form.input_category].toLowerCase() : 'products'} in its ${form.crop} catalogue yet. Add them in the Crop Catalogue.` : 'Loading the catalogue…'}</div> : (
+            <div className="table-wrap">
+              <table className="data-table compact">
+                <thead><tr><th>Input type</th><th>Product or variety</th><th className="num">Qty per ha</th><th className="num">Price</th><th className="num">Requested hectares</th></tr></thead>
+                <tbody>
+                  {CATEGORIES.flatMap(([code]) => products.filter((row) => row.input_category === code)).map((row) => (
+                    <tr key={row.id}>
+                      <td>{CATEGORY_LABEL[row.input_category]}</td>
+                      <td>{row.input_product_name}</td>
+                      <td className="num">{qty(row.rate_per_hectare, 4)} {row.unit}</td>
+                      <td className="num">{money(row.cost_per_unit)} / {row.unit}</td>
+                      <td className="num"><input aria-label={`Hectares for ${row.input_product_name}`} type="number" min="0" step="any" value={form.lines[row.id] || ''} onChange={(event) => setLine(row.id, event.target.value)} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {seedTotal > 0 ? <span className={seedTotal > Number(form.requested_hectares || 0) ? 'field-error' : 'field-hint'}>Seed varieties: {hectares(seedTotal)} of {hectares(form.requested_hectares || 0)}.</span> : null}
+          {errors.lines ? <span className="field-error" role="alert">{errors.lines}</span> : null}
+        </fieldset>
+      ) : null}
       <div className="workflow-form-actions">
         <button type="submit" className="primary-btn small" disabled={saving}>{saving ? 'Saving…' : request ? 'Save draft' : 'Save as draft'}</button>
         {onCancel ? <button type="button" className="ghost-btn" onClick={onCancel}>Cancel</button> : null}
@@ -260,20 +317,75 @@ function RequestForm({ request = null, season, programmes, onSaved, onCancel }) 
   )
 }
 
+function RequestRows({ row, open, children }) {
+  return (
+    <>
+      {children}
+      {open ? (
+        <tr className="allocation-lines">
+          <td colSpan="12">
+            {(row.products || []).length ? (
+              <table className="data-table compact">
+                <thead><tr><th>Input type</th><th>Product or variety</th><th className="num">Qty per ha</th><th className="num">Price</th><th className="num">Requested</th><th className="num">Approved</th><th className="num">Allocated</th><th className="num">Remaining</th><th className="num">Farmers</th></tr></thead>
+                <tbody>
+                  {ordered(row.products).map((line) => (
+                    <tr key={line.id}>
+                      <td>{CATEGORY_LABEL[line.input_category]}</td>
+                      <td>{line.product_name}{line.catalogue_active ? '' : ' (switched off in catalogue)'}</td>
+                      <td className="num">{qty(line.rate_per_hectare, 4)} {line.unit}</td>
+                      <td className="num">{line.unit_price === null ? '—' : `${money(line.unit_price)} / ${line.unit}`}</td>
+                      <td className="num">{hectares(line.requested_hectares)}</td>
+                      <td className="num">{row.status === 'APPROVED' ? hectares(line.approved_hectares) : '—'}</td>
+                      <td className="num">{hectares(line.allocated_hectares)}</td>
+                      <td className="num"><strong>{row.status === 'APPROVED' ? hectares(line.remaining_hectares) : '—'}</strong></td>
+                      <td className="num">{line.farmers}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : <p className="card-sub">This request does not name products. Allocations from it use every product in {row.programme_name}’s {row.crop} catalogue.</p>}
+          </td>
+        </tr>
+      ) : null}
+    </>
+  )
+}
+
 function Decision({ request, onClose, onApprove, onReject }) {
   const [approved, setApproved] = useState(String(Number(request.requested_hectares)))
   const [notes, setNotes] = useState('')
+  const products = ordered(request.products)
+  const [lines, setLines] = useState(() => Object.fromEntries(products.map((line) => [String(line.id), String(Number(line.requested_hectares))])))
+  const bounded = (line) => String(Math.min(Number(lines[String(line.id)] || 0), Number(approved || 0)))
   return (
-    <Modal title={`Decide on ${request.request_number}`} subtitle={`${request.programme_name} · ${request.crop} · ${request.season_name}. ${hectares(request.requested_hectares)} requested. Approve all of it or part of it.`} onClose={onClose}
+    <Modal wide title={`Decide on ${request.request_number}`} subtitle={`${request.programme_name} · ${request.crop} · ${request.season_name}. ${hectares(request.requested_hectares)} requested. Approve all of it or part of it.`} onClose={onClose}
       footer={<>
         <button type="button" className="ghost-btn" onClick={onClose}>Close</button>
         <button type="button" className="danger-solid" disabled={!notes.trim()} title={notes.trim() ? '' : 'Give the reason in the notes'} onClick={() => onReject(notes)}>Reject</button>
-        <button type="button" className="primary-btn" disabled={!(Number(approved) > 0)} onClick={() => onApprove(approved, notes)}>Approve {approved ? hectares(approved) : ''}</button>
+        <button type="button" className="primary-btn" disabled={!(Number(approved) > 0)} onClick={() => onApprove(approved, notes, Object.fromEntries(products.map((line) => [String(line.id), bounded(line)])))}>Approve {approved ? hectares(approved) : ''}</button>
       </>}>
       <label className="form-field">Approved hectares
         <input type="number" min="0.01" max={request.requested_hectares} step="0.01" value={approved} onChange={(event) => setApproved(event.target.value)} />
         <span className="field-hint">At most the {hectares(request.requested_hectares)} requested. Only approved hectares can be allocated to farmers.</span>
       </label>
+      {products.length ? (
+        <div className="table-wrap">
+          <table className="data-table compact">
+            <thead><tr><th>Product or variety</th><th>Input type</th><th className="num">Requested</th><th className="num">Approve</th></tr></thead>
+            <tbody>
+              {products.map((line) => (
+                <tr key={line.id}>
+                  <td>{line.product_name}</td>
+                  <td>{CATEGORY_LABEL[line.input_category]}</td>
+                  <td className="num">{hectares(line.requested_hectares)}</td>
+                  <td className="num"><input aria-label={`Approved hectares for ${line.product_name}`} type="number" min="0" max={line.requested_hectares} step="0.01" value={lines[String(line.id)]} onChange={(event) => setLines({ ...lines, [String(line.id)]: event.target.value })} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <span className="field-hint">Each product is approved for at most what was asked and the request's approved hectares. Enter 0 to leave a product out.</span>
+        </div>
+      ) : null}
       <label className="form-field">Notes<textarea rows="3" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Required when rejecting" /></label>
     </Modal>
   )

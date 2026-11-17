@@ -2,7 +2,8 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
-from .models import ARDAFarmerRequest, ARDARequest, ARDARequestBatch
+from .models import ARDAFarmerRequest, ARDARequest, ARDARequestBatch, RequestBatchLine
+from .services import RequestWorkflowError
 
 
 class ARDARequestSerializer(serializers.ModelSerializer):
@@ -26,6 +27,60 @@ class ARDARequestSerializer(serializers.ModelSerializer):
         ]
 
 
+class RequestBatchLineSerializer(serializers.ModelSerializer):
+    """A product or variety in a request. Everything but the hectares is read from the catalogue line."""
+
+    product_name = serializers.SerializerMethodField()
+    input_category = serializers.CharField(source="requirement.input_category", read_only=True)
+    unit = serializers.CharField(source="requirement.unit", read_only=True)
+    rate_per_hectare = serializers.DecimalField(source="requirement.rate_per_hectare", max_digits=14, decimal_places=4, read_only=True)
+    unit_price = serializers.DecimalField(source="requirement.cost_per_unit", max_digits=14, decimal_places=4, read_only=True)
+    pack_label = serializers.CharField(source="requirement.pack_label", read_only=True)
+    pack_size = serializers.DecimalField(source="requirement.pack_size", max_digits=14, decimal_places=4, read_only=True)
+    catalogue_active = serializers.BooleanField(source="requirement.active", read_only=True)
+    allocated_hectares = serializers.SerializerMethodField()
+    remaining_hectares = serializers.SerializerMethodField()
+    farmers = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RequestBatchLine
+        fields = [
+            "id", "requirement", "product_name", "input_category", "unit", "rate_per_hectare", "unit_price", "pack_label", "pack_size",
+            "catalogue_active", "requested_hectares", "approved_hectares", "allocated_hectares", "remaining_hectares", "farmers",
+        ]
+
+    def get_product_name(self, obj):
+        requirement = obj.requirement
+        return requirement.input_product.name if requirement.input_product_id else requirement.item_name
+
+    def _figures(self, obj):
+        from .services import line_figures
+
+        cache = self.context.setdefault("_line_figures", {})
+        if obj.pk not in cache:
+            cache[obj.pk] = line_figures(obj)
+        return cache[obj.pk]
+
+    def get_allocated_hectares(self, obj):
+        return str(self._figures(obj)["allocated_hectares"])
+
+    def get_remaining_hectares(self, obj):
+        return str(self._figures(obj)["available_hectares"])
+
+    def get_farmers(self, obj):
+        return self._figures(obj)["farmers"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        if request is not None:
+            from apps.accounts.privacy import hides_money
+
+            if hides_money(request.user):
+                data["unit_price"] = None
+        return data
+
+
 class ARDARequestBatchSerializer(serializers.ModelSerializer):
     programme_name = serializers.CharField(source="programme.name", read_only=True)
     season_name = serializers.SerializerMethodField()
@@ -47,6 +102,8 @@ class ARDARequestBatchSerializer(serializers.ModelSerializer):
     programme_active = serializers.BooleanField(source="programme.is_active", read_only=True)
     approved_by_name = serializers.SerializerMethodField()
     created_by_name = serializers.SerializerMethodField()
+    lines = serializers.ListField(child=serializers.DictField(), required=False, write_only=True)
+    products = serializers.SerializerMethodField()
 
     class Meta:
         model = ARDARequestBatch
@@ -56,11 +113,16 @@ class ARDARequestBatchSerializer(serializers.ModelSerializer):
             "requested_hectares", "approved_hectares", "allocated_hectares", "available_hectares", "remaining_hectares",
             "date_created", "date_submitted", "decided_at", "decision_notes", "total_farmers", "total_requested_hectares", "status", "status_label",
             "created_by", "created_by_name", "approved_by", "approved_by_name", "submission_reference", "notes",
+            "lines", "products",
         ]
         read_only_fields = [
             "request_number", "created_by", "approved_by", "date_created", "date_submitted", "decided_at", "decision_notes",
             "total_farmers", "total_requested_hectares", "status", "season_name",
         ]
+
+    def get_products(self, obj):
+        rows = obj.lines.select_related("requirement__input_product", "batch")
+        return RequestBatchLineSerializer(rows, many=True, context=self.context).data
 
     def get_approved_hectares(self, obj):
         return self._snapshot(obj)["approved_hectares"]
@@ -136,6 +198,8 @@ class ARDARequestBatchSerializer(serializers.ModelSerializer):
                 validated_data=validated_data,
                 created_by=self.context["request"].user,
             )
+        except RequestWorkflowError as error:
+            raise serializers.ValidationError({"lines": [str(error)]}) from error
         except ValueError as error:
             message = str(error)
             raise serializers.ValidationError({self._error_field(message): [message]}) from error
@@ -156,6 +220,8 @@ class ARDARequestBatchSerializer(serializers.ModelSerializer):
 
         try:
             return ARDARequestBatchService.update_batch(instance=instance, validated_data=validated_data)
+        except RequestWorkflowError as error:
+            raise serializers.ValidationError({"lines": [str(error)]}) from error
         except ValueError as error:
             message = str(error)
             raise serializers.ValidationError({self._error_field(message): [message]}) from error

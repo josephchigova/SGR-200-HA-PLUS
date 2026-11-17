@@ -18,7 +18,7 @@ from django.utils import timezone
 
 from apps.arda_requests import stock
 from apps.arda_requests.models import ARDARequestBatch
-from apps.arda_requests.services import batch_figures
+from apps.arda_requests.services import batch_figures, line_figures
 from apps.farmers.models import Farmer, RegistrationCropAllocation
 from apps.farmers.services import FarmerApprovalEligibilityService
 from apps.production.models import FarmerProduction
@@ -110,8 +110,22 @@ def programme_options(*, crop, season, farmer=None):
         batches = []
         for batch in approved_batches(programme=programme, crop=crop, season=season):
             figures = batch_figures(batch)
+            products = []
+            for line in batch.lines.select_related("requirement__input_product"):
+                line_numbers = line_figures(line)
+                if line_numbers["approved_hectares"] <= 0:
+                    continue
+                requirement = line.requirement
+                products.append({
+                    "id": line.id, "requirement": requirement.id, "input_category": requirement.input_category,
+                    "name": requirement.input_product.name if requirement.input_product_id else requirement.item_name,
+                    "unit": requirement.unit, "rate_per_hectare": str(requirement.rate_per_hectare),
+                    "unit_price": str(requirement.cost_per_unit) if requirement.cost_per_unit is not None else None,
+                    "approved_hectares": str(line_numbers["approved_hectares"]),
+                    "remaining_hectares": str(line_numbers["available_hectares"]),
+                })
             batches.append({
-                "id": batch.id, "request_number": batch.request_number,
+                "id": batch.id, "request_number": batch.request_number, "products": products,
                 "input_category": batch.input_category,
                 "input_category_label": batch.get_input_category_display() if batch.input_category else "All of the programme's inputs",
                 "approved_hectares": str(figures["approved_hectares"]),
@@ -131,7 +145,58 @@ def programme_options(*, crop, season, farmer=None):
     }
 
 
-def build_plan(*, farmer, farm, season, crop, hectares, programme, batch, input_categories=None, exclude_allocation_id=None):
+def _requested_products(*, batch, programme, crop, allowed, covered, request_lines, input_categories):
+    """The products an allocation takes from a request that names its products and varieties.
+
+    Returns {category: [(catalogue line, request line)]}. Only approved lines can be used, at
+    most one seed variety, and never an input type the farmer already has for this crop.
+    """
+    approved = [line for line in batch.lines.select_related("requirement__input_product") if (line.approved_hectares or 0) > 0]
+    by_id = {line.pk: line for line in approved}
+
+    def label(line):
+        return line.requirement.input_product.name if line.requirement.input_product_id else line.requirement.item_name
+
+    if request_lines:
+        picked = []
+        for value in request_lines:
+            line = by_id.get(int(value)) if str(value).isdigit() else None
+            if line is None:
+                raise AllocationError(f"Choose products approved in input request {batch.request_number}.")
+            picked.append(line)
+    else:
+        wanted = {str(item).upper() for item in input_categories or []}
+        picked = []
+        for line in approved:
+            category = line.requirement.input_category
+            if category in covered or (wanted and category not in wanted):
+                continue
+            picked.append(line)
+        seeds = [line for line in picked if line.requirement.input_category == "SEED"]
+        if len(seeds) > 1:
+            raise AllocationError(f"Choose the seed variety: {', '.join(label(line) for line in seeds)}.")
+    if not picked:
+        raise AllocationError(f"Input request {batch.request_number} has no approved products left for this farmer.")
+    if len([line for line in picked if line.requirement.input_category == "SEED"]) > 1:
+        raise AllocationError("Choose one seed variety: each hectare is planted with one.")
+    selected = {}
+    for line in picked:
+        requirement = line.requirement
+        category = requirement.input_category
+        if category not in allowed:
+            raise AllocationError(f"{programme.name} does not supply {CATEGORY_LABELS.get(category, category).lower()} for this request.")
+        if category in covered:
+            raise AllocationError(
+                f"The farmer already has {CATEGORY_LABELS[category].lower()} for {crop.name} from {covered[category].programme.name}. "
+                "Cancel that allocation first."
+            )
+        if not requirement.active:
+            raise AllocationError(f"{label(line)} is switched off in {programme.name}'s catalogue.")
+        selected.setdefault(category, []).append((requirement, line))
+    return {category: selected[category] for category in INPUT_CATEGORIES if category in selected}
+
+
+def build_plan(*, farmer, farm, season, crop, hectares, programme, batch, input_categories=None, request_lines=None, exclude_allocation_id=None):
     """Work out every line of an allocation from the database. Returns the plan and the problems that block it.
 
     Nothing the browser sends about products, prices, quantities or hectares left is trusted:
@@ -184,7 +249,14 @@ def build_plan(*, farmer, farm, season, crop, hectares, programme, batch, input_
         raise AllocationError("Hectares exceed the farm's arable land.")
 
     covered = covered_categories(farmer=farmer, crop=crop, season=season, exclude_allocation_id=exclude_allocation_id)
-    if input_categories:
+    if batch.lines.exists():
+        # The request names its products and varieties: allocate exactly those, as approved.
+        selected = _requested_products(
+            batch=batch, programme=programme, crop=crop, allowed=allowed, covered=covered,
+            request_lines=request_lines, input_categories=input_categories,
+        )
+        chosen = list(selected)
+    elif input_categories:
         chosen = [code for code in INPUT_CATEGORIES if code in {str(item).upper() for item in input_categories}]
         outside = [CATEGORY_LABELS.get(code, code) for code in chosen if code not in allowed]
         if outside or not chosen:
@@ -206,7 +278,11 @@ def build_plan(*, farmer, farm, season, crop, hectares, programme, batch, input_
     lines = []
     total_cost = Decimal("0.00")
     for category in chosen:
-        requirements = _catalogue(programme, crop, category)
+        if batch.lines.exists():
+            pairs = selected[category]
+        else:
+            pairs = [(requirement, None) for requirement in _catalogue(programme, crop, category)]
+        requirements = [requirement for requirement, _line in pairs]
         if not requirements:
             raise AllocationError(f"{programme.name} has no {CATEGORY_LABELS[category].lower()} in its {crop.name} catalogue. Add it in the Crop Catalogue.")
         unpriced = [requirement.input_product.name for requirement in requirements if not requirement.cost_per_unit or requirement.cost_per_unit <= 0]
@@ -214,7 +290,7 @@ def build_plan(*, farmer, farm, season, crop, hectares, programme, batch, input_
             raise AllocationError(f"{programme.name}: set a unit price for {', '.join(unpriced)} in the Crop Catalogue.")
         category_cost = Decimal("0.00")
         category_lines = []
-        for requirement in requirements:
+        for requirement, request_line in pairs:
             required = (area * requirement.rate_per_hectare).quantize(FOUR)
             price = Decimal(requirement.cost_per_unit)
             cost = (required * price).quantize(TWO)
@@ -225,7 +301,18 @@ def build_plan(*, farmer, farm, season, crop, hectares, programme, batch, input_
                 "rate_per_hectare": requirement.rate_per_hectare, "unit_price": price,
                 "pack_label": requirement.pack_label, "pack_size": requirement.pack_size, "pack_price": requirement.pack_price,
                 "packs": packs, "required_quantity": required, "cost": cost,
+                "request_line": request_line, "line_figures": None,
             }
+            if request_line is not None:
+                # Each product or variety has its own approved hectares.
+                numbers = line_figures(request_line, exclude_allocation_id=exclude_allocation_id)
+                entry["line_figures"] = numbers
+                if area > numbers["available_hectares"]:
+                    problems.append(
+                        f"{requirement.input_product.name} has {numbers['available_hectares'].normalize():f} ha of its "
+                        f"{numbers['approved_hectares'].normalize():f} approved hectares left in {batch.request_number}, "
+                        f"and this allocation needs {area.normalize():f} ha."
+                    )
             category_cost += cost
             category_lines.append(entry)
             lines.append(entry)
@@ -277,6 +364,9 @@ def serialize_plan(plan, *, show_money=True):
                         "input_product": line["input_product"].pk, "product_name": line["input_product"].name, "unit": line["unit"],
                         "rate_per_hectare": qty(line["rate_per_hectare"]), "required_quantity": qty(line["required_quantity"]),
                         "pack_label": line["pack_label"], "packs": str(line["packs"]) if line["packs"] is not None else None,
+                        "request_line": line["request_line"].pk if line["request_line"] else None,
+                        "approved_hectares": str(line["line_figures"]["approved_hectares"]) if line["line_figures"] else None,
+                        "remaining_hectares": str(line["line_figures"]["available_hectares"]) if line["line_figures"] else None,
                         "unit_price": money(line["unit_price"]), "cost": money(line["cost"]),
                     }
                     for line in entry["lines"]
@@ -288,7 +378,7 @@ def serialize_plan(plan, *, show_money=True):
 
 
 @transaction.atomic
-def confirm(*, farmer, farm, season, crop, hectares, programme, batch, input_categories=None, user=None, crop_season=None):
+def confirm(*, farmer, farm, season, crop, hectares, programme, batch, input_categories=None, request_lines=None, user=None, crop_season=None):
     """Make the allocation: lock the farmer and the request, re-check everything, then record it."""
     if crop_season and crop is not None and crop.category != crop_season:
         raise AllocationError(f"{crop.name} is not a {'Summer' if crop_season == 'SUMMER' else 'Winter'} crop.")
@@ -299,7 +389,7 @@ def confirm(*, farmer, farm, season, crop, hectares, programme, batch, input_cat
         batch = ARDARequestBatch.objects.select_for_update(of=("self",)).select_related("programme", "season").get(pk=batch.pk)
     plan = build_plan(
         farmer=farmer, farm=farm, season=season, crop=crop, hectares=hectares,
-        programme=programme, batch=batch, input_categories=input_categories,
+        programme=programme, batch=batch, input_categories=input_categories, request_lines=request_lines,
     )
     if plan["problems"]:
         raise AllocationError(" ".join(plan["problems"]))
@@ -315,7 +405,7 @@ def confirm(*, farmer, farm, season, crop, hectares, programme, batch, input_cat
     for line in plan["lines"]:
         InputAllocationLine.objects.create(
             allocation=allocation, source_requirement=line["requirement"], input_category=line["category"],
-            programme=programme, input_product=line["input_product"],
+            programme=programme, input_product=line["input_product"], request_line=line["request_line"],
             group_name=CATEGORY_LABELS[line["category"]], item_name=line["input_product"].name, unit=line["unit"],
             rate_per_hectare=line["rate_per_hectare"], cost_per_unit=line["unit_price"],
             pack_label=line["pack_label"], pack_size=line["pack_size"], pack_price=line["pack_price"],

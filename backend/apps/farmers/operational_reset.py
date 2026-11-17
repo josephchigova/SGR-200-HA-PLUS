@@ -16,6 +16,7 @@ from apps.arda_requests.models import (
     ARDARequestNumberSequence,
     BatchStockMovement,
     RequestBatchInput,
+    RequestBatchLine,
 )
 from apps.clusters.models import Cluster
 from apps.farmers.models import (
@@ -119,6 +120,8 @@ def operational_models():
         ("ARDA requests", ARDARequest),
         # Batch inputs point at their request batch (PROTECT).
         ("Request batch inputs", RequestBatchInput),
+        # Request product lines point at catalogue lines (PROTECT); allocation lines point at them.
+        ("Request product lines", RequestBatchLine),
         ("ARDA request batches", ARDARequestBatch),
         ("Subscription payments", SubscriptionPayment),
         ("Farmer subscriptions", FarmerSubscription),

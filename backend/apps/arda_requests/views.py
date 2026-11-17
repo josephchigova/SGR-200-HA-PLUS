@@ -25,7 +25,7 @@ class ARDARequestViewSet(viewsets.ModelViewSet):
 
 
 class ARDARequestBatchViewSet(viewsets.ModelViewSet):
-    queryset = ARDARequestBatch.objects.select_related("programme", "season", "approved_by", "created_by").all()
+    queryset = ARDARequestBatch.objects.select_related("programme", "season", "approved_by", "created_by").prefetch_related("lines").all()
     serializer_class = ARDARequestBatchSerializer
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
     # Request batches are organisation-wide submissions to ARDA.
@@ -65,7 +65,8 @@ class ARDARequestBatchViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="approve")
     def approve(self, request, pk=None):
         return self._decide(request, lambda batch: approve_request(
-            batch, hectares=request.data.get("approved_hectares"), notes=request.data.get("notes", ""), user=request.user,
+            batch, hectares=request.data.get("approved_hectares"), line_hectares=request.data.get("lines") or {},
+            notes=request.data.get("notes", ""), user=request.user,
         ))
 
     @action(detail=True, methods=["post"], url_path="reject")

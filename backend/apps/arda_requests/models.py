@@ -63,6 +63,39 @@ class ARDARequestBatch(models.Model):
         return self.request_number
 
 
+class RequestBatchLine(models.Model):
+    """One product or variety in an input request, taken from the programme's crop catalogue.
+
+    Only the hectares are stored here. The product, its input type, unit, quantity per hectare
+    and price are read from the catalogue line, so they are never typed in twice. For example
+    a SEEDCO maize request for 20,000 ha may ask for Mbizi on 8,000 ha and Shumba on 7,000 ha.
+    """
+
+    batch = models.ForeignKey(ARDARequestBatch, on_delete=models.CASCADE, related_name="lines")
+    requirement = models.ForeignKey("programmes.CropInputRequirement", on_delete=models.PROTECT, related_name="request_lines")
+    requested_hectares = models.DecimalField(max_digits=14, decimal_places=2)
+    # Set when the request is approved. Only approved hectares can be allocated to farmers.
+    approved_hectares = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+
+    class Meta:
+        ordering = ["batch_id", "requirement__input_category", "requirement__input_product__name", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["batch", "requirement"], name="unique_request_batch_line"),
+            models.CheckConstraint(condition=models.Q(requested_hectares__gt=0), name="request_line_requested_positive"),
+            models.CheckConstraint(
+                condition=models.Q(approved_hectares__isnull=True) | models.Q(approved_hectares__gte=0),
+                name="request_line_approved_not_negative",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(approved_hectares__isnull=True) | models.Q(approved_hectares__lte=models.F("requested_hectares")),
+                name="request_line_approved_within_requested",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.batch.request_number} - {self.requirement.item_name}"
+
+
 class ARDARequestNumberSequence(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     next_number = models.PositiveIntegerField(default=1000)

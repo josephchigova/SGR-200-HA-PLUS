@@ -17,7 +17,7 @@ import { useFormDraft } from '../drafts'
 import { CATEGORY_LABEL, listOf, loadAll, money, qty } from '../programmeData'
 
 const STATUS = { ALLOCATED: ['Allocated', 'good'], PENDING: ['Pending farmer approval', 'warn'], COLLECTED: ['Collected', 'good'], CANCELLED: ['Cancelled', 'bad'] }
-const EMPTY = { farmer: '', farm: '', crop: '', programme: '', request_batch: '', hectares: '', input_categories: [] }
+const EMPTY = { farmer: '', farm: '', crop: '', programme: '', request_batch: '', hectares: '', input_categories: [], request_lines: [] }
 
 function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodStatus = 'ready' }) {
   const { can, profile } = useAuth()
@@ -229,13 +229,33 @@ function AllocationForm({ season, cropSeason, showMoney, onAllocated }) {
   const batch = programme?.batches.find((item) => String(item.id) === String(form.request_batch)) || null
   const covered = options?.covered || {}
   const allowed = programme ? (batch?.input_category ? [batch.input_category] : programme.input_categories) : []
+  const batchProducts = batch?.products || []
+  const hasProducts = batchProducts.length > 0
+  // Products the request approved, by input type, leaving out input types the farmer already has.
+  const defaultLines = (item) => {
+    const products = (item?.products || []).filter((product) => !covered[product.input_category])
+    const seeds = products.filter((product) => product.input_category === 'SEED')
+    return products.filter((product) => product.input_category !== 'SEED' || seeds.length === 1).map((product) => String(product.id))
+  }
+  const toggleLine = (product) => {
+    const id = String(product.id)
+    const others = form.request_lines.filter((value) => value !== id)
+    if (product.input_category === 'SEED') {
+      // One seed variety per hectare: picking one replaces any other.
+      const seedIds = batchProducts.filter((item) => item.input_category === 'SEED').map((item) => String(item.id))
+      change({ request_lines: form.request_lines.includes(id) ? others : [...others.filter((value) => !seedIds.includes(value)), id] })
+    } else {
+      change({ request_lines: form.request_lines.includes(id) ? others : [...others, id] })
+    }
+  }
 
-  const ready = form.farmer && form.crop && form.programme && form.request_batch && Number(form.hectares) > 0
+  const ready = form.farmer && form.crop && form.programme && form.request_batch && Number(form.hectares) > 0 && (!batchProducts.length || form.request_lines.length > 0)
   const payload = useMemo(() => ({
     farmer: Number(form.farmer), farm: form.farm ? Number(form.farm) : null, season: season.id, crop: Number(form.crop),
     programme: Number(form.programme), request_batch: Number(form.request_batch), hectares: form.hectares,
     input_categories: form.input_categories.length ? form.input_categories : undefined, crop_season: cropSeason || undefined,
-  }), [form, season.id, cropSeason])
+    request_lines: hasProducts ? form.request_lines.map(Number) : undefined,
+  }), [form, season.id, cropSeason, hasProducts])
 
   // The summary follows every change, and comes from the server, so prices and hectares are always current.
   useEffect(() => {
@@ -312,7 +332,7 @@ function AllocationForm({ season, cropSeason, showMoney, onAllocated }) {
                   </select>
                 </label>
                 <label className="form-field">Approved input request
-                  <select value={form.request_batch} disabled={!programme} onChange={(event) => change({ request_batch: event.target.value, input_categories: [] })}>
+                  <select value={form.request_batch} disabled={!programme} onChange={(event) => change({ request_batch: event.target.value, input_categories: [], request_lines: defaultLines(programme?.batches.find((item) => String(item.id) === event.target.value)) })}>
                     <option value="">{!programme ? 'Choose the programme first' : programme.batches.length ? 'Choose an approved request' : 'No approved request for this crop'}</option>
                     {(programme?.batches || []).map((item) => <option key={item.id} value={item.id}>{item.request_number} · {item.input_category_label} · {qty(item.remaining_hectares)} of {qty(item.approved_hectares)} ha left</option>)}
                   </select>
@@ -325,7 +345,32 @@ function AllocationForm({ season, cropSeason, showMoney, onAllocated }) {
               </div>
             ) : <EmptyState icon="clipboard" title="No programme supports this crop">No active programme for {season.name} supports this crop. Add it to a programme on the Programmes page.</EmptyState>
           ) : null}
-          {batch ? (
+          {batch && batchProducts.length ? (
+            <fieldset className="chip-field">
+              <legend>Products approved in {batch.request_number}</legend>
+              {CATEGORIES.filter(([code]) => batchProducts.some((product) => product.input_category === code)).map(([code, label, icon]) => {
+                const taken = covered[code]
+                return (
+                  <div key={code} className="request-product-group">
+                    <span className="request-product-type"><Icon name={icon} />{label}{code === 'SEED' ? ' · choose one variety' : ''}{taken ? ` · already from ${taken.programme_name}` : ''}</span>
+                    <div className="category-chips" role="group" aria-label={`${label} products`}>
+                      {batchProducts.filter((product) => product.input_category === code).map((product) => {
+                        const on = form.request_lines.includes(String(product.id))
+                        const short = Number(product.remaining_hectares) < Number(form.hectares || 0)
+                        return (
+                          <button key={product.id} type="button" className={on ? 'chip active' : 'chip'} aria-pressed={on} disabled={Boolean(taken)} onClick={() => toggleLine(product)}>
+                            {product.name} <small>{qty(product.remaining_hectares)} of {qty(product.approved_hectares)} ha left</small>{short ? <small className="field-error"> · not enough</small> : null}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+              <span className="field-hint">Only the products and varieties approved in this request can be allocated, each within its own approved hectares.</span>
+            </fieldset>
+          ) : null}
+          {batch && !batchProducts.length ? (
             <fieldset className="chip-field">
               <legend>Input types from {programme.programme_name}</legend>
               <div className="category-chips" role="group" aria-label="Input types to allocate">
@@ -347,7 +392,7 @@ function AllocationForm({ season, cropSeason, showMoney, onAllocated }) {
         <li>
           <h4><span>3</span>Summary</h4>
           {error ? <div className="form-message error" role="alert">{error}</div> : null}
-          {!ready ? <div className="form-message">Choose the farmer, crop, programme, approved request and hectares to see the products and costs.</div> : null}
+          {!ready ? <div className="form-message">Choose the farmer, crop, programme, approved request, products and hectares to see the quantities and costs.</div> : null}
           {ready && planning && !plan ? <div className="form-message">Working out quantities and costs…</div> : null}
           {ready && plan ? <AllocationSummary plan={plan} showMoney={showMoney} /> : null}
           <div className="workflow-form-actions">

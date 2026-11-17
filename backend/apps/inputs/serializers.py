@@ -19,6 +19,7 @@ class InputAllocationLineSerializer(MoneyPrivacyMixin, serializers.ModelSerializ
             "input_product",
             "batch_input",
             "batch_number",
+            "request_line",
             "group_name",
             "item_name",
             "rate_per_hectare",

@@ -35,6 +35,8 @@ beforeEach(() => {
     return Promise.resolve({ data: { results: [] } })
   })
   apiClient.post.mockResolvedValue({ data: plan })
+  apiClient.put.mockResolvedValue({})
+  apiClient.delete.mockResolvedValue({})
 })
 
 describe('InputAllocationsPage', () => {
@@ -56,5 +58,42 @@ describe('InputAllocationsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Review and confirm/ }))
     fireEvent.click(await screen.findByRole('button', { name: 'Confirm allocation' }))
     await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/input-allocations/programme-allocate/', expect.objectContaining({ programme: 2, request_batch: 20 })))
+  })
+
+  it('allocates the exact varieties approved in the request', async () => {
+    const withProducts = {
+      ...options,
+      covered: {},
+      options: [{
+        ...options.options[0],
+        batches: [{
+          ...options.options[0].batches[0],
+          products: [
+            { id: 31, input_category: 'SEED', name: 'Mbizi', approved_hectares: '8000.00', remaining_hectares: '7990.00' },
+            { id: 32, input_category: 'SEED', name: 'Shumba', approved_hectares: '7000.00', remaining_hectares: '7000.00' },
+            { id: 33, input_category: 'FERTILIZER', name: 'Compound D', approved_hectares: '20000.00', remaining_hectares: '19990.00' },
+          ],
+        }],
+      }],
+    }
+    apiClient.get.mockImplementation((url) => {
+      if (url === '/crops/') return Promise.resolve({ data: { results: [{ id: 5, name: 'Maize', category: 'SUMMER' }] } })
+      if (url === '/input-allocations/programme-options/') return Promise.resolve({ data: withProducts })
+      return Promise.resolve({ data: { results: [] } })
+    })
+    render(<InputAllocationsPage selectedSeason={season} periodStatus="ready" />)
+    fireEvent.click(await screen.findByText('Pick farmer'))
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Crop' }), { target: { value: '5' } })
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Programme' }), { target: { value: '2' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Approved input request' }), { target: { value: '20' } })
+    // Fertilizer is ticked; with two seed varieties approved, one must be chosen.
+    expect((await screen.findByRole('button', { name: /Compound D/ })).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: /Mbizi/ }).getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(screen.getByRole('button', { name: /Shumba/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Mbizi/ }))
+    expect(screen.getByRole('button', { name: /Shumba/ }).getAttribute('aria-pressed')).toBe('false')
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/input-allocations/programme-preview/', expect.objectContaining({
+      programme: 2, request_batch: 20, request_lines: [33, 31],
+    })), { timeout: 3000 })
   })
 })

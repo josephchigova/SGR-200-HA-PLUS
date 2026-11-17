@@ -410,6 +410,10 @@ class CropInputRequirementViewSet(viewsets.ModelViewSet):
             raise ValidationError({
                 "detail": ["This input requirement is used by allocations. Deactivate it instead of deleting it."],
             })
+        if instance.request_lines.exists():
+            raise ValidationError({
+                "detail": ["This product is named in an input request. Deactivate it instead of deleting it."],
+            })
         instance.delete()
 
 

@@ -8,7 +8,7 @@ from apps.farmers.models import Farm
 from apps.farmers.services import FarmerApprovalEligibilityService
 from apps.programmes.models import Programme, Season
 
-from .models import ARDAFarmerRequest, ARDARequestBatch
+from .models import ARDAFarmerRequest, ARDARequestBatch, RequestBatchLine
 
 INPUT_TYPES = [("SEED", "Seed"), ("FERTILIZER", "Fertilizer"), ("CHEMICALS", "Chemicals")]
 
@@ -116,6 +116,85 @@ class RequestWorkflowError(ValueError):
     pass
 
 
+def _hectares(value, label):
+    try:
+        number = Decimal(str(value)).quantize(Decimal("0.01"))
+    except Exception as error:
+        raise RequestWorkflowError(f"Enter {label} as a number.") from error
+    return number
+
+
+def line_allocations(line, *, exclude_allocation_id=None):
+    """Live allocations that took this product or variety from the request."""
+    from apps.inputs.models import InputAllocation
+
+    allocations = InputAllocation.objects.filter(calculation_lines__request_line=line).exclude(status=InputAllocation.STATUS_CANCELLED)
+    if exclude_allocation_id is not None:
+        allocations = allocations.exclude(pk=exclude_allocation_id)
+    return InputAllocation.objects.filter(pk__in=allocations.values("pk"))
+
+
+def line_figures(line, *, exclude_allocation_id=None):
+    """Requested, approved, allocated and remaining hectares of one product or variety in a request."""
+    allocations = line_allocations(line, exclude_allocation_id=exclude_allocation_id)
+    allocated = allocations.aggregate(total=Sum("hectares"))["total"] or Decimal("0.00")
+    approved = Decimal(line.approved_hectares or 0) if line.batch.status == ARDARequestBatch.STATUS_APPROVED else Decimal("0.00")
+    return {
+        "requested_hectares": Decimal(line.requested_hectares),
+        "approved_hectares": approved,
+        "allocated_hectares": allocated,
+        "available_hectares": max(approved - allocated, Decimal("0.00")),
+        "farmers": allocations.values("farmer_id").distinct().count(),
+    }
+
+
+def save_request_lines(batch, lines):
+    """Replace a draft request's products and varieties.
+
+    Each line names a line of the programme's catalogue for the request's crop and the hectares
+    wanted for it. A product can be asked for on at most the request's hectares. Seed varieties
+    are alternatives for the same land, so together they cannot exceed the request's hectares.
+    """
+    from apps.programmes.models import Crop, CropInputRequirement
+
+    if lines is None:
+        return
+    if batch.status != ARDARequestBatch.STATUS_PENDING:
+        raise RequestWorkflowError("Only a draft request's products can be changed.")
+    crop = Crop.objects.filter(name__iexact=(batch.crop or "").strip()).first()
+    total = Decimal(batch.requested_hectares)
+    seen = set()
+    rows = []
+    seed_total = Decimal("0.00")
+    for item in lines:
+        requirement = CropInputRequirement.objects.select_related("input_product").filter(pk=item.get("requirement")).first()
+        if requirement is None or requirement.programme_id != batch.programme_id or crop is None or requirement.crop_id != crop.pk:
+            raise RequestWorkflowError(f"Choose products from {batch.programme.name}'s {batch.crop} catalogue.")
+        name = requirement.input_product.name if requirement.input_product_id else requirement.item_name
+        if not requirement.active:
+            raise RequestWorkflowError(f"{name} is switched off in the catalogue.")
+        if batch.input_category and requirement.input_category != batch.input_category:
+            raise RequestWorkflowError(f"{name} is not {batch.get_input_category_display().lower()}, which this request is for.")
+        if requirement.pk in seen:
+            raise RequestWorkflowError(f"{name} is listed twice.")
+        seen.add(requirement.pk)
+        hectares = _hectares(item.get("requested_hectares"), f"the hectares for {name}")
+        if hectares <= 0:
+            raise RequestWorkflowError(f"Enter hectares greater than zero for {name}, or leave it out.")
+        if hectares > total:
+            raise RequestWorkflowError(f"{name}: {hectares.normalize():f} ha is more than the {total.normalize():f} ha requested.")
+        if requirement.input_category == "SEED":
+            seed_total += hectares
+        rows.append(RequestBatchLine(batch=batch, requirement=requirement, requested_hectares=hectares))
+    if seed_total > total:
+        raise RequestWorkflowError(
+            f"The seed varieties add up to {seed_total.normalize():f} ha, more than the {total.normalize():f} ha requested. "
+            "Each hectare is planted with one variety."
+        )
+    batch.lines.all().delete()
+    RequestBatchLine.objects.bulk_create(rows)
+
+
 @transaction.atomic
 def submit_request(batch, *, user=None):
     batch = ARDARequestBatch.objects.select_for_update().get(pk=batch.pk)
@@ -130,8 +209,8 @@ def submit_request(batch, *, user=None):
 
 
 @transaction.atomic
-def approve_request(batch, *, hectares=None, notes="", user=None):
-    """Approve a submitted request for all or part of the hectares requested."""
+def approve_request(batch, *, hectares=None, line_hectares=None, notes="", user=None):
+    """Approve a submitted request for all or part of the hectares requested, product by product."""
     batch = ARDARequestBatch.objects.select_for_update().get(pk=batch.pk)
     if batch.status != ARDARequestBatch.STATUS_SUBMITTED:
         raise RequestWorkflowError(f"Only a submitted request can be approved. {batch.request_number} is {batch.get_status_display().lower()}.")
@@ -144,6 +223,26 @@ def approve_request(batch, *, hectares=None, notes="", user=None):
         raise RequestWorkflowError("Approved hectares must be greater than zero. Reject the request instead.")
     if approved > batch.requested_hectares:
         raise RequestWorkflowError(f"Approved hectares cannot be more than the {batch.requested_hectares.normalize():f} ha requested.")
+    # Each product or variety is approved on its own, for at most what was asked and the request's approved hectares.
+    lines = list(batch.lines.select_related("requirement__input_product").select_for_update(of=("self",)))
+    chosen = {str(key): value for key, value in (line_hectares or {}).items()}
+    seed_total = Decimal("0.00")
+    for line in lines:
+        name = line.requirement.input_product.name if line.requirement.input_product_id else line.requirement.item_name
+        given = chosen.get(str(line.pk))
+        value = _hectares(given, f"the approved hectares for {name}") if given not in (None, "") else min(Decimal(line.requested_hectares), approved)
+        if value < 0 or value > line.requested_hectares:
+            raise RequestWorkflowError(f"{name}: approve between 0 and the {line.requested_hectares.normalize():f} ha requested.")
+        if value > approved:
+            raise RequestWorkflowError(f"{name}: {value.normalize():f} ha is more than the {approved.normalize():f} ha approved for the request.")
+        if line.requirement.input_category == "SEED":
+            seed_total += value
+        line.approved_hectares = value
+    if seed_total > approved:
+        raise RequestWorkflowError(f"The approved seed varieties add up to {seed_total.normalize():f} ha, more than the {approved.normalize():f} ha approved.")
+    if lines and not any(line.approved_hectares for line in lines):
+        raise RequestWorkflowError("Approve hectares for at least one product, or reject the request.")
+    RequestBatchLine.objects.bulk_update(lines, ["approved_hectares"])
     batch.status = ARDARequestBatch.STATUS_APPROVED
     batch.approved_hectares = approved
     batch.approved_by = user if getattr(user, "is_authenticated", False) else None
@@ -315,6 +414,7 @@ class ARDARequestBatchService:
         )
         cls._validate_batch_capacity(programme, requested_hectares, input_category=input_category)
 
+        lines = validated_data.pop("lines", None)
         batch_data = {
             key: value
             for key, value in validated_data.items()
@@ -330,6 +430,7 @@ class ARDARequestBatchService:
             }
         )
         batch = ARDARequestBatch.objects.create(**batch_data)
+        save_request_lines(batch, lines)
         sequence.next_number = number + 1
         sequence.save(update_fields=["next_number"])
         return batch
@@ -338,6 +439,7 @@ class ARDARequestBatchService:
     @transaction.atomic
     def update_batch(cls, *, instance, validated_data):
         batch = ARDARequestBatch.objects.select_for_update().get(pk=instance.pk)
+        lines = validated_data.pop("lines", None)
         if batch.status != ARDARequestBatch.STATUS_PENDING:
             raise ValueError(
                 f"{batch.request_number} is {batch.get_status_display().lower()}, so it can no longer be changed. "
@@ -378,6 +480,10 @@ class ARDARequestBatchService:
         batch.season = season
         batch.requested_hectares = requested_hectares
         batch.save()
+        if lines is None and batch.lines.exists():
+            # The products already asked for must still fit the request's crop, input type and hectares.
+            lines = [{"requirement": line.requirement_id, "requested_hectares": line.requested_hectares} for line in batch.lines.all()]
+        save_request_lines(batch, lines)
         return batch
 
 

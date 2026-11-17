@@ -3698,3 +3698,37 @@ select.invalid,
     flex-wrap: wrap;
   }
 }
+
+.request-products {
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.request-products legend {
+  margin-bottom: 4px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.request-products input[type="number"],
+.modal input[type="number"].narrow {
+  max-width: 120px;
+  text-align: right;
+}
+
+.request-product-group {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.request-product-type {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
