@@ -51,7 +51,7 @@ function eligibleCell(column, row) {
 
 const SUBTITLES = {
   Programmes: 'Input programmes with their agricultural year, crop and announced hectares.',
-  'Input Requests': 'Requests submitted to ARDA, with the capacity still available in each batch.',
+  'Input Requests': 'Request hectares per programme, crop and input type. Allocations to farmers use these hectares as soon as a request is created.',
   'Farmer Production': 'Planted hectares and actual production for each farmer and crop.',
   'Seasonal Farmer Planting': 'What each farmer plants in the Summer and Winter of the selected year.',
   'GMB Deliveries': 'Grain delivered to GMB. Each delivery reduces the farmer’s input debt.',

@@ -27,6 +27,8 @@ import LeadFarmersPage from './pages/LeadFarmersPage'
 import FarmerDetailsPage from './pages/FarmerDetailsPage'
 import FarmersPage from './pages/FarmersPage'
 import InputAllocationsPage from './pages/InputAllocationsPage'
+import InputRequestsPage from './pages/InputRequestsPage'
+import ProgrammesPage from './pages/ProgrammesPage'
 import ProductionPage from './pages/ProductionPage'
 import InputDebtPage from './pages/InputDebtPage'
 import LoginPage from './pages/LoginPage'
@@ -39,7 +41,6 @@ import SubscriptionsPage from './pages/SubscriptionsPage'
 import UsersPage from './pages/UsersPage'
 import VerificationPage from './pages/VerificationPage'
 import WorkflowPage from './pages/WorkflowPage'
-import BatchStock from './components/BatchStock'
 import { workflowPages } from './pages/workflowConfig'
 import { watchMobileTables } from './components/labelMobileTables'
 
@@ -491,8 +492,8 @@ function Workspace() {
             <Route path="/verification" element={<Guard module="verification"><VerificationPage /></Guard>} />
             <Route path="/subscriptions" element={<Guard module="subscriptions"><SubscriptionsPage selectedSeason={selectedSeason} /></Guard>} />
             <Route path="/crops" element={<Guard module="crops"><CropCataloguePage /></Guard>} />
-            <Route path="/programmes" element={<Guard module="programmes"><WorkflowPage {...workflowPages.programmes} {...period} module="programmes" /></Guard>} />
-            <Route path="/arda-requests" element={<Guard module="arda"><><WorkflowPage {...workflowPages.arda} {...period} module="arda" /><BatchStock selectedSeason={period.selectedSeason} /></></Guard>} />
+            <Route path="/programmes" element={<Guard module="programmes"><ProgrammesPage {...period} /></Guard>} />
+            <Route path="/arda-requests" element={<Guard module="arda"><InputRequestsPage {...period} /></Guard>} />
             <Route path="/input-allocations" element={<Guard module="allocations"><InputAllocationsPage {...period} /></Guard>} />
             <Route path="/production" element={<Guard module="production"><ProductionPage {...period} /></Guard>} />
             <Route path="/seasonal-planting" element={<Guard module="planting"><WorkflowPage {...workflowPages.seasonalPlanting} {...period} module="planting" /></Guard>} />

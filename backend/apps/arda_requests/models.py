@@ -14,8 +14,9 @@ class ARDARequestBatch(models.Model):
     STATUS_APPROVED = "APPROVED"
     STATUS_REJECTED = "REJECTED"
 
+    # PENDING is a draft: it can still be edited and has not been sent for approval.
     STATUS_CHOICES: ClassVar[list[tuple[str, str]]] = [
-        (STATUS_PENDING, "Pending"),
+        (STATUS_PENDING, "Draft"),
         (STATUS_SUBMITTED, "Submitted"),
         (STATUS_APPROVED, "Approved"),
         (STATUS_REJECTED, "Rejected"),
@@ -25,7 +26,16 @@ class ARDARequestBatch(models.Model):
     programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="request_batches")
     season = models.ForeignKey(Season, on_delete=models.SET_NULL, null=True, blank=True, related_name="request_batches")
     crop = models.CharField(max_length=80, blank=True)
+    # Seed, Fertilizer or Chemicals. Blank on batches made before input types: those cover every input.
+    input_category = models.CharField(
+        max_length=20, blank=True, default="",
+        choices=[("SEED", "Seed"), ("FERTILIZER", "Fertilizer"), ("CHEMICALS", "Chemicals")],
+    )
     requested_hectares = models.DecimalField(max_digits=14, decimal_places=2, default=Decimal("0.00"))
+    # Only approved hectares can be allocated to farmers. Approval may grant fewer than requested.
+    approved_hectares = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    decision_notes = models.TextField(blank=True)
     date_created = models.DateTimeField(auto_now_add=True)
     date_submitted = models.DateTimeField(null=True, blank=True)
     total_farmers = models.PositiveIntegerField(default=0)
@@ -38,6 +48,16 @@ class ARDARequestBatch(models.Model):
 
     class Meta:
         ordering = ["-date_created"]
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(approved_hectares__isnull=True) | models.Q(approved_hectares__gt=0),
+                name="batch_approved_hectares_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(approved_hectares__isnull=True) | models.Q(approved_hectares__lte=models.F("requested_hectares")),
+                name="batch_approved_within_requested",
+            ),
+        ]
 
     def __str__(self):
         return self.request_number

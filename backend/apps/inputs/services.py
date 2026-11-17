@@ -3,7 +3,8 @@ from decimal import Decimal
 from django.db import transaction
 from django.db.models import Q
 
-from apps.arda_requests.models import ARDAFarmerRequest, ARDARequestBatch
+from apps.arda_requests.models import ARDAFarmerRequest
+from apps.arda_requests.services import programme_hectares
 from apps.farmers.services import FarmerApprovalEligibilityService
 from apps.farmers.models import Farm
 from apps.inputs.models import InputAllocation, InputAllocationLine
@@ -22,51 +23,11 @@ class InputAllocationService:
         return None
 
     @staticmethod
-    def _scoped_arda_batches(*, programme, crop_label):
-        included_statuses = [
-            ARDARequestBatch.STATUS_PENDING,
-            ARDARequestBatch.STATUS_SUBMITTED,
-            ARDARequestBatch.STATUS_APPROVED,
-        ]
-        queryset = ARDARequestBatch.objects.filter(
-            programme_id=programme.pk,
-            status__in=included_statuses,
-        )
-        if programme.season_id is None:
-            queryset = queryset.filter(season__isnull=True)
-        else:
-            queryset = queryset.filter(Q(season_id=programme.season_id) | Q(season__isnull=True))
-
-        if crop_label:
-            generic_crop = Q(crop__isnull=True) | Q(crop="")
-            queryset = queryset.filter(Q(crop__iexact=crop_label) | generic_crop)
-        return queryset
-
-    @staticmethod
-    def _scoped_allocations(*, programme, crop_label):
-        allocations = InputAllocation.objects.filter(programme=programme).exclude(status=InputAllocation.STATUS_CANCELLED)
-        if crop_label:
-            allocations = allocations.filter(
-                Q(crop_reference__name__iexact=crop_label)
-                | Q(crop_reference__isnull=True, crop__iexact=crop_label)
-            )
-        return allocations
-
-    @staticmethod
     def _scope_capacity(*, programme, crop_label, exclude_allocation_id=None):
-        capacity_batches = InputAllocationService._scoped_arda_batches(programme=programme, crop_label=crop_label)
-        requested_hectares = sum(capacity_batches.values_list("requested_hectares", flat=True), Decimal("0.00"))
-
-        scoped_allocations = InputAllocationService._scoped_allocations(programme=programme, crop_label=crop_label)
-        if exclude_allocation_id is not None:
-            scoped_allocations = scoped_allocations.exclude(pk=exclude_allocation_id)
-        allocated_hectares = sum(scoped_allocations.values_list("hectares", flat=True), Decimal("0.00"))
-        available_hectares = max(requested_hectares - allocated_hectares, Decimal("0.00"))
-        return {
-            "requested_hectares": requested_hectares,
-            "allocated_hectares": allocated_hectares,
-            "available_hectares": available_hectares,
-        }
+        # The same hectare pool the per-category allocations draw from.
+        return programme_hectares(
+            programme=programme, season=programme.season, crop_label=crop_label, exclude_allocation_id=exclude_allocation_id,
+        )
 
     @staticmethod
     def _validate_hectares(*, farmer, farm, programme, hectares, crop_reference=None, crop_name="", allocation_id=None):

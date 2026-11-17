@@ -284,12 +284,14 @@ def _reports():
     ]
     arda_filters = ("start_date", "end_date", "agricultural_year", "season", "crop", "programme", "province", "district", "farmer", "membership")
     reports += [
-        _spec("arda-requests", "arda", "Input requests", "Recorded input request batches. Requested, allocated, available hectares and farmer counts use the same definitions as the Input Requests page.", OPERATIONS, "landscape", ("start_date", "end_date", "agricultural_year", "season", "crop", "programme", "province", "district"), [
+        _spec("arda-requests", "arda", "Input requests", "Input requests per programme, crop and agricultural year. Requested, approved, allocated and remaining hectares and farmer counts use the same definitions as the Input Requests page. Only approved hectares can be allocated.", OPERATIONS, "landscape", ("start_date", "end_date", "agricultural_year", "season", "crop", "programme", "province", "district"), [
             C("request_number", "Request number"), C("date_created", "Created", "datetime"), C("programme_name", "Programme"),
-            C("season_name", "Agricultural year"), C("crop_season", "Season"), C("crop", "Crop"),
+            C("season_name", "Agricultural year"), C("crop_season", "Season"), C("crop", "Crop"), C("input_type", "Input type"),
+            C("status", "Status"),
             C("requested_hectares", "Requested hectares", "qty", True),
+            C("approved_hectares", "Approved hectares", "qty", True),
             C("allocated_hectares", "Allocated hectares", "qty", True),
-            C("available_hectares", "Available hectares", "qty", True),
+            C("available_hectares", "Remaining approved hectares", "qty", True),
             C("farmer_count", "Farmers", "count", True),
         ], "arda_batches", date_field="date_created", season_field="season_id", crop_field="crop", programme_field="programme_id"),
         _spec("arda-farmers", "arda", "Farmers included in input requests", "Farmer-level requested and allocated hectares for each recorded request.", OPERATIONS, "landscape", arda_filters, [

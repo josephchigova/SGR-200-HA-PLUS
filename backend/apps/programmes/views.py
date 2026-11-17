@@ -17,14 +17,36 @@ class ProgrammeViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        season = self.request.query_params.get("season")
-        season_name = self.request.query_params.get("season_name")
+        from django.db.models import Q
+
+        queryset = super().get_queryset().select_related("season").prefetch_related("programme_crops__crop")
+        params = self.request.query_params
+        season = params.get("season")
+        season_name = params.get("season_name")
         queryset = filter_by_agricultural_year(queryset, season, season_name, relation="season")
-        crop_season = parse_crop_season(self.request.query_params.get("crop_season"))
+        crop_season = parse_crop_season(params.get("crop_season"))
         if crop_season:
-            queryset = filter_by_crop_name(queryset, crop_season, "crop")
+            # A programme shows in a season when any crop it supports grows in that season.
+            by_link = Q(programme_crops__active=True, programme_crops__crop__category=crop_season)
+            legacy = filter_by_crop_name(queryset, crop_season, "crop").filter(programme_crops__isnull=True).values("pk")
+            queryset = queryset.filter(by_link | Q(pk__in=legacy)).distinct()
+        if params.get("crop"):
+            queryset = queryset.filter(programme_crops__crop_id=params["crop"], programme_crops__active=True).distinct()
+        status = (params.get("capacity_status") or "").upper()
+        if status in {"ACTIVE", "INACTIVE"}:
+            queryset = queryset.filter(is_active=status == "ACTIVE")
+        if params.get("input_category"):
+            category = params["input_category"].upper()
+            queryset = queryset.filter(pk__in=[programme.pk for programme in queryset if category in (programme.input_categories or [])])
+        if params.get("search"):
+            queryset = queryset.filter(name__icontains=params["search"].strip())
         return queryset
+
+    @action(detail=True, methods=["get"], url_path="figures")
+    def figures(self, request, pk=None):
+        from .figures import programme_figures
+
+        return Response(programme_figures(self.get_object()))
 
     def perform_destroy(self, instance):
         from apps.finance.models import ExpenseClaim, JournalEntry, RecognizedReceipt, TradeReceivable

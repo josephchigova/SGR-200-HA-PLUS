@@ -4,6 +4,10 @@ import django.db.models.deletion
 
 def copy_farm_geography(apps, schema_editor):
     """Fill empty farm geography from the farmer. Never create a second farm."""
+    if schema_editor is not None and schema_editor.connection.vendor == "postgresql":
+        # Check foreign keys as each row is saved. Otherwise Postgres keeps the checks pending
+        # until commit and refuses to build the new cluster index in the same transaction.
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
     Farm = apps.get_model("farmers", "Farm")
     for farm in Farm.objects.select_related("farmer").iterator():
         farmer = farm.farmer

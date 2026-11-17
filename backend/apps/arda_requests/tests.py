@@ -42,6 +42,10 @@ class ARDARequestTests(TestCase):
         )
         self.client = APIClient()
         self.client.force_authenticate(user=self.user)
+        # Requests name a crop their programme supports. Programmes made here support Maize.
+        from apps.programmes.models import Crop
+
+        Crop.objects.get_or_create(name="Maize", defaults={"category": Crop.CATEGORY_SUMMER, "active": True})
 
     def test_arda_request_can_be_created(self):
         url = reverse("arda-request-list")
@@ -69,7 +73,7 @@ class ARDARequestTests(TestCase):
         )
         batch_response = self.client.post(
             reverse("arda-request-batch-list"),
-            {"programme": programme.pk, "requested_hectares": "100.00", "season": season.pk},
+            {"crop": "Maize", "programme": programme.pk, "requested_hectares": "100.00", "season": season.pk},
             format="json",
         )
         self.assertEqual(batch_response.status_code, 201)
@@ -101,7 +105,7 @@ class ARDARequestTests(TestCase):
         )
         batch_response = self.client.post(
             reverse("arda-request-batch-list"),
-            {"programme": programme.pk, "requested_hectares": "100.00", "season": season.pk},
+            {"crop": "Maize", "programme": programme.pk, "requested_hectares": "100.00", "season": season.pk},
             format="json",
         )
         line_response = self.client.post(
@@ -144,7 +148,7 @@ class ARDARequestTests(TestCase):
         )
         batch_response = self.client.post(
             reverse("arda-request-batch-list"),
-            {"programme": programme.pk, "requested_hectares": "100.00", "season": season.pk},
+            {"crop": "Maize", "programme": programme.pk, "requested_hectares": "100.00", "season": season.pk},
             format="json",
         )
         self.assertEqual(batch_response.status_code, 201, batch_response.data)
@@ -175,7 +179,7 @@ class ARDARequestTests(TestCase):
         )
         batch_response = self.client.post(
             reverse("arda-request-batch-list"),
-            {"programme": programme.pk, "requested_hectares": "100.00", "season": season.pk},
+            {"crop": "Maize", "programme": programme.pk, "requested_hectares": "100.00", "season": season.pk},
             format="json",
         )
         self.assertEqual(batch_response.status_code, 201, batch_response.data)
@@ -264,7 +268,7 @@ class ARDARequestTests(TestCase):
 
         response = self.client.post(
             reverse("arda-request-batch-list"),
-            {"programme": programme.pk, "season": season.pk, "requested_hectares": "10.00"},
+            {"crop": "Maize", "programme": programme.pk, "season": season.pk, "requested_hectares": "10.00"},
             format="json",
         )
 
@@ -282,7 +286,7 @@ class ARDARequestTests(TestCase):
             with self.subTest(amount=amount):
                 response = self.client.post(
                     url,
-                    {"programme": programme.pk, "season": season.pk, "requested_hectares": amount},
+                    {"crop": "Maize", "programme": programme.pk, "season": season.pk, "requested_hectares": amount},
                     format="json",
                 )
                 self.assertEqual(response.status_code, 400)
@@ -295,13 +299,13 @@ class ARDARequestTests(TestCase):
         )
         created = self.client.post(
             reverse("arda-request-batch-list"),
-            {"programme": programme.pk, "season": season.pk, "requested_hectares": "75.00"},
+            {"crop": "Maize", "programme": programme.pk, "season": season.pk, "requested_hectares": "75.00"},
             format="json",
         )
         self.assertEqual(created.status_code, 201, created.data)
         rejected = self.client.post(
             reverse("arda-request-batch-list"),
-            {"programme": programme.pk, "season": season.pk, "requested_hectares": "26.00"},
+            {"crop": "Maize", "programme": programme.pk, "season": season.pk, "requested_hectares": "26.00"},
             format="json",
         )
         self.assertEqual(rejected.status_code, 400)
@@ -387,7 +391,7 @@ class ARDARequestTests(TestCase):
         )
         batch_response = self.client.post(
             reverse("arda-request-batch-list"),
-            {"programme": programme.pk, "requested_hectares": "100.00", "season": season.pk},
+            {"crop": "Maize", "programme": programme.pk, "requested_hectares": "100.00", "season": season.pk},
             format="json",
         )
         self.assertEqual(batch_response.status_code, 201, batch_response.data)
@@ -467,12 +471,21 @@ class ARDARequestTests(TestCase):
             farmer=farmer_two, farm=farm_two, programme=programme, crop="Maize", hectares="50.00",
         )
 
+        # Until the request is approved it has nothing to allocate.
+        row = self.client.get(reverse("arda-request-batch-list"), {"season": season.pk, "page_size": 20}).data["results"][0]
+        self.assertEqual((row["approved_hectares"], row["available_hectares"]), (Decimal("0.00"), Decimal("0.00")))
+        self.client.post(reverse("arda-request-batch-submit", kwargs={"pk": batch.data["id"]}))
+        approved = self.client.post(reverse("arda-request-batch-approve", kwargs={"pk": batch.data["id"]}), {"approved_hectares": "15000"}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.data)
+
         snapshot = self.client.get(reverse("arda-request-batch-list"), {"season": season.pk, "page_size": 20})
         self.assertEqual(snapshot.status_code, 200, snapshot.data)
         row = snapshot.data["results"][0]
         self.assertEqual(row["id"], batch.data["id"])
+        self.assertEqual(row["requested_hectares"], "20000.00")
+        self.assertEqual(row["approved_hectares"], Decimal("15000.00"))
         self.assertEqual(row["allocated_hectares"], Decimal("170.00"))
-        self.assertEqual(row["available_hectares"], Decimal("19830.00"))
+        self.assertEqual(row["available_hectares"], Decimal("14830.00"))
         self.assertEqual(row["total_farmers"], 2)
 
     def test_batch_requested_hectares_cannot_be_reduced_below_allocated(self):
@@ -530,7 +543,7 @@ class ARDARequestTests(TestCase):
     def test_empty_batch_can_be_deleted_but_a_batch_with_farmers_cannot(self):
         season = Season.objects.create(name="2026/2027", start_date="2026-10-01", end_date="2027-09-30", status=Season.STATUS_ACTIVE)
         programme = Programme.objects.create(name="Delete Programme", code="DEL-PROG", season=season, announced_hectares="1000.00", status=Programme.STATUS_OPEN)
-        empty = self.client.post(reverse("arda-request-batch-list"), {"programme": programme.pk, "season": season.pk, "requested_hectares": "20.00"}, format="json")
+        empty = self.client.post(reverse("arda-request-batch-list"), {"crop": "Maize", "programme": programme.pk, "season": season.pk, "requested_hectares": "20.00"}, format="json")
         self.assertEqual(empty.status_code, 201, empty.data)
         deleted = self.client.delete(reverse("arda-request-batch-detail", args=[empty.data["id"]]))
         self.assertEqual(deleted.status_code, 204)
@@ -544,7 +557,7 @@ class ARDARequestTests(TestCase):
     def test_saved_request_is_the_same_dashboard_total_for_every_client(self):
         from apps.programmes.models import Crop
 
-        Crop.objects.create(name="Maize", category=Crop.CATEGORY_SUMMER, active=True)
+        Crop.objects.get_or_create(name="Maize", defaults={"category": Crop.CATEGORY_SUMMER, "active": True})
         Crop.objects.create(name="Wheat", category=Crop.CATEGORY_WINTER, active=True)
         season = Season.objects.create(name="2026/2027", start_date="2026-10-01", end_date="2027-09-30", status=Season.STATUS_ACTIVE)
         programme = Programme.objects.create(

@@ -5,7 +5,7 @@ from .models import Input, InputAllocation, InputAllocationLine, InputIssue
 
 
 class InputAllocationLineSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
-    money_fields = ('cost_per_unit', 'cost_per_hectare', 'calculated_cost')
+    money_fields = ('cost_per_unit', 'cost_per_hectare', 'calculated_cost', 'pack_price')
     programme_name = serializers.CharField(source="programme.name", read_only=True, default="")
     batch_number = serializers.CharField(source="batch_input.batch.request_number", read_only=True, default="")
 
@@ -25,6 +25,9 @@ class InputAllocationLineSerializer(MoneyPrivacyMixin, serializers.ModelSerializ
             "required_quantity",
             "unit",
             "cost_per_unit",
+            "pack_label",
+            "pack_size",
+            "pack_price",
             "cost_per_hectare",
             "calculated_cost",
             "included_in_total",
@@ -68,6 +71,8 @@ class InputAllocationSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
     season_name = serializers.SerializerMethodField()
     membership_number = serializers.CharField(source="farmer.membership_number", read_only=True)
     cancelled_by_name = serializers.SerializerMethodField()
+    request_number = serializers.CharField(source="request_batch.request_number", read_only=True, default="")
+    crop_season = serializers.SerializerMethodField()
 
     class Meta:
         model = InputAllocation
@@ -75,8 +80,8 @@ class InputAllocationSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
             "id", "farmer", "farmer_name", "membership_number", "farm", "programme", "programme_name", "crop_reference", "crop_name",
             "crop", "hectares", "calculated_input_cost_per_hectare", "total_input_cost",
             "allocation_date", "allocation_reference", "status", "collection_date", "created_at", "updated_at",
-            "season", "season_name", "sourced_by_category", "cancelled_at", "cancelled_by_name", "cancellation_reason",
-            "calculation_lines",
+            "season", "season_name", "crop_season", "request_batch", "request_number", "sourced_by_category",
+            "cancelled_at", "cancelled_by_name", "cancellation_reason", "calculation_lines",
         ]
         read_only_fields = [
             "crop",
@@ -90,6 +95,7 @@ class InputAllocationSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
             "calculation_lines",
             "season",
             "sourced_by_category",
+            "request_batch",
             "cancelled_at",
             "cancellation_reason",
         ]
@@ -97,6 +103,9 @@ class InputAllocationSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
     def get_season_name(self, obj):
         season = obj.season or getattr(obj.programme, "season", None)
         return season.name if season else ""
+
+    def get_crop_season(self, obj):
+        return obj.crop_reference.get_category_display() if obj.crop_reference_id else ""
 
     def get_cancelled_by_name(self, obj):
         user = obj.cancelled_by
@@ -109,7 +118,11 @@ class InputAllocationSerializer(MoneyPrivacyMixin, serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        return self._save_with_service(validated_data)
+        # There is no general catalogue any more: every allocation comes from a programme's own
+        # catalogue and an approved input request, through programme-preview and programme-allocate.
+        raise serializers.ValidationError({
+            "detail": ["Allocate inputs from a programme's approved input request on the Input allocations page."],
+        })
 
     def update(self, instance, validated_data):
         if instance.sourced_by_category:

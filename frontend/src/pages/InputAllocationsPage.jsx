@@ -1,8 +1,9 @@
-// Input allocation. Seed, Fertilizer and Chemicals each come from their own programme and batch.
+// Input allocation: programme -> programme crop catalogue -> approved input request -> farmer.
 //
-// Steps: farmer, agri year, crop and hectares, then a programme (and batch) for each input
-// category, then a summary of quantities, stock and costs, then a confirmation. Confirming takes
-// the stock out of the chosen batches. Cancelling returns it, with a record in each batch's history.
+// Steps: farmer, crop, programme, approved request, input types and hectares, then a summary of
+// products, quantities and costs from the programme's own catalogue, then a confirmation. The
+// server works out every quantity and price again before saving, and the allocation uses the
+// request's approved hectares. Cancelling gives them back.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
@@ -11,27 +12,12 @@ import { useAuth } from '../auth'
 import FarmerAutocomplete from '../components/FarmerAutocomplete'
 import Icon from '../components/Icon'
 import { CATEGORIES } from '../inputCategories'
-import SearchSelect from '../components/SearchSelect'
 import { DraftNotice, EmptyState, Modal, PageHead, Pill, errorMessage } from '../components/ui'
 import { useFormDraft } from '../drafts'
+import { CATEGORY_LABEL, listOf, loadAll, money, qty } from '../programmeData'
 
-const listOf = (data) => (Array.isArray(data) ? data : data?.results || [])
 const STATUS = { ALLOCATED: ['Allocated', 'good'], PENDING: ['Pending farmer approval', 'warn'], COLLECTED: ['Collected', 'good'], CANCELLED: ['Cancelled', 'bad'] }
-const CATEGORY_LABEL = Object.fromEntries(CATEGORIES.map(([code, label]) => [code, label]))
-const EMPTY = { farmer: '', farm: '', crop: '', hectares: '', selections: { SEED: { programme: '', batch: '' }, FERTILIZER: { programme: '', batch: '' }, CHEMICALS: { programme: '', batch: '' } } }
-const money = (value) => (value === null || value === undefined ? '—' : Number(value).toLocaleString('en-US', { style: 'currency', currency: 'USD' }))
-const qty = (value) => Number(value || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })
-
-async function loadAll(path, params = {}) {
-  const rows = []
-  let response = await apiClient.get(path, { params: { ...params, page_size: 200 } })
-  rows.push(...listOf(response.data))
-  for (let page = 2; response.data?.next && page < 30; page += 1) {
-    response = await apiClient.get(path, { params: { ...params, page_size: 200, page } })
-    rows.push(...listOf(response.data))
-  }
-  return rows
-}
+const EMPTY = { farmer: '', farm: '', crop: '', programme: '', request_batch: '', hectares: '', input_categories: [] }
 
 function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodStatus = 'ready' }) {
   const { can, profile } = useAuth()
@@ -43,6 +29,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
+  const [search, setSearch] = useState('')
   const [token, setToken] = useState(0)
   const [expanded, setExpanded] = useState(null)
   const [cancelling, setCancelling] = useState(null)
@@ -54,12 +41,13 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
     const params = { season: selectedSeason.id }
     if (cropSeason) params.crop_season = cropSeason
     if (statusFilter) params.status = statusFilter
+    if (search.trim()) params.search = search.trim()
     loadAll('/input-allocations/', params)
       .then((list) => { if (active) { setRows(list); setError('') } })
       .catch((requestError) => { if (active) setError(errorMessage(requestError, 'Input allocations could not be loaded.')) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [blocked, selectedSeason, cropSeason, statusFilter, token])
+  }, [blocked, selectedSeason, cropSeason, statusFilter, search, token])
 
   const refresh = useCallback(() => setToken((value) => value + 1), [])
   const totals = useMemo(() => {
@@ -69,7 +57,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
 
   return (
     <div className="page-card allocation-page">
-      <PageHead title="Input allocations" subtitle="Allocate seed, fertilizer and chemicals to a farmer's crop. Each input category can come from a different programme, and stock is taken from that programme's request batch." />
+      <PageHead title="Input allocations" subtitle="Give a farmer the inputs a programme's catalogue sets for their crop, from one of the programme's approved input requests. The farmer can get different input types from different programmes, but never the same input type twice." />
       {blocked ? <div className="form-message">Choose an agricultural year in the header.</div> : null}
       {notice ? <div className="form-message success" role="status">{notice}</div> : null}
 
@@ -78,7 +66,7 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
           season={selectedSeason}
           cropSeason={cropSeason}
           showMoney={showMoney}
-          onAllocated={(allocation) => { setNotice(`Inputs allocated to ${allocation.farmer_name} for ${allocation.crop_name || allocation.crop}. Stock was taken from the chosen batches.`); refresh() }}
+          onAllocated={(allocation) => { setNotice(`Inputs allocated to ${allocation.farmer_name} for ${allocation.crop_name || allocation.crop} from ${allocation.programme_name} (${allocation.request_number}).`); refresh() }}
         />
       ) : null}
 
@@ -88,11 +76,14 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
             <h3>Allocations for {selectedSeason?.name || 'the agri year'}</h3>
             <p className="card-sub">{totals.count} active allocation{totals.count === 1 ? '' : 's'} · {qty(totals.hectares)} ha{showMoney ? ` · ${money(totals.cost)} in inputs` : ''}</p>
           </div>
-          <select aria-label="Allocation status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
-            <option value="">All statuses</option>
-            <option value="ALLOCATED,PENDING,COLLECTED">Active</option>
-            <option value="CANCELLED">Cancelled</option>
-          </select>
+          <div className="filter-row compact">
+            <input type="search" aria-label="Search allocations" placeholder="Farmer, membership or request" value={search} onChange={(event) => setSearch(event.target.value)} />
+            <select aria-label="Allocation status" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+              <option value="">All statuses</option>
+              <option value="ALLOCATED,PENDING,COLLECTED">Active</option>
+              <option value="CANCELLED">Cancelled</option>
+            </select>
+          </div>
         </div>
         {error ? <div className="form-message error" role="alert">{error}</div> : null}
         {loading && !blocked ? <div className="form-message">Loading allocations…</div> : null}
@@ -100,22 +91,16 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
         {rows.length ? (
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>Farmer</th><th>Crop</th><th className="num">Hectares</th><th>Seed</th><th>Fertilizer</th><th>Chemicals</th>{showMoney ? <th className="num">Input cost</th> : null}<th>Status</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Farmer</th><th>Programme</th><th>Crop</th><th>Year and season</th><th>Request</th><th className="num">Hectares</th><th>Inputs</th>{showMoney ? <th className="num">Total cost</th> : null}<th>Status</th><th>Actions</th></tr></thead>
               <tbody>
                 {rows.map((row) => {
                   const [label, tone] = STATUS[row.status] || [row.status, '']
-                  const source = (code) => {
-                    const lines = (row.calculation_lines || []).filter((line) => line.input_category === code)
-                    if (!row.sourced_by_category) return code === 'SEED' ? row.programme_name : '—'
-                    return lines.length ? [...new Set(lines.map((line) => line.programme_name))].join(', ') : 'Not supplied'
-                  }
                   return (
                     <AllocationRow
                       key={row.id}
                       row={row}
                       label={label}
                       tone={tone}
-                      source={source}
                       showMoney={showMoney}
                       open={expanded === row.id}
                       onToggle={() => setExpanded(expanded === row.id ? null : row.id)}
@@ -139,22 +124,24 @@ function InputAllocationsPage({ selectedSeason = null, cropSeason = '', periodSt
   )
 }
 
-function AllocationRow({ row, label, tone, source, showMoney, open, onToggle, onCancel }) {
-  const columns = showMoney ? 9 : 8
+function AllocationRow({ row, label, tone, showMoney, open, onToggle, onCancel }) {
+  const columns = showMoney ? 10 : 9
+  const types = [...new Set((row.calculation_lines || []).map((line) => CATEGORY_LABEL[line.input_category] || line.group_name))]
   return (
     <>
       <tr className={row.status === 'CANCELLED' ? 'inactive-row' : ''}>
         <td>{row.farmer_name}<small className="block-hint">{row.membership_number}</small></td>
+        <td>{row.programme_name}</td>
         <td>{row.crop_name || row.crop}</td>
-        <td className="num">{qty(row.hectares)}</td>
-        <td>{source('SEED')}</td>
-        <td>{source('FERTILIZER')}</td>
-        <td>{source('CHEMICALS')}</td>
+        <td>{row.season_name}{row.crop_season ? ` · ${row.crop_season}` : ''}</td>
+        <td>{row.request_number || <small className="block-hint">Before approved requests</small>}</td>
+        <td className="num">{qty(row.hectares)} ha</td>
+        <td>{types.join(', ') || '—'}<small className="block-hint">{(row.calculation_lines || []).length} product{(row.calculation_lines || []).length === 1 ? '' : 's'}</small></td>
         {showMoney ? <td className="num">{money(row.total_input_cost)}</td> : null}
         <td><Pill tone={tone}>{label}</Pill></td>
         <td>
           <span className="table-actions">
-            <button type="button" className="icon-btn" title={open ? 'Hide lines' : 'Show lines'} aria-label={`${open ? 'Hide' : 'Show'} lines for ${row.farmer_name}`} onClick={onToggle}><Icon name="eye" /></button>
+            <button type="button" className="icon-btn" title={open ? 'Hide products' : 'Show products'} aria-label={`${open ? 'Hide' : 'Show'} products for ${row.farmer_name}`} onClick={onToggle}><Icon name="eye" /></button>
             {onCancel ? <button type="button" className="ghost-btn small" onClick={onCancel}>Cancel</button> : null}
           </span>
         </td>
@@ -162,17 +149,17 @@ function AllocationRow({ row, label, tone, source, showMoney, open, onToggle, on
       {open ? (
         <tr className="allocation-lines">
           <td colSpan={columns}>
-            {row.status === 'CANCELLED' ? <p className="card-sub">Cancelled {row.cancelled_at ? new Date(row.cancelled_at).toLocaleDateString() : ''}{row.cancelled_by_name ? ` by ${row.cancelled_by_name}` : ''}: {row.cancellation_reason || 'no reason recorded'}. Stock was returned to its batches.</p> : null}
+            {row.status === 'CANCELLED' ? <p className="card-sub">Cancelled {row.cancelled_at ? new Date(row.cancelled_at).toLocaleDateString() : ''}{row.cancelled_by_name ? ` by ${row.cancelled_by_name}` : ''}: {row.cancellation_reason || 'no reason recorded'}. Its hectares went back to the input request.</p> : null}
+            <p className="card-sub">Prices are the ones in {row.programme_name}'s catalogue when this allocation was made.</p>
             <table className="data-table compact">
-              <thead><tr><th>Category</th><th>Programme</th><th>Input product</th><th>Batch</th><th className="num">Quantity</th>{showMoney ? <><th className="num">Unit price</th><th className="num">Cost</th></> : null}</tr></thead>
+              <thead><tr><th>Input type</th><th>Product or variety</th><th className="num">Qty per ha</th><th className="num">Quantity</th>{showMoney ? <><th className="num">Unit price</th><th className="num">Cost</th></> : null}</tr></thead>
               <tbody>
                 {(row.calculation_lines || []).map((line) => (
                   <tr key={line.id}>
                     <td>{CATEGORY_LABEL[line.input_category] || line.group_name}</td>
-                    <td>{line.programme_name || row.programme_name}</td>
                     <td>{line.item_name}</td>
-                    <td>{line.batch_number || '—'}</td>
-                    <td className="num">{qty(line.required_quantity)} {line.unit}</td>
+                    <td className="num">{qty(line.rate_per_hectare, 4)} {line.unit}</td>
+                    <td className="num">{qty(line.required_quantity)} {line.unit}{line.pack_size ? <small className="block-hint">{qty(Math.ceil(Number(line.required_quantity) / Number(line.pack_size)), 0)} × {line.pack_label || `${qty(line.pack_size)} ${line.unit} pack`}</small> : null}</td>
                     {showMoney ? <><td className="num">{money(line.cost_per_unit)}</td><td className="num">{money(line.calculated_cost)}</td></> : null}
                   </tr>
                 ))}
@@ -196,7 +183,7 @@ function AllocationForm({ season, cropSeason, showMoney, onAllocated }) {
   const [confirming, setConfirming] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const draft = useFormDraft({ key: `allocations:programme:${season.id}`, value: form, onRestore: (data) => setForm((current) => ({ ...current, ...data, selections: { ...EMPTY.selections, ...(data.selections || {}) } })) })
+  const draft = useFormDraft({ key: `allocations:request:${season.id}`, value: form, onRestore: (data) => setForm((current) => ({ ...current, ...data })) })
 
   useEffect(() => {
     let active = true
@@ -220,30 +207,37 @@ function AllocationForm({ season, cropSeason, showMoney, onAllocated }) {
     return () => { active = false }
   }, [form.farmer])
 
-  // Programmes, products, prices and batches that can supply each category for this crop.
+  // Active programmes supporting this crop, their approved requests and their own catalogue.
+  const optionsRequest = `${form.crop}:${form.farmer}:${season.id}`
   useEffect(() => {
     if (!form.crop) return undefined
     let active = true
-    const key = `${form.crop}:${form.farmer}:${season.id}`
     apiClient.get('/input-allocations/programme-options/', { params: { crop: form.crop, season: season.id, farmer: form.farmer || undefined } })
       .then((response) => {
         if (!active) return
         setOptions(response.data)
+        setError('')
         if (response.data.crop_hectares) setForm((current) => (current.hectares ? current : { ...current, hectares: String(Number(response.data.crop_hectares)) }))
       })
       .catch((requestError) => { if (active) setError(errorMessage(requestError, 'Programmes for this crop could not be loaded.')) })
-      .finally(() => { if (active) setOptionsKey(key) })
+      .finally(() => { if (active) setOptionsKey(optionsRequest) })
     return () => { active = false }
-  }, [form.crop, form.farmer, season.id])
-  const optionsLoading = Boolean(form.crop) && optionsKey !== `${form.crop}:${form.farmer}:${season.id}`
+  }, [form.crop, form.farmer, season.id, optionsRequest])
+  const optionsLoading = Boolean(form.crop) && optionsKey !== optionsRequest
 
-  const ready = form.farmer && form.crop && Number(form.hectares) > 0 && Object.values(form.selections).some((choice) => choice.programme)
+  const programme = options?.options?.find((item) => String(item.programme) === String(form.programme)) || null
+  const batch = programme?.batches.find((item) => String(item.id) === String(form.request_batch)) || null
+  const covered = options?.covered || {}
+  const allowed = programme ? (batch?.input_category ? [batch.input_category] : programme.input_categories) : []
+
+  const ready = form.farmer && form.crop && form.programme && form.request_batch && Number(form.hectares) > 0
   const payload = useMemo(() => ({
-    farmer: Number(form.farmer), farm: form.farm ? Number(form.farm) : null, season: season.id, crop: Number(form.crop), hectares: form.hectares, crop_season: cropSeason || undefined,
-    selections: Object.fromEntries(Object.entries(form.selections).filter(([, choice]) => choice.programme).map(([code, choice]) => [code, { programme: Number(choice.programme), batch: choice.batch ? Number(choice.batch) : null }])),
+    farmer: Number(form.farmer), farm: form.farm ? Number(form.farm) : null, season: season.id, crop: Number(form.crop),
+    programme: Number(form.programme), request_batch: Number(form.request_batch), hectares: form.hectares,
+    input_categories: form.input_categories.length ? form.input_categories : undefined, crop_season: cropSeason || undefined,
   }), [form, season.id, cropSeason])
 
-  // The summary follows every change, so stock and costs are always current before confirming.
+  // The summary follows every change, and comes from the server, so prices and hectares are always current.
   useEffect(() => {
     if (!ready) return undefined
     let active = true
@@ -257,7 +251,8 @@ function AllocationForm({ season, cropSeason, showMoney, onAllocated }) {
     return () => { active = false; clearTimeout(timer) }
   }, [payload, ready])
 
-  const setSelection = (code, changes) => setForm((current) => ({ ...current, selections: { ...current.selections, [code]: { ...current.selections[code], ...changes } } }))
+  const change = (changes) => { setPlan(null); setForm((current) => ({ ...current, ...changes })) }
+  const toggleCategory = (code) => change({ input_categories: form.input_categories.includes(code) ? form.input_categories.filter((item) => item !== code) : [...form.input_categories, code] })
 
   const confirm = async () => {
     setSaving(true)
@@ -287,53 +282,73 @@ function AllocationForm({ season, cropSeason, showMoney, onAllocated }) {
         <li>
           <h4><span>1</span>Farmer and crop</h4>
           <div className="workflow-fields">
-            <FarmerAutocomplete label="Farmer" value={form.farmer} endpoint="/farmers/eligible/" seasonId={season.id} seasonName={season.name} required onChange={(farmer) => { setPlan(null); setForm((current) => ({ ...current, farmer: farmer ? String(farmer.id) : '', farm: '' })) }} />
+            <FarmerAutocomplete label="Farmer" value={form.farmer} endpoint="/farmers/eligible/" seasonId={season.id} seasonName={season.name} required onChange={(farmer) => change({ farmer: farmer ? String(farmer.id) : '', farm: '', hectares: '', input_categories: [] })} />
             <label className="form-field">Farm
-              <select value={form.farm} onChange={(event) => setForm({ ...form, farm: event.target.value })} disabled={!form.farmer}>
+              <select value={form.farm} onChange={(event) => change({ farm: event.target.value })} disabled={!form.farmer}>
                 <option value="">{form.farmer ? 'Choose a farm' : 'Choose a farmer first'}</option>
                 {farms.map((farm) => <option key={farm.id} value={farm.id}>{farm.farm_name} · {qty(farm.arable_hectares)} ha arable</option>)}
               </select>
             </label>
-            <label className="form-field">Agri year<input value={season.name} readOnly title="Change the agri year in the header" /></label>
+            <label className="form-field">Agricultural year<input value={season.name} readOnly title="Change the agricultural year in the header" /></label>
             <label className="form-field">Crop
-              <select value={form.crop} onChange={(event) => { setPlan(null); setOptions(null); setForm({ ...form, crop: event.target.value, hectares: '', selections: EMPTY.selections }) }}>
+              <select value={form.crop} onChange={(event) => { setOptions(null); change({ crop: event.target.value, programme: '', request_batch: '', hectares: '', input_categories: [] }) }}>
                 <option value="">Choose a crop</option>
-                {crops.map((crop) => <option key={crop.id} value={crop.id}>{crop.name}</option>)}
+                {crops.map((crop) => <option key={crop.id} value={crop.id}>{crop.name} ({crop.category === 'WINTER' ? 'Winter' : 'Summer'})</option>)}
               </select>
-            </label>
-            <label className="form-field">Hectares
-              <input type="number" min="0.01" step="0.01" value={form.hectares} onChange={(event) => setForm({ ...form, hectares: event.target.value })} />
-              {options?.crop_hectares ? <span className="field-hint">{qty(options.crop_hectares)} ha of this crop allocated to the farmer for {season.name}.</span> : null}
             </label>
           </div>
         </li>
         <li>
-          <h4><span>2</span>Where each input comes from</h4>
-          <p className="card-sub">Choose a programme for each category. They can all be different, or the same. Leave a category empty if the farmer does not get it.</p>
+          <h4><span>2</span>Programme and approved request</h4>
           {!form.crop ? <div className="form-message">Choose the crop first.</div> : null}
           {form.crop && optionsLoading ? <div className="form-message">Loading programmes…</div> : null}
-          {form.crop && options ? (
-            <div className="category-grid">
-              {CATEGORIES.map(([code, label, icon]) => (
-                <CategorySource
-                  key={code}
-                  label={label}
-                  icon={icon}
-                  entries={options.categories?.[code] || []}
-                  choice={form.selections[code]}
-                  showMoney={showMoney}
-                  hectares={Number(form.hectares) || 0}
-                  onChange={(changes) => setSelection(code, changes)}
-                />
-              ))}
-            </div>
+          {form.crop && options && !optionsLoading ? (
+            options.options.length ? (
+              <div className="workflow-fields">
+                <label className="form-field">Programme
+                  <select value={form.programme} onChange={(event) => change({ programme: event.target.value, request_batch: '', input_categories: [] })}>
+                    <option value="">Choose a programme</option>
+                    {options.options.map((item) => <option key={item.programme} value={item.programme}>{item.programme_name}</option>)}
+                  </select>
+                </label>
+                <label className="form-field">Approved input request
+                  <select value={form.request_batch} disabled={!programme} onChange={(event) => change({ request_batch: event.target.value, input_categories: [] })}>
+                    <option value="">{!programme ? 'Choose the programme first' : programme.batches.length ? 'Choose an approved request' : 'No approved request for this crop'}</option>
+                    {(programme?.batches || []).map((item) => <option key={item.id} value={item.id}>{item.request_number} · {item.input_category_label} · {qty(item.remaining_hectares)} of {qty(item.approved_hectares)} ha left</option>)}
+                  </select>
+                  {programme && !programme.batches.length ? <span className="field-error">{programme.programme_name} has no approved {crops.find((crop) => String(crop.id) === form.crop)?.name} request for {season.name}. Approve one on the Input requests page.</span> : null}
+                </label>
+                <label className="form-field">Hectares
+                  <input type="number" min="0.01" step="0.01" value={form.hectares} onChange={(event) => change({ hectares: event.target.value })} />
+                  {options.crop_hectares ? <span className="field-hint">{qty(options.crop_hectares)} ha of this crop allocated to the farmer for {season.name}.</span> : null}
+                </label>
+              </div>
+            ) : <EmptyState icon="clipboard" title="No programme supports this crop">No active programme for {season.name} supports this crop. Add it to a programme on the Programmes page.</EmptyState>
+          ) : null}
+          {batch ? (
+            <fieldset className="chip-field">
+              <legend>Input types from {programme.programme_name}</legend>
+              <div className="category-chips" role="group" aria-label="Input types to allocate">
+                {CATEGORIES.filter(([code]) => allowed.includes(code)).map(([code, label, icon]) => {
+                  const taken = covered[code]
+                  const empty = !(programme.catalogue[code] || []).length
+                  const on = !taken && !empty && (form.input_categories.length ? form.input_categories.includes(code) : true)
+                  return (
+                    <button key={code} type="button" className={on ? 'chip active' : 'chip'} aria-pressed={on} disabled={Boolean(taken) || empty} title={taken ? `Already allocated from ${taken.programme_name}` : empty ? 'Nothing in the catalogue' : ''} onClick={() => toggleCategory(code)}>
+                      <Icon name={icon} />{label}{taken ? ` · from ${taken.programme_name}` : empty ? ' · not in catalogue' : ''}
+                    </button>
+                  )
+                })}
+              </div>
+              <span className="field-hint">All available input types are included unless you pick some. Input types the farmer already has for this crop are greyed out.</span>
+            </fieldset>
           ) : null}
         </li>
         <li>
           <h4><span>3</span>Summary</h4>
           {error ? <div className="form-message error" role="alert">{error}</div> : null}
-          {!ready ? <div className="form-message">Fill in the farmer, crop, hectares and at least one programme to see the summary.</div> : null}
-          {ready && planning && !plan ? <div className="form-message">Working out quantities and stock…</div> : null}
+          {!ready ? <div className="form-message">Choose the farmer, crop, programme, approved request and hectares to see the products and costs.</div> : null}
+          {ready && planning && !plan ? <div className="form-message">Working out quantities and costs…</div> : null}
           {ready && plan ? <AllocationSummary plan={plan} showMoney={showMoney} /> : null}
           <div className="workflow-form-actions">
             <button type="button" className="primary-btn" disabled={!plan?.can_confirm || planning || saving} onClick={() => setConfirming(true)}><Icon name="check" />Review and confirm</button>
@@ -344,7 +359,7 @@ function AllocationForm({ season, cropSeason, showMoney, onAllocated }) {
         <Modal
           wide
           title="Confirm this allocation"
-          subtitle="Confirming takes these quantities out of the batches shown and records the cost as the farmer's input debt."
+          subtitle={`Confirming gives ${plan.farmer_name} these inputs, uses ${qty(plan.hectares)} ha of request ${plan.request_number} and records the cost as the farmer's input debt.`}
           onClose={() => setConfirming(false)}
           footer={<><button type="button" className="ghost-btn" onClick={() => setConfirming(false)}>Back</button><button type="button" className="primary-btn" disabled={saving} onClick={confirm}>{saving ? 'Allocating…' : 'Confirm allocation'}</button></>}
         >
@@ -355,51 +370,8 @@ function AllocationForm({ season, cropSeason, showMoney, onAllocated }) {
   )
 }
 
-function CategorySource({ label, icon, entries, choice, showMoney, hectares, onChange }) {
-  const entry = entries.find((item) => String(item.programme) === String(choice.programme))
-  const batches = entry?.batches || []
-  return (
-    <article className={choice.programme ? 'category-panel' : 'category-panel muted'}>
-      <header><h4><Icon name={icon} />{label}</h4>{choice.programme ? <Pill tone="good">{entry?.programme_name}</Pill> : <Pill>Not supplied</Pill>}</header>
-      <SearchSelect
-        label={`${label} programme`}
-        value={choice.programme}
-        onChange={(value) => onChange({ programme: value, batch: '' })}
-        placeholder={entries.length ? `Choose the ${label.toLowerCase()} programme` : 'No programme supplies this'}
-        disabled={!entries.length}
-        options={[{ value: '', label: `No ${label.toLowerCase()}` }, ...entries.map((item) => ({ value: String(item.programme), label: `${item.programme_name}${item.programme_code ? ` (${item.programme_code})` : ''}` }))]}
-        emptyText={`No programme has ${label.toLowerCase()} configured for this crop. Add it in the Crop Catalogue.`}
-      />
-      {entry ? (
-        <>
-          <label className="form-field">Request batch
-            <select value={choice.batch} onChange={(event) => onChange({ batch: event.target.value })}>
-              <option value="">Pick automatically (first batch with enough stock)</option>
-              {batches.map((batch) => <option key={batch.id} value={batch.id}>{batch.request_number}{batch.covers_all_products ? '' : ' (missing some products)'}</option>)}
-            </select>
-            {!batches.length ? <span className="field-error">No submitted or approved batch of {entry.programme_name} holds these products.</span> : null}
-          </label>
-          <ul className="source-products">
-            {entry.products.map((product) => {
-              const batch = batches.find((item) => String(item.id) === String(choice.batch)) || batches.find((item) => item.covers_all_products) || batches[0]
-              const stock = batch?.products?.[product.input_product]
-              return (
-                <li key={product.input_product}>
-                  <strong>{product.name}</strong>
-                  <span>{qty(product.rate_per_hectare)} {product.unit}/ha{hectares ? ` → ${qty(product.rate_per_hectare * hectares)} ${product.unit}` : ''}{showMoney && product.unit_price ? ` · ${money(product.unit_price)}/${product.unit}` : ''}</span>
-                  <span className={stock ? '' : 'field-error'}>{stock ? `${qty(stock.available)} ${stock.unit} available in ${batch.request_number}` : 'Not in a batch'}</span>
-                </li>
-              )
-            })}
-          </ul>
-        </>
-      ) : null}
-    </article>
-  )
-}
-
 function AllocationSummary({ plan, showMoney }) {
-  const used = plan.categories.filter((entry) => entry.programme)
+  const columns = showMoney ? 7 : 5
   return (
     <div className="allocation-summary">
       {plan.problems.length ? (
@@ -408,43 +380,49 @@ function AllocationSummary({ plan, showMoney }) {
           <ul>{plan.problems.map((problem) => <li key={problem}>{problem}</li>)}</ul>
         </div>
       ) : null}
-      <p className="card-sub">{plan.hectares} ha of {plan.crop_name} for {plan.season_name}.</p>
+      <dl className="summary-facts">
+        <div><dt>Farmer</dt><dd>{plan.farmer_name}</dd></div>
+        <div><dt>Programme</dt><dd>{plan.programme_name}</dd></div>
+        <div><dt>Crop</dt><dd>{plan.crop_name} · {plan.crop_season}</dd></div>
+        <div><dt>Agricultural year</dt><dd>{plan.season_name}</dd></div>
+        <div><dt>Request</dt><dd>{plan.request_number}</dd></div>
+        <div><dt>Hectares</dt><dd>{qty(plan.hectares)} ha{plan.crop_hectares_limit ? ` of ${qty(plan.crop_hectares_limit)} ha allocated` : ''}</dd></div>
+        <div><dt>Request hectares left</dt><dd>{qty(plan.remaining_hectares)} ha → {qty(Math.max(Number(plan.remaining_after), 0))} ha after</dd></div>
+      </dl>
       <div className="table-wrap">
         <table className="data-table compact">
-          <thead><tr><th>Category</th><th>Programme</th><th>Input product</th><th>Batch</th><th className="num">Required</th><th className="num">Available</th><th className="num">Left after</th>{showMoney ? <><th className="num">Unit price</th><th className="num">Total cost</th></> : null}</tr></thead>
+          <thead><tr><th>Input type</th><th>Product or variety</th><th className="num">Qty per ha</th><th className="num">Total quantity</th><th>Packs</th>{showMoney ? <><th className="num">Unit price</th><th className="num">Total cost</th></> : null}</tr></thead>
           <tbody>
-            {used.map((entry) => (
-              <SummaryCategory key={entry.category} entry={entry} showMoney={showMoney} />
+            {plan.categories.map((entry) => (
+              <SummaryCategory key={entry.category} entry={entry} showMoney={showMoney} columns={columns} />
             ))}
           </tbody>
-          {showMoney ? <tfoot><tr><td colSpan="8"><strong>Total input allocation cost</strong></td><td className="num"><strong>{money(plan.total_cost)}</strong></td></tr></tfoot> : null}
+          {showMoney ? <tfoot><tr><td colSpan={columns - 1}><strong>Total input allocation cost</strong></td><td className="num"><strong>{money(plan.total_cost)}</strong></td></tr></tfoot> : null}
         </table>
       </div>
     </div>
   )
 }
 
-function SummaryCategory({ entry, showMoney }) {
+function SummaryCategory({ entry, showMoney, columns }) {
   return (
     <>
       {entry.lines.map((line, index) => (
-        <tr key={line.input_product} className={line.sufficient ? '' : 'shortage-row'}>
+        <tr key={line.input_product}>
           <td>{index === 0 ? entry.label : ''}</td>
-          <td>{index === 0 ? entry.programme_name : ''}</td>
           <td>{line.product_name}</td>
-          <td>{line.batch_number || '—'}</td>
+          <td className="num">{qty(line.rate_per_hectare, 4)} {line.unit}</td>
           <td className="num">{qty(line.required_quantity)} {line.unit}</td>
-          <td className="num">{qty(line.available_quantity)} {line.unit}</td>
-          <td className="num">{line.sufficient ? `${qty(line.available_after)} ${line.unit}` : 'Not enough'}</td>
+          <td>{line.packs ? `${qty(line.packs, 0)} × ${line.pack_label || 'pack'}` : '—'}</td>
           {showMoney ? <><td className="num">{money(line.unit_price)}</td><td className="num">{money(line.cost)}</td></> : null}
         </tr>
       ))}
-      <tr className="category-total">
-        <td colSpan={showMoney ? 4 : 4}>{entry.label} total</td>
-        <td className="num">{qty(entry.total_quantity)}</td>
-        <td colSpan={showMoney ? 3 : 2} />
-        {showMoney ? <td className="num">{money(entry.total_cost)}</td> : null}
-      </tr>
+      {showMoney ? (
+        <tr className="category-total">
+          <td colSpan={columns - 1}>{entry.label} total</td>
+          <td className="num">{money(entry.total_cost)}</td>
+        </tr>
+      ) : null}
     </>
   )
 }
@@ -458,7 +436,7 @@ function CancelAllocation({ allocation, onClose, onDone }) {
     setSaving(true)
     try {
       await apiClient.post(`/input-allocations/${allocation.id}/cancel/`, { reason })
-      onDone(`Allocation for ${allocation.farmer_name} cancelled. Stock went back to its batches and the input debt was cancelled.`)
+      onDone(`Allocation for ${allocation.farmer_name} cancelled. Its hectares went back to the input request and the input debt was cancelled.`)
     } catch (requestError) {
       setError(errorMessage(requestError, 'The allocation could not be cancelled.'))
     } finally {
@@ -466,7 +444,7 @@ function CancelAllocation({ allocation, onClose, onDone }) {
     }
   }
   return (
-    <Modal title={`Cancel the allocation for ${allocation.farmer_name}`} subtitle="The stock goes back to the batches it came from, with a record in each batch's history. The allocation itself is kept, marked cancelled." onClose={onClose}
+    <Modal title={`Cancel the allocation for ${allocation.farmer_name}`} subtitle="Its hectares go back to the approved input request. The allocation itself is kept, marked cancelled, and its debt is cancelled." onClose={onClose}
       footer={<><button type="button" className="ghost-btn" onClick={onClose}>Keep it</button><button type="submit" form="cancel-allocation-form" className="danger-solid" disabled={saving}>{saving ? 'Cancelling…' : 'Cancel allocation'}</button></>}>
       <form id="cancel-allocation-form" onSubmit={submit}>
         {error ? <div className="form-message error" role="alert">{error}</div> : null}

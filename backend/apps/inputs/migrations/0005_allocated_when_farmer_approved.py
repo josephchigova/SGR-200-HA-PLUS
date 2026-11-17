@@ -3,6 +3,10 @@ from django.db import migrations, models
 
 def allocate_approved_farmers(apps, schema_editor):
     """An allocation stays pending only while the farmer is not approved."""
+    if schema_editor is not None and schema_editor.connection.vendor == "postgresql":
+        # Check foreign keys row by row, so no checks are left pending when this
+        # migration's new indexes and constraints are built in the same transaction.
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
     InputAllocation = apps.get_model("inputs", "InputAllocation")
     InputAllocation.objects.filter(
         status="PENDING",

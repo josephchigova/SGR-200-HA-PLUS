@@ -8,14 +8,11 @@ from apps.accounts.permissions import ProgrammeWorkflowPermission
 from apps.accounts.scoping import scope_by_farmer
 from apps.programmes.period import filter_by_agricultural_year, filter_by_crop_name, parse_crop_season
 
-from .models import ARDAFarmerRequest, ARDARequest, ARDARequestBatch, BatchStockMovement, RequestBatchInput
-from .serializers import (
-    ARDAFarmerRequestSerializer,
-    ARDARequestBatchSerializer,
-    ARDARequestSerializer,
-    BatchStockMovementSerializer,
-    RequestBatchInputSerializer,
-)
+from apps.accounts.roles import can
+
+from .models import ARDAFarmerRequest, ARDARequest, ARDARequestBatch
+from .serializers import ARDAFarmerRequestSerializer, ARDARequestBatchSerializer, ARDARequestSerializer
+from .services import RequestWorkflowError, approve_request, reject_request, submit_request
 
 
 class ARDARequestViewSet(viewsets.ModelViewSet):
@@ -28,7 +25,7 @@ class ARDARequestViewSet(viewsets.ModelViewSet):
 
 
 class ARDARequestBatchViewSet(viewsets.ModelViewSet):
-    queryset = ARDARequestBatch.objects.select_related("programme", "season").all()
+    queryset = ARDARequestBatch.objects.select_related("programme", "season", "approved_by", "created_by").all()
     serializer_class = ARDARequestBatchSerializer
     permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
     # Request batches are organisation-wide submissions to ARDA.
@@ -42,13 +39,43 @@ class ARDARequestBatchViewSet(viewsets.ModelViewSet):
         crop_season = parse_crop_season(self.request.query_params.get("crop_season"))
         if crop_season:
             queryset = filter_by_crop_name(queryset, crop_season, "crop")
+        params = self.request.query_params
+        if params.get("programme"):
+            queryset = queryset.filter(programme_id=params["programme"])
+        if params.get("crop"):
+            queryset = queryset.filter(crop__iexact=params["crop"].strip())
+        if params.get("status"):
+            queryset = queryset.filter(status=params["status"].upper())
         return queryset
+
+    def _decide(self, request, change, action_name="approve"):
+        if not can(request.user, "arda", action_name):
+            return Response({"detail": "You do not have permission to do this."}, status=403)
+        batch = self.get_object()
+        try:
+            batch = change(batch)
+        except RequestWorkflowError as error:
+            return Response({"detail": str(error)}, status=400)
+        return Response(self.get_serializer(batch).data)
+
+    @action(detail=True, methods=["post"], url_path="submit")
+    def submit(self, request, pk=None):
+        return self._decide(request, lambda batch: submit_request(batch, user=request.user), "create")
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve(self, request, pk=None):
+        return self._decide(request, lambda batch: approve_request(
+            batch, hectares=request.data.get("approved_hectares"), notes=request.data.get("notes", ""), user=request.user,
+        ))
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject(self, request, pk=None):
+        return self._decide(request, lambda batch: reject_request(batch, notes=request.data.get("notes", ""), user=request.user))
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
     def perform_destroy(self, instance):
-        from apps.inputs.models import InputAllocation
         from apps.programmes.models import Season
 
         season = instance.season
@@ -58,10 +85,9 @@ class ARDARequestBatchViewSet(viewsets.ModelViewSet):
             raise ValidationError({
                 "detail": ["This request has farmer lines. Reject it instead of deleting the history."],
             })
-        allocations = InputAllocation.objects.filter(programme=instance.programme).exclude(status=InputAllocation.STATUS_CANCELLED)
-        if instance.crop:
-            allocations = allocations.filter(crop__iexact=instance.crop)
-        if allocations.exists():
+        from .services import batch_allocations
+
+        if batch_allocations(instance).exists():
             raise ValidationError({
                 "detail": ["This request already has input allocations. Reject or close it instead of deleting it."],
             })
@@ -103,7 +129,7 @@ class ARDAFarmerRequestViewSet(viewsets.ModelViewSet):
                 return Response({"approved_hectares": ["Must be positive and no greater than requested hectares."]}, status=400)
             with transaction.atomic():
                 programme = Programme.objects.select_for_update().get(pk=request_line.request_batch.programme_id)
-                if programme.total_allocated_hectares + approved_hectares > programme.announced_hectares:
+                if programme.announced_hectares > 0 and programme.total_allocated_hectares + approved_hectares > programme.announced_hectares:
                     return Response({"approved_hectares": ["Approval exceeds remaining programme capacity."]}, status=400)
                 request_line.approved_hectares = approved_hectares
                 request_line.status = ARDAFarmerRequest.STATUS_APPROVED
@@ -113,33 +139,3 @@ class ARDAFarmerRequestViewSet(viewsets.ModelViewSet):
         except (InvalidOperation, ValueError):
             return Response({"approved_hectares": ["Enter a valid decimal amount."]}, status=400)
         return Response(self.get_serializer(request_line).data)
-
-
-class RequestBatchInputViewSet(viewsets.ModelViewSet):
-    """Input products in request batches. Quantities change only through the stock ledger."""
-
-    serializer_class = RequestBatchInputSerializer
-    permission_classes = [permissions.IsAuthenticated, ProgrammeWorkflowPermission]
-    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
-
-    def get_queryset(self):
-        queryset = RequestBatchInput.objects.select_related("batch__programme", "batch__season", "input_product")
-        params = self.request.query_params
-        for param, field in (("batch", "batch_id"), ("programme", "batch__programme_id"), ("season", "batch__season_id"), ("input_product", "input_product_id")):
-            if params.get(param):
-                queryset = queryset.filter(**{field: params[param]})
-        if params.get("category"):
-            queryset = queryset.filter(input_category=params["category"].upper())
-        return queryset
-
-    def perform_destroy(self, instance):
-        if instance.allocated_quantity > 0 or instance.movements.filter(kind=BatchStockMovement.KIND_ALLOCATION).exists():
-            raise ValidationError({"detail": ["Inputs from this line were allocated. Lower the requested quantity instead of removing it."]})
-        instance.movements.all().delete()
-        instance.delete()
-
-    @action(detail=True, methods=["get"], url_path="movements")
-    def movements(self, request, pk=None):
-        line = self.get_object()
-        rows = line.movements.select_related("allocation__farmer", "created_by")[:200]
-        return Response(BatchStockMovementSerializer(rows, many=True).data)

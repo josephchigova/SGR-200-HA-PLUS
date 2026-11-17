@@ -104,6 +104,11 @@ class InputAllocation(models.Model):
     # category can come from a different programme. Older allocations use programme.season.
     season = models.ForeignKey("programmes.Season", on_delete=models.PROTECT, related_name="input_allocations", null=True, blank=True)
     sourced_by_category = models.BooleanField(default=False)
+    # The approved input request whose hectares this allocation uses. Allocations made before
+    # requests were approved have none and are matched to their programme, crop and year instead.
+    request_batch = models.ForeignKey(
+        "arda_requests.ARDARequestBatch", on_delete=models.PROTECT, related_name="allocations", null=True, blank=True,
+    )
     cancelled_at = models.DateTimeField(null=True, blank=True)
     cancelled_by = models.ForeignKey("accounts.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="cancelled_allocations")
     cancellation_reason = models.TextField(blank=True)
@@ -134,6 +139,9 @@ class InputAllocationLine(models.Model):
     unit = models.CharField(max_length=40, blank=True, default="")
     rate_per_hectare = models.DecimalField(max_digits=14, decimal_places=4, default=Decimal("0.0000"))
     cost_per_unit = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    pack_label = models.CharField(max_length=60, blank=True, default="")
+    pack_size = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    pack_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
     cost_per_hectare = models.DecimalField(max_digits=14, decimal_places=4, default=Decimal("0.0000"))
     required_quantity = models.DecimalField(max_digits=16, decimal_places=4, default=Decimal("0.0000"))
     calculated_cost = models.DecimalField(max_digits=16, decimal_places=2, default=Decimal("0.00"))

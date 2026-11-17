@@ -6,6 +6,10 @@ from django.db import migrations, models
 
 
 def carry_over_verified_documents(apps, schema_editor):
+    if schema_editor is not None and schema_editor.connection.vendor == "postgresql":
+        # Check foreign keys row by row, so no checks are left pending when this
+        # migration's new indexes and constraints are built in the same transaction.
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
     # Documents already marked verified keep that standing under the new review status.
     FarmerDocument = apps.get_model("farmers", "FarmerDocument")
     FarmerDocument.objects.filter(verified=True).update(review_status="VERIFIED")

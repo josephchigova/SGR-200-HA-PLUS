@@ -144,6 +144,11 @@ class AgriculturalPeriodApiTests(TestCase):
         self.current_programme = Programme.objects.create(
             name="Current Wheat", code="CURRENT-WHEAT", season=self.current_season, crop="Wheat", announced_hectares="100.00",
         )
+        # The current programme supports wheat and maize.
+        from apps.programmes.models import ProgrammeCrop
+
+        ProgrammeCrop.objects.create(programme=self.current_programme, crop=self.wheat)
+        ProgrammeCrop.objects.create(programme=self.current_programme, crop=self.maize)
         FarmerProduction.objects.create(farmer=self.farmer, season=self.old_season, crop="Maize", actual_production="4.00")
         FarmerProduction.objects.create(farmer=self.farmer, season=self.current_season, crop="Wheat", actual_production="9.00")
         FarmerProduction.objects.create(farmer=self.farmer, season=self.current_season, crop="Maize", actual_production="2.00")

@@ -140,6 +140,12 @@ class CropInputRequirement(models.Model):
     rate_per_hectare = models.DecimalField(max_digits=14, decimal_places=4, default=Decimal("0.0000"))
     unit = models.CharField(max_length=40, blank=True, default="")
     cost_per_unit = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    # How the product is sold, when that differs from the unit it is measured in. For example
+    # Compound D measured in kg but sold in 50 kg bags at $32: pack_size 50, pack_price 32, and
+    # the price per kg (cost_per_unit) is worked out as 32 / 50 = 0.64.
+    pack_label = models.CharField(max_length=60, blank=True, default="")
+    pack_size = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    pack_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
     cost_per_hectare = models.DecimalField(max_digits=14, decimal_places=4, default=Decimal("0.0000"))
     cost_type = models.CharField(max_length=30, choices=COST_TYPE_CHOICES, default=COST_TYPE_CROP_INPUT)
     active = models.BooleanField(default=True)
@@ -167,6 +173,9 @@ class CropInputRequirement(models.Model):
     def save(self, *args, **kwargs):
         rate = Decimal(str(self.rate_per_hectare or 0))
         cost_per_hectare = Decimal(str(self.cost_per_hectare or 0))
+        if self.pack_size and self.pack_price is not None and Decimal(self.pack_size) > 0:
+            # The pack price is what was entered, so the unit price always follows it.
+            self.cost_per_unit = (Decimal(str(self.pack_price)) / Decimal(str(self.pack_size))).quantize(Decimal("0.0001"))
 
         if self.cost_per_unit is not None and rate > 0:
             cost_per_unit = Decimal(str(self.cost_per_unit))
@@ -251,8 +260,39 @@ class Programme(models.Model):
     def remaining_capacity(self):
         return max(self.announced_hectares - self.total_allocated_hectares, Decimal("0.00"))
 
+    @property
+    def capacity_status(self):
+        return "ACTIVE" if self.is_active else "INACTIVE"
+
+    def supported_crops(self):
+        """The crops this programme supports. Programmes set up before crop lists use their one crop name."""
+        linked = Crop.objects.filter(programme_links__programme=self, programme_links__active=True)
+        if self.pk and not self.programme_crops.exists() and (self.crop or "").strip():
+            return Crop.objects.filter(name__iexact=self.crop.strip())
+        return linked
+
+    def supports_crop(self, crop):
+        return self.supported_crops().filter(pk=crop.pk).exists()
+
     def __str__(self):
         return self.name
+
+
+class ProgrammeCrop(models.Model):
+    """A crop a programme supports. Each programme sets up its own catalogue for each of its crops."""
+
+    programme = models.ForeignKey(Programme, on_delete=models.CASCADE, related_name="programme_crops")
+    crop = models.ForeignKey(Crop, on_delete=models.PROTECT, related_name="programme_links")
+    # Removing a crop from a programme keeps the link, so requests and allocations already made stay readable.
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["programme__name", "crop__name"]
+        constraints = [models.UniqueConstraint(fields=["programme", "crop"], name="unique_programme_crop")]
+
+    def __str__(self):
+        return f"{self.programme.name} - {self.crop.name}"
 
 
 class ProgrammeAllocation(models.Model):

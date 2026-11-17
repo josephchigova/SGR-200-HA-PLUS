@@ -4,6 +4,10 @@ from django.db import migrations, models
 
 
 def backfill_batch_requested_hectares(apps, schema_editor):
+    if schema_editor is not None and schema_editor.connection.vendor == "postgresql":
+        # Check foreign keys row by row, so no checks are left pending when this
+        # migration's new indexes and constraints are built in the same transaction.
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
     Batch = apps.get_model("arda_requests", "ARDARequestBatch")
     FarmerRequest = apps.get_model("arda_requests", "ARDAFarmerRequest")
     database = schema_editor.connection.alias
@@ -17,6 +21,10 @@ def backfill_batch_requested_hectares(apps, schema_editor):
 
 
 def seed_next_request_number(apps, schema_editor):
+    if schema_editor is not None and schema_editor.connection.vendor == "postgresql":
+        # Check foreign keys row by row, so no checks are left pending when this
+        # migration's new indexes and constraints are built in the same transaction.
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
     Batch = apps.get_model("arda_requests", "ARDARequestBatch")
     Sequence = apps.get_model("arda_requests", "ARDARequestNumberSequence")
     highest_existing = 999

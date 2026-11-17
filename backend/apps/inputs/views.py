@@ -7,6 +7,7 @@ from rest_framework.exceptions import ValidationError
 from apps.accounts.models import User
 from apps.accounts.privacy import hides_money
 from apps.accounts.permissions import ProgrammeWorkflowPermission
+from apps.accounts.roles import can
 from apps.accounts.scoping import scope_by_farmer
 from apps.farmers.models import Farmer
 from apps.programmes.models import Crop, Programme, Season
@@ -53,7 +54,18 @@ class InputAllocationViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(Q(season__name__iexact=season) | Q(season__isnull=True, programme__season__name__iexact=season))
         if season_name:
             queryset = queryset.filter(Q(season__name__iexact=season_name) | Q(season__isnull=True, programme__season__name__iexact=season_name))
-        queryset = queryset.select_related("season", "cancelled_by").prefetch_related("calculation_lines__programme", "calculation_lines__batch_input__batch")
+        queryset = queryset.select_related("season", "cancelled_by", "request_batch").prefetch_related("calculation_lines__programme", "calculation_lines__batch_input__batch")
+        params = self.request.query_params
+        if params.get("programme"):
+            queryset = queryset.filter(programme_id=params["programme"])
+        if params.get("request_batch"):
+            queryset = queryset.filter(request_batch_id=params["request_batch"])
+        if params.get("search"):
+            term = params["search"].strip()
+            queryset = queryset.filter(
+                Q(farmer__full_name__icontains=term)
+                | Q(farmer__membership_number__icontains=term) | Q(request_batch__request_number__icontains=term)
+            )
         status_filter = self.request.query_params.get("status")
         if status_filter:
             queryset = queryset.filter(status__in=[part.strip().upper() for part in status_filter.split(",") if part.strip()])
@@ -64,6 +76,8 @@ class InputAllocationViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="preview")
     def preview(self, request):
+        if not request.query_params.get("legacy"):
+            raise ValidationError({"detail": ["Use programme-preview: allocations come from a programme's catalogue and an approved input request."]})
         try:
             farmer = Farmer.objects.get(pk=request.query_params.get("farmer"))
             programme = Programme.objects.get(pk=request.query_params.get("programme"))
@@ -118,9 +132,15 @@ class InputAllocationViewSet(viewsets.ModelViewSet):
         return Response(response_payload)
 
 
-    # Seed, Fertilizer and Chemicals each from their own programme ------------------------
+    # Programme -> crop catalogue -> approved input request -> farmer ---------------------
 
     def _plan_inputs(self, data):
+        from apps.arda_requests.models import ARDARequestBatch
+        from apps.programmes.models import Programme
+
+        def by_id(model, value):
+            return model.objects.filter(pk=value).first() if str(value or "").isdigit() else None
+
         try:
             farmer = Farmer.objects.get(pk=data.get("farmer"))
         except (Farmer.DoesNotExist, ValueError, TypeError) as error:
@@ -128,16 +148,20 @@ class InputAllocationViewSet(viewsets.ModelViewSet):
         if not _in_scope(farmer, self.request.user):
             raise ValidationError({"farmer": ["This farmer is outside your area."]})
         farm = farmer.farms.filter(pk=data.get("farm")).first() if data.get("farm") else None
-        season = Season.objects.filter(pk=data.get("season")).first() if str(data.get("season") or "").isdigit() else None
-        crop = Crop.objects.filter(pk=data.get("crop")).first() if str(data.get("crop") or "").isdigit() else None
-        selections = data.get("selections") or {}
-        if not isinstance(selections, dict):
-            raise ValidationError({"selections": ["Send one programme choice per input category."]})
-        return {"farmer": farmer, "farm": farm, "season": season, "crop": crop, "hectares": data.get("hectares"), "selections": selections}
+        categories = data.get("input_categories") or None
+        if categories is not None and not isinstance(categories, list):
+            raise ValidationError({"input_categories": ["Send the input types as a list."]})
+        return {
+            "farmer": farmer, "farm": farm, "season": by_id(Season, data.get("season")), "crop": by_id(Crop, data.get("crop")),
+            "hectares": data.get("hectares"), "programme": by_id(Programme, data.get("programme")),
+            "batch": ARDARequestBatch.objects.select_related("programme", "season").filter(pk=data.get("request_batch")).first()
+            if str(data.get("request_batch") or "").isdigit() else None,
+            "input_categories": categories,
+        }
 
     def perform_destroy(self, instance):
-        if instance.sourced_by_category or instance.stock_movements.exists():
-            raise ValidationError({"detail": ["This allocation took stock from request batches. Cancel it instead, so the stock is returned with a record."]})
+        if instance.sourced_by_category or instance.request_batch_id or instance.stock_movements.exists():
+            raise ValidationError({"detail": ["This allocation used hectares from request batches. Cancel it instead, so the hectares are returned and the cancellation is recorded."]})
         instance.delete()
 
     @action(detail=False, methods=["get"], url_path="programme-options")
@@ -146,19 +170,20 @@ class InputAllocationViewSet(viewsets.ModelViewSet):
         season = Season.objects.filter(pk=request.query_params.get("season")).first()
         if crop is None or season is None:
             raise ValidationError({"detail": ["Choose the crop and the agricultural year first."]})
-        options = programme_allocation.programme_options(crop=crop, season=season)
-        if hides_money(request.user):
-            for entries in options.values():
-                for entry in entries:
-                    for product in entry["products"]:
-                        product["unit_price"] = None
+        farmer = None
         farmer_id = request.query_params.get("farmer")
-        limit = None
         if farmer_id and str(farmer_id).isdigit():
             farmer = Farmer.objects.filter(pk=farmer_id).first()
-            if farmer is not None:
-                limit = programme_allocation.crop_hectares(farmer, crop, season)
-        return Response({"crop_hectares": str(limit) if limit is not None else None, "categories": options})
+            if farmer is not None and not _in_scope(farmer, request.user):
+                farmer = None
+        data = programme_allocation.programme_options(crop=crop, season=season, farmer=farmer)
+        if hides_money(request.user):
+            for option in data["options"]:
+                for products in option["catalogue"].values():
+                    for product in products:
+                        product["unit_price"] = None
+        limit = programme_allocation.crop_hectares(farmer, crop, season) if farmer is not None else None
+        return Response({"crop_hectares": str(limit) if limit is not None else None, **data})
 
     @action(detail=False, methods=["post"], url_path="programme-preview")
     def programme_preview(self, request):
@@ -182,6 +207,8 @@ class InputAllocationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="cancel")
     def cancel(self, request, pk=None):
+        if not can(request.user, "allocations", "approve"):
+            return Response({"detail": "You do not have permission to cancel allocations."}, status=403)
         allocation = self.get_object()
         try:
             allocation = programme_allocation.cancel(allocation=allocation, reason=request.data.get("reason"), user=request.user)

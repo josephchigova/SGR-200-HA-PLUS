@@ -1,246 +1,425 @@
-"""Programme catalogue, request batch stock and per-category input allocation."""
+"""Programme -> programme crop catalogue -> approved input request -> input allocation -> farmer.
 
+The whole chain is driven through the API the pages use, as an authorised officer would.
+"""
+
+import threading
 from datetime import date
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.db import connection
+from django.test import TestCase, TransactionTestCase
+from django.urls import reverse
 from rest_framework.test import APIClient
 
-from apps.arda_requests import stock
-from apps.arda_requests.models import ARDARequestBatch, BatchStockMovement, RequestBatchInput
+from apps.arda_requests.models import ARDARequestBatch
 from apps.farmers.models import Farm, Farmer, RegistrationCropAllocation
 from apps.geography.models import District, Province
+from apps.inputs import programme_allocation
 from apps.inputs.models import Input, InputAllocation
-from apps.programmes.models import Crop, CropInputRequirement, CropSellingPrice, Programme, Season
+from apps.programmes.models import Crop, CropInputRequirement, CropSellingPrice, Programme, ProgrammeCrop, Season
 from apps.recovery.models import InputDebt
 from apps.subscriptions.models import FarmerSubscription
 
 User = get_user_model()
 
 
-class ProgrammeAllocationTests(TestCase):
-    @classmethod
-    def setUpTestData(cls):
-        cls.admin = User.objects.create_user(email="officer@example.com", username="officer", password="Str0ng!Passw0rd", role=User.ROLE_SUPER_ADMIN)
-        province = Province.objects.create(name="Mashonaland East", code="ME")
-        district = District.objects.create(province=province, name="Marondera")
-        cls.season = Season.objects.create(name="2026/2027", start_date=date(2026, 10, 1), end_date=date(2027, 9, 30), status=Season.STATUS_ACTIVE)
-        cls.maize = Crop.objects.create(name="Maize", category=Crop.CATEGORY_SUMMER)
-        CropSellingPrice.objects.create(crop=cls.maize, season=cls.season, price_per_tonne=Decimal("300.00"))
-        cls.farmer = Farmer.objects.create(
-            first_name="Tendai", surname="Moyo", national_id="63-1234567A12", province=province, district=district,
-            verification_status=Farmer.STATUS_VERIFIED, membership_status=Farmer.MEMBERSHIP_ACTIVE,
-        )
-        cls.farm = Farm.objects.create(farmer=cls.farmer, farm_name="Moyo Farm", province=province, district=district, total_hectares=40, arable_hectares=30)
-        FarmerSubscription.objects.create(farmer=cls.farmer, season=cls.season.name, expected_amount=500, paid_amount=500, outstanding_amount=0, payment_status="PAID")
-        RegistrationCropAllocation.objects.create(farmer=cls.farmer, crop=cls.maize, season=cls.season, hectares=10)
+def make_world(test):
+    test.admin = User.objects.create_user(email="officer@example.com", username="officer", password="Str0ng!Passw0rd", role=User.ROLE_SUPER_ADMIN)
+    test.viewer = User.objects.create_user(email="viewer@example.com", username="viewer", password="Str0ng!Passw0rd", role=User.ROLE_VIEWER)
+    test.province = Province.objects.create(name="Mashonaland East", code="ME")
+    test.district = District.objects.create(province=test.province, name="Marondera")
+    test.season = Season.objects.create(name="2026/2027", start_date=date(2026, 10, 1), end_date=date(2027, 9, 30), status=Season.STATUS_ACTIVE)
+    test.maize = Crop.objects.create(name="Maize", category=Crop.CATEGORY_SUMMER)
+    test.sorghum = Crop.objects.create(name="Sorghum", category=Crop.CATEGORY_SUMMER)
+    test.wheat = Crop.objects.create(name="Wheat", category=Crop.CATEGORY_WINTER)
+    CropSellingPrice.objects.create(crop=test.maize, season=test.season, price_per_tonne=Decimal("300.00"))
+    test.mbizi = Input.objects.create(name="Mbizi", category="SEED", unit="kg")
+    test.shumba = Input.objects.create(name="Shumba", category="SEED", unit="kg")
+    test.compound_d = Input.objects.create(name="Compound D", category="FERTILIZER", unit="kg")
+    test.atrazine = Input.objects.create(name="Atrazine", category="CHEMICALS", unit="litres")
+    test.farmer = make_farmer(test, "Tendai", "63-1234567A12", maize_hectares=10)
+    test.other_farmer = make_farmer(test, "Rudo", "63-7654321B12", maize_hectares=10)
 
-        cls.seedco = Programme.objects.create(name="Seed Co Programme", code="SEEDCO", season=cls.season, input_categories=["SEED"])
-        cls.arda = Programme.objects.create(name="ARDA Programme", code="ARDA", season=cls.season, input_categories=["SEED", "FERTILIZER", "CHEMICALS"])
-        cls.govt = Programme.objects.create(name="Government Input Programme", code="GIP", season=cls.season, input_categories=["CHEMICALS"])
-        cls.seed = Input.objects.create(name="SC 727 maize seed", category="SEED", unit="kg")
-        cls.compound_d = Input.objects.create(name="Compound D", category="FERTILIZER", unit="kg")
-        cls.herbicide = Input.objects.create(name="Atrazine", category="CHEMICALS", unit="litres")
 
-    def setUp(self):
-        self.client = APIClient()
-        self.client.force_authenticate(self.admin)
+def make_farmer(test, name, national_id, maize_hectares):
+    farmer = Farmer.objects.create(
+        first_name=name, surname="Moyo", national_id=national_id, province=test.province, district=test.district,
+        verification_status=Farmer.STATUS_VERIFIED, membership_status=Farmer.MEMBERSHIP_ACTIVE,
+    )
+    Farm.objects.create(farmer=farmer, farm_name=f"{name} Farm", province=test.province, district=test.district, total_hectares=40, arable_hectares=30)
+    FarmerSubscription.objects.create(farmer=farmer, season=test.season.name, expected_amount=500, paid_amount=500, outstanding_amount=0, payment_status="PAID")
+    RegistrationCropAllocation.objects.create(farmer=farmer, crop=test.maize, season=test.season, hectares=maize_hectares)
+    return farmer
 
-    def requirement(self, programme, category, product, rate, price):
-        response = self.client.post("/api/crop-input-requirements/", {
-            "crop": self.maize.id, "programme": programme.id, "input_category": category, "input_product": product.id,
-            "rate_per_hectare": rate, "cost_per_unit": price,
+
+class ChainMixin:
+    def api(self, user=None):
+        client = APIClient()
+        client.force_authenticate(user or self.admin)
+        return client
+
+    def programme(self, name, crops, categories, client=None):
+        response = (client or self.client).post(reverse("programme-list"), {
+            "name": name, "season": self.season.id, "crops": [crop.id for crop in crops],
+            "input_categories": categories, "capacity_status": "ACTIVE",
         }, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        return Programme.objects.get(pk=response.data["id"])
+
+    def line(self, programme, crop, category, product, rate, price=None, pack_size=None, pack_price=None, pack_label=""):
+        payload = {"crop": crop.id, "programme": programme.id, "input_category": category, "input_product": product.id, "rate_per_hectare": rate}
+        if pack_size:
+            payload.update({"pack_size": pack_size, "pack_price": pack_price, "pack_label": pack_label})
+        else:
+            payload["cost_per_unit"] = price
+        response = self.client.post(reverse("crop-input-requirement-list"), payload, format="json")
         self.assertEqual(response.status_code, 201, response.data)
         return CropInputRequirement.objects.get(pk=response.data["id"])
 
-    def batch(self, programme, number, status=ARDARequestBatch.STATUS_APPROVED, **quantities):
-        batch = ARDARequestBatch.objects.create(request_number=number, programme=programme, season=self.season, status=status, requested_hectares=100)
-        products = {"seed": (self.seed, "SEED"), "fertilizer": (self.compound_d, "FERTILIZER"), "chemicals": (self.herbicide, "CHEMICALS")}
-        for key, quantity in quantities.items():
-            product, category = products[key]
-            response = self.client.post("/api/request-batch-inputs/", {
-                "batch": batch.id, "input_product": product.id, "input_category": category, "requested_quantity": quantity,
-            }, format="json")
-            self.assertEqual(response.status_code, 201, response.data)
+    def request(self, programme, crop, hectares, category=""):
+        response = self.client.post(reverse("arda-request-batch-list"), {
+            "programme": programme.id, "season": self.season.id, "crop": crop.name, "requested_hectares": hectares, "input_category": category,
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.data)
+        return ARDARequestBatch.objects.get(pk=response.data["id"])
+
+    def approve(self, batch, hectares=None):
+        self.assertEqual(self.client.post(reverse("arda-request-batch-submit", kwargs={"pk": batch.id})).status_code, 200)
+        response = self.client.post(reverse("arda-request-batch-approve", kwargs={"pk": batch.id}), {"approved_hectares": hectares} if hectares else {}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        batch.refresh_from_db()
         return batch
 
-    def configure(self):
-        self.requirement(self.seedco, "SEED", self.seed, "25", "2.00")
-        self.requirement(self.arda, "SEED", self.seed, "25", "1.50")
-        self.requirement(self.arda, "FERTILIZER", self.compound_d, "50", "0.80")
-        self.requirement(self.govt, "CHEMICALS", self.herbicide, "2", "12.00")
-        self.seedco_batch = self.batch(self.seedco, "SC-1", seed="1000")
-        self.arda_batch = self.batch(self.arda, "AR-1", seed="2000", fertilizer="800")
-        self.govt_batch = self.batch(self.govt, "GV-1", chemicals="100")
-
-    def payload(self, **selections):
-        return {
-            "farmer": self.farmer.id, "farm": self.farm.id, "season": self.season.id, "crop": self.maize.id, "hectares": "10",
-            "selections": {category: {"programme": programme.id} for category, programme in selections.items()},
+    def payload(self, programme, batch, hectares="10", farmer=None, crop=None, categories=None):
+        farmer = farmer or self.farmer
+        data = {
+            "farmer": farmer.id, "farm": farmer.farms.first().id, "season": self.season.id, "crop": (crop or self.maize).id,
+            "programme": programme.id, "request_batch": batch.id, "hectares": hectares,
         }
+        if categories:
+            data["input_categories"] = categories
+        return data
 
-    def line(self, batch, product):
-        return RequestBatchInput.objects.get(batch=batch, input_product=product)
+    def allocate(self, *args, client=None, **kwargs):
+        return (client or self.client).post(reverse("input-allocation-programme-allocate"), self.payload(*args, **kwargs), format="json")
 
-    # Catalogue -------------------------------------------------------------------------
+    def preview(self, *args, **kwargs):
+        return self.client.post(reverse("input-allocation-programme-preview"), self.payload(*args, **kwargs), format="json")
 
-    def test_same_crop_has_independent_requirements_and_prices_per_programme(self):
-        self.configure()
-        seedco = CropInputRequirement.objects.get(programme=self.seedco, input_product=self.seed)
-        arda = CropInputRequirement.objects.get(programme=self.arda, input_product=self.seed)
-        self.assertEqual((seedco.cost_per_unit, arda.cost_per_unit), (Decimal("2.0000"), Decimal("1.5000")))
-        self.assertEqual((seedco.group_name, seedco.item_name, seedco.unit), ("Seed", "SC 727 maize seed", "kg"))
-        # A price change in one programme leaves the other alone.
-        self.client.patch(f"/api/crop-input-requirements/{arda.id}/", {"cost_per_unit": "1.75"}, format="json")
-        seedco.refresh_from_db()
-        self.assertEqual(seedco.cost_per_unit, Decimal("2.0000"))
-        listed = self.client.get("/api/crop-input-requirements/", {"crop": self.maize.id, "programme": self.seedco.id}).data
-        rows = listed["results"] if isinstance(listed, dict) else listed
-        self.assertEqual([row["input_product_name"] for row in rows], ["SC 727 maize seed"])
+    def batch_row(self, batch):
+        return self.client.get(reverse("arda-request-batch-detail", kwargs={"pk": batch.id})).data
 
-    def test_catalogue_refuses_wrong_category_and_duplicates(self):
-        wrong = self.client.post("/api/crop-input-requirements/", {
-            "crop": self.maize.id, "programme": self.arda.id, "input_category": "SEED", "input_product": self.compound_d.id,
-            "rate_per_hectare": "10", "cost_per_unit": "1",
-        }, format="json")
-        self.assertEqual(wrong.status_code, 400)
-        self.requirement(self.arda, "SEED", self.seed, "25", "1.50")
-        again = self.client.post("/api/crop-input-requirements/", {
-            "crop": self.maize.id, "programme": self.arda.id, "input_category": "SEED", "input_product": self.seed.id,
-            "rate_per_hectare": "20", "cost_per_unit": "1",
-        }, format="json")
+
+class ProgrammeChainTests(ChainMixin, TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        make_world(cls)
+
+    def setUp(self):
+        self.client = self.api()
+
+    # Programmes ------------------------------------------------------------------------
+
+    def test_programme_supports_several_crops_and_input_types(self):
+        arda = self.programme("ARDA", [self.maize, self.sorghum], ["SEED", "FERTILIZER"])
+        row = self.client.get(reverse("programme-detail", kwargs={"pk": arda.id})).data
+        self.assertEqual(row["crop_names"], ["Maize", "Sorghum"])
+        self.assertEqual(row["input_category_labels"], ["Seed", "Fertilizer"])
+        self.assertEqual((row["capacity_status"], row["code"] != ""), ("ACTIVE", True))
+        self.assertEqual(row["figures"]["crops"], 2)
+        # Removing a crop keeps the link as history but the crop is no longer offered.
+        self.client.patch(reverse("programme-detail", kwargs={"pk": arda.id}), {"crops": [self.maize.id]}, format="json")
+        self.assertEqual(list(arda.supported_crops().values_list("name", flat=True)), ["Maize"])
+        self.assertFalse(ProgrammeCrop.objects.get(programme=arda, crop=self.sorghum).active)
+        # The form asks for at least one crop and one input type, and a name only once per year.
+        self.assertEqual(self.client.post(reverse("programme-list"), {"name": "No crops", "season": self.season.id, "input_categories": ["SEED"]}, format="json").status_code, 400)
+        self.assertEqual(self.client.post(reverse("programme-list"), {"name": "No inputs", "season": self.season.id, "crops": [self.maize.id]}, format="json").status_code, 400)
+        again = self.client.post(reverse("programme-list"), {"name": "arda", "season": self.season.id, "crops": [self.maize.id], "input_categories": ["SEED"]}, format="json")
         self.assertEqual(again.status_code, 400)
+        filtered = self.client.get(reverse("programme-list"), {"crop": self.sorghum.id}).data["results"]
+        self.assertEqual(filtered, [])
 
-    # Allocation ------------------------------------------------------------------------
+    def test_same_crop_under_two_programmes_has_independent_catalogues(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        seedco = self.programme("Seed Co", [self.maize], ["SEED"])
+        arda_mbizi = self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        seedco_mbizi = self.line(seedco, self.maize, "SEED", self.mbizi, "25", "2.50")
+        self.line(seedco, self.maize, "SEED", self.shumba, "20", "3.00")
+        self.client.patch(reverse("crop-input-requirement-detail", kwargs={"pk": arda_mbizi.id}), {"cost_per_unit": "1.75"}, format="json")
+        seedco_mbizi.refresh_from_db()
+        self.assertEqual(seedco_mbizi.cost_per_unit, Decimal("2.5000"))
+        rows = self.client.get(reverse("crop-input-requirement-list"), {"crop": self.maize.id, "programme": arda.id}).data["results"]
+        self.assertEqual([row["input_product_name"] for row in rows], ["Mbizi"])
 
-    def test_each_category_from_a_different_programme_and_batch(self):
-        self.configure()
-        preview = self.client.post("/api/input-allocations/programme-preview/", self.payload(SEED=self.seedco, FERTILIZER=self.arda, CHEMICALS=self.govt), format="json")
-        self.assertEqual(preview.status_code, 200, preview.data)
-        self.assertTrue(preview.data["can_confirm"])
-        by_category = {entry["category"]: entry for entry in preview.data["categories"]}
-        self.assertEqual(by_category["SEED"]["programme_name"], "Seed Co Programme")
-        self.assertEqual(by_category["SEED"]["lines"][0]["required_quantity"], "250")  # 25 kg x 10 ha
-        self.assertEqual(by_category["SEED"]["lines"][0]["cost"], "500.00")  # 250 kg x 2.00, Seed Co's price
-        self.assertEqual(by_category["FERTILIZER"]["lines"][0]["available_after"], "300")
-        self.assertEqual(preview.data["total_cost"], "1140.00")  # 500 + 400 + 240
+    def test_catalogue_accepts_only_the_programmes_crops_and_input_types(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        wrong_crop = self.client.post(reverse("crop-input-requirement-list"), {
+            "crop": self.wheat.id, "programme": arda.id, "input_category": "SEED", "input_product": self.mbizi.id, "rate_per_hectare": "25", "cost_per_unit": "2",
+        }, format="json")
+        self.assertEqual(wrong_crop.status_code, 400)
+        self.assertIn("does not support Wheat", str(wrong_crop.data))
+        wrong_type = self.client.post(reverse("crop-input-requirement-list"), {
+            "crop": self.maize.id, "programme": arda.id, "input_category": "CHEMICALS", "input_product": self.atrazine.id, "rate_per_hectare": "2", "cost_per_unit": "9",
+        }, format="json")
+        self.assertEqual(wrong_type.status_code, 400)
+        self.assertIn("does not supply chemicals", str(wrong_type.data))
+        general = self.client.post(reverse("crop-input-requirement-list"), {
+            "crop": self.maize.id, "group_name": "Seed", "item_name": "Loose", "rate_per_hectare": "2", "cost_per_unit": "9",
+        }, format="json")
+        self.assertEqual(general.status_code, 400)
 
-        made = self.client.post("/api/input-allocations/programme-allocate/", self.payload(SEED=self.seedco, FERTILIZER=self.arda, CHEMICALS=self.govt), format="json")
+    def test_pack_and_unit_calculations(self):
+        arda = self.programme("ARDA", [self.maize], ["FERTILIZER", "CHEMICALS"])
+        compound = self.line(arda, self.maize, "FERTILIZER", self.compound_d, "400", pack_size="50", pack_price="32", pack_label="50 kg bag")
+        self.assertEqual((compound.cost_per_unit, compound.cost_per_hectare), (Decimal("0.6400"), Decimal("256.0000")))
+        self.line(arda, self.maize, "CHEMICALS", self.atrazine, "2", "9.50")
+        batch = self.approve(self.request(arda, self.maize, "100"))
+        plan = self.preview(arda, batch, hectares="5")
+        self.assertEqual(plan.status_code, 200, plan.data)
+        lines = {line["product_name"]: line for entry in plan.data["categories"] for line in entry["lines"]}
+        self.assertEqual((lines["Compound D"]["required_quantity"], lines["Compound D"]["cost"], lines["Compound D"]["packs"]), ("2000", "1280.00", "40"))
+        self.assertEqual((lines["Atrazine"]["required_quantity"], lines["Atrazine"]["unit"], lines["Atrazine"]["cost"]), ("10", "litres", "95.00"))
+        self.assertEqual(plan.data["total_cost"], "1375.00")
+
+    # Input requests --------------------------------------------------------------------
+
+    def test_request_workflow_and_only_approved_requests_can_be_allocated(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        batch = self.request(arda, self.maize, "300")
+        self.assertEqual(self.batch_row(batch)["status_label"], "Draft")
+        self.assertEqual(self.allocate(arda, batch).status_code, 400)  # draft
+        self.client.post(reverse("arda-request-batch-submit", kwargs={"pk": batch.id}))
+        refused = self.allocate(arda, batch)
+        self.assertEqual(refused.status_code, 400)  # submitted, not approved
+        self.assertIn("Only approved requests", str(refused.data))
+        # A submitted request cannot be edited, and approval cannot exceed what was requested.
+        self.assertEqual(self.client.patch(reverse("arda-request-batch-detail", kwargs={"pk": batch.id}), {"requested_hectares": "10"}, format="json").status_code, 400)
+        self.assertEqual(self.client.post(reverse("arda-request-batch-approve", kwargs={"pk": batch.id}), {"approved_hectares": "301"}, format="json").status_code, 400)
+        approved = self.client.post(reverse("arda-request-batch-approve", kwargs={"pk": batch.id}), {"approved_hectares": "200", "notes": "Partial"}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.data)
+        self.assertEqual((approved.data["requested_hectares"], approved.data["approved_hectares"], approved.data["remaining_hectares"]), ("300.00", Decimal("200.00"), Decimal("200.00")))
+        self.assertEqual(approved.data["approved_by_name"], self.admin.username)
+        self.assertEqual(self.allocate(arda, batch).status_code, 201)
+        row = self.batch_row(batch)
+        self.assertEqual((row["allocated_hectares"], row["remaining_hectares"], row["total_farmers"]), (Decimal("10.00"), Decimal("190.00"), 1))
+
+    def test_rejected_requests_give_no_hectares(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        batch = self.request(arda, self.maize, "50")
+        self.client.post(reverse("arda-request-batch-submit", kwargs={"pk": batch.id}))
+        self.assertEqual(self.client.post(reverse("arda-request-batch-reject", kwargs={"pk": batch.id}), {}, format="json").status_code, 400)
+        rejected = self.client.post(reverse("arda-request-batch-reject", kwargs={"pk": batch.id}), {"notes": "No budget"}, format="json")
+        self.assertEqual((rejected.status_code, rejected.data["status"], rejected.data["approved_hectares"]), (200, "REJECTED", Decimal("0.00")))
+        self.assertEqual(self.allocate(arda, batch).status_code, 400)
+
+    def test_request_must_match_its_programme(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        wheat = self.client.post(reverse("arda-request-batch-list"), {"programme": arda.id, "season": self.season.id, "crop": "Wheat", "requested_hectares": "10"}, format="json")
+        self.assertEqual(wheat.status_code, 400)
+        chemicals = self.client.post(reverse("arda-request-batch-list"), {
+            "programme": arda.id, "season": self.season.id, "crop": "Maize", "requested_hectares": "10", "input_category": "CHEMICALS",
+        }, format="json")
+        self.assertEqual(chemicals.status_code, 400)
+        self.request(arda, self.maize, "10")
+        duplicate = self.client.post(reverse("arda-request-batch-list"), {"programme": arda.id, "season": self.season.id, "crop": "Maize", "requested_hectares": "5"}, format="json")
+        self.assertEqual(duplicate.status_code, 400)
+
+    # Allocations -----------------------------------------------------------------------
+
+    def test_allocation_cannot_exceed_approved_hectares(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        batch = self.approve(self.request(arda, self.maize, "20"), hectares="12")
+        too_much = self.preview(arda, batch, hectares="8")
+        self.assertEqual(self.allocate(arda, batch, hectares="8").status_code, 201)
+        self.assertTrue(too_much.data["can_confirm"])
+        second = self.preview(arda, batch, hectares="5", farmer=self.other_farmer)
+        self.assertFalse(second.data["can_confirm"])
+        self.assertIn("4 ha of its 12 approved hectares left", second.data["problems"][0])
+        self.assertEqual(self.allocate(arda, batch, hectares="5", farmer=self.other_farmer).status_code, 400)
+        self.assertEqual(self.allocate(arda, batch, hectares="4", farmer=self.other_farmer).status_code, 201)
+
+    def test_farmer_cannot_get_more_than_their_crop_hectares(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        batch = self.approve(self.request(arda, self.maize, "100"))
+        response = self.allocate(arda, batch, hectares="12")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("10 ha of Maize", str(response.data))
+
+    def test_programme_catalogue_and_request_cannot_be_mixed(self):
+        arda = self.programme("ARDA", [self.maize, self.sorghum], ["SEED"])
+        seedco = self.programme("Seed Co", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        seedco_batch = self.approve(self.request(seedco, self.maize, "100"))
+        sorghum_batch = self.approve(self.request(arda, self.sorghum, "100"))
+        other_programme = self.allocate(arda, seedco_batch)
+        self.assertEqual(other_programme.status_code, 400)
+        self.assertIn("belongs to Seed Co", str(other_programme.data))
+        other_crop = self.allocate(arda, sorghum_batch)
+        self.assertEqual(other_crop.status_code, 400)
+        self.assertIn("is for Sorghum", str(other_crop.data))
+
+    def test_each_input_type_from_a_different_programme_but_never_twice(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED", "FERTILIZER"])
+        seedco = self.programme("Seed Co", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "1.50")
+        self.line(arda, self.maize, "FERTILIZER", self.compound_d, "50", "0.80")
+        self.line(seedco, self.maize, "SEED", self.shumba, "25", "2.00")
+        arda_batch = self.approve(self.request(arda, self.maize, "100"))
+        seedco_batch = self.approve(self.request(seedco, self.maize, "100"))
+        seed = self.allocate(seedco, seedco_batch)
+        self.assertEqual(seed.status_code, 201, seed.data)
+        # ARDA can still supply the fertilizer: its seed is left out because the farmer has seed.
+        plan = self.preview(arda, arda_batch)
+        self.assertEqual([entry["category"] for entry in plan.data["categories"]], ["FERTILIZER"])
+        self.assertEqual(self.allocate(arda, arda_batch, categories=["SEED"]).status_code, 400)
+        self.assertEqual(self.allocate(arda, arda_batch).status_code, 201)
+        self.assertEqual(self.allocate(arda, arda_batch).status_code, 400)
+        self.assertEqual(InputDebt.objects.filter(farmer=self.farmer).count(), 2)
+
+    def test_prices_are_snapshotted_and_cancelling_restores_hectares(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        mbizi = self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        batch = self.approve(self.request(arda, self.maize, "20"))
+        made = self.allocate(arda, batch)
         self.assertEqual(made.status_code, 201, made.data)
         allocation = InputAllocation.objects.get(pk=made.data["id"])
-        self.assertTrue(allocation.sourced_by_category)
-        self.assertEqual(allocation.total_input_cost, Decimal("1140.00"))
-        self.assertEqual({line.input_category: line.programme_id for line in allocation.calculation_lines.all()},
-                         {"SEED": self.seedco.id, "FERTILIZER": self.arda.id, "CHEMICALS": self.govt.id})
-        # Stock leaves exactly the chosen batches. The ARDA batch's seed, the same product, is untouched.
-        self.assertEqual(self.line(self.seedco_batch, self.seed).allocated_quantity, Decimal("250"))
-        self.assertEqual(self.line(self.arda_batch, self.seed).allocated_quantity, Decimal("0"))
-        self.assertEqual(self.line(self.arda_batch, self.compound_d).available_quantity, Decimal("300"))
-        self.assertEqual(self.line(self.govt_batch, self.herbicide).available_quantity, Decimal("80"))
-        self.assertEqual(BatchStockMovement.objects.filter(kind=BatchStockMovement.KIND_ALLOCATION, allocation=allocation).count(), 3)
-        debt = InputDebt.objects.get(input_allocation=allocation)
-        self.assertEqual(debt.input_value, Decimal("1140.00"))
-        self.assertEqual(debt.required_recovery_tonnes, Decimal("3.80"))
-
-    def test_all_three_from_one_programme(self):
-        self.requirement(self.arda, "SEED", self.seed, "25", "1.50")
-        self.requirement(self.arda, "FERTILIZER", self.compound_d, "50", "0.80")
-        self.requirement(self.arda, "CHEMICALS", self.herbicide, "2", "10.00")
-        batch = self.batch(self.arda, "AR-2", seed="500", fertilizer="1000", chemicals="50")
-        made = self.client.post("/api/input-allocations/programme-allocate/", self.payload(SEED=self.arda, FERTILIZER=self.arda, CHEMICALS=self.arda), format="json")
-        self.assertEqual(made.status_code, 201, made.data)
-        self.assertEqual(Decimal(made.data["total_input_cost"]), Decimal("975.00"))  # 375 + 400 + 200
-        self.assertEqual(self.line(batch, self.herbicide).available_quantity, Decimal("30"))
-
-    def test_price_change_does_not_alter_a_made_allocation(self):
-        self.configure()
-        made = self.client.post("/api/input-allocations/programme-allocate/", self.payload(SEED=self.seedco), format="json")
-        self.assertEqual(made.status_code, 201, made.data)
-        requirement = CropInputRequirement.objects.get(programme=self.seedco, input_product=self.seed)
-        self.client.patch(f"/api/crop-input-requirements/{requirement.id}/", {"cost_per_unit": "9.00"}, format="json")
-        allocation = InputAllocation.objects.get(pk=made.data["id"])
+        self.assertEqual((allocation.request_batch_id, allocation.programme_id, allocation.total_input_cost), (batch.id, arda.id, Decimal("500.00")))
+        self.client.patch(reverse("crop-input-requirement-detail", kwargs={"pk": mbizi.id}), {"cost_per_unit": "9.00"}, format="json")
         line = allocation.calculation_lines.get()
-        self.assertEqual((line.cost_per_unit, line.calculated_cost, allocation.total_input_cost), (Decimal("2.0000"), Decimal("500.00"), Decimal("500.00")))
+        self.assertEqual((line.cost_per_unit, line.calculated_cost, line.required_quantity), (Decimal("2.0000"), Decimal("500.00"), Decimal("250.0000")))
+        debt = InputDebt.objects.get(input_allocation=allocation)
+        self.assertEqual(debt.input_value, Decimal("500.00"))
+        # Submitting the same allocation again does not create a second allocation or debt.
+        self.assertEqual(self.allocate(arda, batch).status_code, 400)
+        self.assertEqual(InputDebt.objects.filter(farmer=self.farmer).count(), 1)
+        self.assertEqual(self.batch_row(batch)["remaining_hectares"], Decimal("10.00"))
 
-    def test_cannot_allocate_more_than_the_batch_holds(self):
-        self.requirement(self.arda, "FERTILIZER", self.compound_d, "50", "0.80")
-        batch = self.batch(self.arda, "AR-3", fertilizer="300")
-        preview = self.client.post("/api/input-allocations/programme-preview/", self.payload(FERTILIZER=self.arda), format="json")
-        self.assertFalse(preview.data["can_confirm"])
-        self.assertIn("Not enough Compound D", preview.data["problems"][0])
-        refused = self.client.post("/api/input-allocations/programme-allocate/", self.payload(FERTILIZER=self.arda), format="json")
-        self.assertEqual(refused.status_code, 400)
-        self.assertEqual(self.line(batch, self.compound_d).allocated_quantity, Decimal("0"))
-        self.assertFalse(InputAllocation.objects.exists())
-
-    def test_draft_batches_are_not_allocatable(self):
-        self.requirement(self.arda, "SEED", self.seed, "25", "1.50")
-        self.batch(self.arda, "AR-4", status=ARDARequestBatch.STATUS_PENDING, seed="1000")
-        preview = self.client.post("/api/input-allocations/programme-preview/", self.payload(SEED=self.arda), format="json")
-        self.assertFalse(preview.data["can_confirm"])
-        self.assertIn("not in any submitted or approved request batch", preview.data["problems"][0])
-
-    def test_hectares_are_limited_to_the_crop_allocation_and_duplicates_refused(self):
-        self.configure()
-        too_many = self.client.post("/api/input-allocations/programme-preview/", {**self.payload(SEED=self.seedco), "hectares": "12"}, format="json")
-        self.assertEqual(too_many.status_code, 400)
-        self.assertIn("10 ha of Maize", str(too_many.data))
-        self.assertEqual(self.client.post("/api/input-allocations/programme-allocate/", self.payload(SEED=self.seedco), format="json").status_code, 201)
-        again = self.client.post("/api/input-allocations/programme-allocate/", self.payload(FERTILIZER=self.arda), format="json")
-        self.assertEqual(again.status_code, 400)
-        self.assertEqual(InputAllocation.objects.count(), 1)
-        self.assertEqual(InputDebt.objects.count(), 1)
-
-    def test_cancel_returns_stock_with_a_record_and_cancels_the_debt(self):
-        self.configure()
-        made = self.client.post("/api/input-allocations/programme-allocate/", self.payload(SEED=self.seedco, CHEMICALS=self.govt), format="json")
-        allocation_id = made.data["id"]
-        self.assertEqual(self.client.delete(f"/api/input-allocations/{allocation_id}/").status_code, 400)
-        self.assertEqual(self.client.post(f"/api/input-allocations/{allocation_id}/cancel/", {}, format="json").status_code, 400)
-        cancelled = self.client.post(f"/api/input-allocations/{allocation_id}/cancel/", {"reason": "Farmer withdrew"}, format="json")
+        self.assertEqual(self.client.delete(reverse("input-allocation-detail", kwargs={"pk": allocation.id})).status_code, 400)
+        self.assertEqual(self.client.post(reverse("input-allocation-cancel", kwargs={"pk": allocation.id}), {}, format="json").status_code, 400)
+        cancelled = self.client.post(reverse("input-allocation-cancel", kwargs={"pk": allocation.id}), {"reason": "Wrong farm"}, format="json")
         self.assertEqual(cancelled.status_code, 200, cancelled.data)
-        self.assertEqual(cancelled.data["status"], "CANCELLED")
-        self.assertEqual(self.line(self.seedco_batch, self.seed).allocated_quantity, Decimal("0"))
-        self.assertEqual(self.line(self.govt_batch, self.herbicide).available_quantity, Decimal("100"))
-        reversals = BatchStockMovement.objects.filter(kind=BatchStockMovement.KIND_REVERSAL, allocation_id=allocation_id)
-        self.assertEqual(reversals.count(), 2)
-        self.assertEqual(reversals.first().reason, "Farmer withdrew")
-        self.assertTrue(InputAllocation.objects.filter(pk=allocation_id).exists())
-        debt = InputDebt.objects.get(input_allocation_id=allocation_id)
+        self.assertEqual(self.batch_row(batch)["remaining_hectares"], Decimal("20.00"))
+        debt.refresh_from_db()
         self.assertEqual((debt.status, debt.outstanding_monetary_balance), (InputDebt.STATUS_CANCELLED, Decimal("0.00")))
-        # After cancelling, the farmer can be allocated again from the restored stock.
-        self.assertEqual(self.client.post("/api/input-allocations/programme-allocate/", self.payload(SEED=self.seedco), format="json").status_code, 201)
+        # The cancelled allocation stays on record and in the report.
+        listed = self.client.get(reverse("input-allocation-list"), {"season": self.season.id}).data["results"]
+        self.assertEqual([row["status"] for row in listed], ["CANCELLED"])
+        report = self.client.get(reverse("report-preview", kwargs={"code": "arda-requests"}), {"agricultural_year": self.season.id})
+        self.assertEqual(report.status_code, 200, report.data)
+        self.assertEqual(report.data["rows"][0]["approved_hectares"], "20")
 
-    # Batch stock -----------------------------------------------------------------------
+    def test_inactive_programme_gets_no_new_requests_or_allocations(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        batch = self.approve(self.request(arda, self.maize, "100"))
+        made = self.allocate(arda, batch, hectares="4")
+        self.assertEqual(made.status_code, 201)
+        self.client.patch(reverse("programme-detail", kwargs={"pk": arda.id}), {"capacity_status": "INACTIVE"}, format="json")
+        refused = self.allocate(arda, batch, hectares="4", farmer=self.other_farmer)
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("inactive", str(refused.data))
+        self.assertEqual(self.client.post(reverse("arda-request-batch-list"), {
+            "programme": arda.id, "season": self.season.id, "crop": "Maize", "requested_hectares": "5", "input_category": "SEED",
+        }, format="json").status_code, 400)
+        options = self.client.get(reverse("input-allocation-programme-options"), {"crop": self.maize.id, "season": self.season.id}).data
+        self.assertEqual(options["options"], [])
+        # Earlier records stay readable.
+        self.assertEqual(self.client.get(reverse("input-allocation-detail", kwargs={"pk": made.data["id"]})).status_code, 200)
+        self.assertEqual(self.client.get(reverse("programme-list"), {"capacity_status": "INACTIVE"}).data["results"][0]["id"], arda.id)
 
-    def test_batch_quantities_and_ledger(self):
-        self.configure()
-        line = self.line(self.arda_batch, self.compound_d)
-        self.client.post("/api/input-allocations/programme-allocate/", self.payload(FERTILIZER=self.arda), format="json")
-        below = self.client.patch(f"/api/request-batch-inputs/{line.id}/", {"requested_quantity": "400"}, format="json")
-        self.assertEqual(below.status_code, 400)
-        raised = self.client.patch(f"/api/request-batch-inputs/{line.id}/", {"requested_quantity": "1000", "reason": "Second delivery"}, format="json")
-        self.assertEqual(raised.status_code, 200, raised.data)
-        self.assertEqual(Decimal(raised.data["available_quantity"]), Decimal("500"))
-        self.assertEqual(self.client.delete(f"/api/request-batch-inputs/{line.id}/").status_code, 400)
-        history = self.client.get(f"/api/request-batch-inputs/{line.id}/movements/").data
-        self.assertEqual([row["kind"] for row in history], ["ADJUSTMENT", "ALLOCATION", "OPENING"])
-        self.assertEqual(history[1]["farmer_name"], self.farmer.full_name)
+    def test_unauthorised_roles_cannot_change_anything(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        batch = self.request(arda, self.maize, "100")
+        self.client.post(reverse("arda-request-batch-submit", kwargs={"pk": batch.id}))
+        viewer = self.api(self.viewer)
+        self.assertEqual(viewer.get(reverse("programme-list")).status_code, 200)
+        attempts = [
+            viewer.post(reverse("programme-list"), {"name": "X", "season": self.season.id, "crops": [self.maize.id], "input_categories": ["SEED"]}, format="json"),
+            viewer.patch(reverse("programme-detail", kwargs={"pk": arda.id}), {"capacity_status": "INACTIVE"}, format="json"),
+            viewer.post(reverse("crop-input-requirement-list"), {"crop": self.maize.id, "programme": arda.id, "input_category": "SEED", "input_product": self.shumba.id, "rate_per_hectare": "1", "cost_per_unit": "1"}, format="json"),
+            viewer.post(reverse("arda-request-batch-approve", kwargs={"pk": batch.id}), {}, format="json"),
+            self.allocate(arda, batch, client=viewer),
+        ]
+        self.assertEqual([response.status_code for response in attempts], [403] * len(attempts))
+        self.approve_from_submitted(batch)
+        made = self.allocate(arda, batch)
+        self.assertEqual(viewer.post(reverse("input-allocation-cancel", kwargs={"pk": made.data["id"]}), {"reason": "x"}, format="json").status_code, 403)
 
-    def test_stock_guard_refuses_overdraw_directly(self):
-        self.configure()
-        line = stock.lock([self.line(self.govt_batch, self.herbicide).pk])
-        with self.assertRaises(stock.StockError):
-            stock.allocate(next(iter(line.values())), "101", allocation=None, allocation_line=None)
+    def approve_from_submitted(self, batch):
+        response = self.client.post(reverse("arda-request-batch-approve", kwargs={"pk": batch.id}), {}, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
 
-    def test_options_list_programmes_per_category(self):
-        self.configure()
-        options = self.client.get("/api/input-allocations/programme-options/", {"crop": self.maize.id, "season": self.season.id, "farmer": self.farmer.id}).data
+    def test_lines_without_a_programme_are_assigned_only_by_an_administrator(self):
+        arda = self.programme("ARDA", [self.maize], ["FERTILIZER"])
+        old = CropInputRequirement.objects.create(crop=self.maize, group_name="Seed & Fertilisers", item_name="COMP D", rate_per_hectare=6, unit="kg", cost_per_unit=31)
+        copied = self.client.post(reverse("crop-input-requirement-assign", kwargs={"pk": old.id}), {"programme": arda.id, "input_category": "FERTILIZER"}, format="json")
+        self.assertEqual(copied.status_code, 201, copied.data)
+        self.assertEqual((copied.data["programme"], copied.data["input_category"], copied.data["cost_per_unit"]), (arda.id, "FERTILIZER", "31.0000"))
+        old.refresh_from_db()
+        self.assertFalse(old.active)
+
+    def test_whole_chain_from_programme_to_farmer_with_matching_figures(self):
+        arda = self.programme("ARDA", [self.maize, self.sorghum], ["SEED", "FERTILIZER"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        self.line(arda, self.maize, "FERTILIZER", self.compound_d, "400", pack_size="50", pack_price="32", pack_label="50 kg bag")
+        batch = self.approve(self.request(arda, self.maize, "300"), hectares="200")
+        options = self.client.get(reverse("input-allocation-programme-options"), {"crop": self.maize.id, "season": self.season.id, "farmer": self.farmer.id}).data
         self.assertEqual(options["crop_hectares"], "10.00")
-        self.assertEqual(sorted(entry["programme_name"] for entry in options["categories"]["SEED"]), ["ARDA Programme", "Seed Co Programme"])
-        self.assertEqual([entry["programme_name"] for entry in options["categories"]["CHEMICALS"]], ["Government Input Programme"])
-        seedco = next(entry for entry in options["categories"]["SEED"] if entry["programme_name"] == "Seed Co Programme")
-        self.assertEqual(seedco["products"][0]["unit_price"], "2.0000")
-        self.assertEqual(seedco["batches"][0]["request_number"], "SC-1")
+        offered = options["options"][0]
+        self.assertEqual((offered["programme_name"], [item["request_number"] for item in offered["batches"]]), ("ARDA", [batch.request_number]))
+        self.assertEqual(self.allocate(arda, batch, hectares="5").status_code, 201)
+        self.assertEqual(self.allocate(arda, batch, hectares="10", farmer=self.other_farmer).status_code, 201)
+        figures = self.client.get(reverse("programme-figures", kwargs={"pk": arda.id})).data
+        row = self.batch_row(batch)
+        self.assertEqual(figures["totals"]["approved_hectares"], "200.00")
+        self.assertEqual(Decimal(figures["totals"]["allocated_hectares"]), row["allocated_hectares"])
+        self.assertEqual(Decimal(figures["totals"]["remaining_hectares"]), row["remaining_hectares"])
+        self.assertEqual(figures["totals"]["farmers"], row["total_farmers"])
+        maize = next(item for item in figures["crops"] if item["crop_name"] == "Maize")
+        self.assertEqual((maize["allocated_hectares"], maize["remaining_hectares"], maize["inputs_configured"]), ("15.00", "185.00", 2))
+        self.assertEqual(InputAllocation.objects.filter(request_batch=batch).count(), 2)
+        debt = InputDebt.objects.get(farmer=self.farmer)
+        self.assertEqual(debt.input_value, Decimal("1530.00"))  # 5 ha: seed 125 kg x 2.00 + fertilizer 2000 kg x 0.64
+
+
+class ConcurrentAllocationTests(ChainMixin, TransactionTestCase):
+    """Two officers allocating the last approved hectares at the same moment."""
+
+    def setUp(self):
+        make_world(self)
+        self.client = self.api()
+
+    def test_two_allocations_at_once_cannot_exceed_approved_hectares(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        batch = self.approve(self.request(arda, self.maize, "20"), hectares="10")
+        barrier = threading.Barrier(2)
+        results = []
+
+        def allocate(farmer):
+            try:
+                barrier.wait()
+                programme_allocation.confirm(
+                    farmer=farmer, farm=farmer.farms.first(), season=self.season, crop=self.maize, hectares="6",
+                    programme=arda, batch=batch, user=self.admin,
+                )
+                results.append("made")
+            except programme_allocation.AllocationError:
+                results.append("refused")
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=allocate, args=(farmer,)) for farmer in (self.farmer, self.other_farmer)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(sorted(results), ["made", "refused"])
+        self.assertEqual(InputAllocation.objects.filter(request_batch=batch).count(), 1)

@@ -275,7 +275,7 @@ class ProgrammeAndPriceCrudTests(TestCase):
     def test_programme_crud_and_protected_delete(self):
         created = self.client.post(reverse("programme-list"), {
             "name": "Summer Maize", "code": "MAIZE-26", "season": self.year.pk, "crop": "Maize",
-            "institution": "ARDA", "announced_hectares": "100.00", "status": "OPEN",
+            "institution": "ARDA", "announced_hectares": "100.00", "status": "OPEN", "input_categories": ["SEED"],
         }, format="json")
         self.assertEqual(created.status_code, 201, created.data)
         self.assertEqual(created.data["season_name"], "2026/2027")
@@ -286,12 +286,12 @@ class ProgrammeAndPriceCrudTests(TestCase):
         self.assertEqual(updated.data["announced_hectares"], "80.00")
 
         duplicate = self.client.post(reverse("programme-list"), {
-            "name": "Copy", "code": "maize-26", "season": self.year.pk, "crop": "Maize", "announced_hectares": "1.00",
+            "name": "Copy", "code": "maize-26", "season": self.year.pk, "crop": "Maize", "announced_hectares": "1.00", "input_categories": ["SEED"],
         }, format="json")
         self.assertEqual(duplicate.status_code, 400)
 
         hidden_year = self.client.post(reverse("programme-list"), {
-            "name": "Later", "code": "LATER", "season": self.next_year.pk, "crop": "Maize", "announced_hectares": "1.00",
+            "name": "Later", "code": "LATER", "season": self.next_year.pk, "crop": "Maize", "announced_hectares": "1.00", "input_categories": ["SEED"],
         }, format="json")
         self.assertEqual(hidden_year.status_code, 201, hidden_year.data)
         seasons = self.client.get(reverse("season-list"))
@@ -310,15 +310,18 @@ class ProgrammeAndPriceCrudTests(TestCase):
 
     def test_crop_requirement_is_saved_for_one_crop_and_cost_is_calculated(self):
         self.client.force_authenticate(self.user)
+        general = self.client.post(reverse("crop-input-requirement-list"), {
+            "crop": self.maize.pk, "group_name": "Seed", "item_name": "SC659", "rate_per_hectare": "6.0000",
+            "unit": "kg", "cost_per_unit": "23.0000", "cost_type": "AGRICULTURAL_INPUT", "active": True,
+        }, format="json")
+        self.assertEqual(general.status_code, 400)  # There is no general catalogue: every line belongs to a programme.
+        from apps.inputs.models import Input
+
+        programme = Programme.objects.create(name="Catalogue Programme", code="CAT-PROG", season=self.year, crop="Maize", input_categories=["SEED"])
+        seed = Input.objects.create(name="SC659", category="SEED", unit="kg")
         created = self.client.post(reverse("crop-input-requirement-list"), {
-            "crop": self.maize.pk,
-            "group_name": "Seed",
-            "item_name": "SC659",
-            "rate_per_hectare": "6.0000",
-            "unit": "kg",
-            "cost_per_unit": "23.0000",
-            "cost_type": "AGRICULTURAL_INPUT",
-            "active": True,
+            "crop": self.maize.pk, "programme": programme.pk, "input_category": "SEED", "input_product": seed.pk,
+            "rate_per_hectare": "6.0000", "unit": "kg", "cost_per_unit": "23.0000", "active": True,
         }, format="json")
         self.assertEqual(created.status_code, 201, created.data)
         self.assertEqual(created.data["cost_per_hectare"], "138.0000")

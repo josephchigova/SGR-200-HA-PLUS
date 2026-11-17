@@ -523,7 +523,7 @@ def arda_batches(spec, params):
     total_requested_hectares and total_farmers fields are farmer-line rollups and can
     stay at zero when the formal request has hectares but no farmer lines.
     """
-    from apps.arda_requests.services import ARDARequestBatchService
+    from apps.arda_requests.services import ARDARequestBatchService, batch_allocations
 
     qs = apply_common(ARDARequestBatch.objects.select_related("programme", "season"), spec, params)
     if params.province_id:
@@ -541,11 +541,7 @@ def arda_batches(spec, params):
     rows = []
     for batch in qs.order_by("-date_created", "-id"):
         snapshot = ARDARequestBatchService.batch_snapshot(batch)
-        farmer_ids = set(ARDARequestBatchService._allocation_queryset_for_scope(
-            programme=batch.programme,
-            season=batch.season,
-            crop_label=ARDARequestBatchService._normalize_crop(batch.crop),
-        ).values_list("farmer_id", flat=True))
+        farmer_ids = set(batch_allocations(batch).values_list("farmer_id", flat=True))
         rows.append({
             "id": batch.pk,
             "request_number": batch.request_number,
@@ -554,7 +550,10 @@ def arda_batches(spec, params):
             "season_name": batch.season.name if batch.season_id else "",
             "crop_season": season_labels.get(crop_seasons.get((batch.crop or "").lower(), ""), ""),
             "crop": batch.crop,
+            "input_type": batch.get_input_category_display() if batch.input_category else "All inputs",
+            "status": batch.get_status_display(),
             "requested_hectares": batch.requested_hectares,
+            "approved_hectares": snapshot["approved_hectares"],
             "allocated_hectares": snapshot["allocated_hectares"],
             "available_hectares": snapshot["available_hectares"],
             "farmer_count": snapshot["unique_farmers"],

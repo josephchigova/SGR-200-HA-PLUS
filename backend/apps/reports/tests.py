@@ -302,6 +302,7 @@ class ReportingCentreTests(TestCase):
         ARDARequestBatch.objects.create(
             request_number="SGR1000", programme=programme, season=self.season, crop="Maize",
             requested_hectares="20000.00", total_farmers=0, total_requested_hectares="0.00",
+            status=ARDARequestBatch.STATUS_APPROVED, approved_hectares="20000.00",
         )
         InputAllocation.objects.create(
             farmer=self.farmer, farm=self.farm, programme=programme, crop="Maize", hectares="100.00",

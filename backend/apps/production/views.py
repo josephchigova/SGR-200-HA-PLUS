@@ -365,6 +365,44 @@ class CropInputRequirementViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(input_category=category.upper())
         return queryset.select_related("programme", "input_product")
 
+    @action(detail=True, methods=["post"], url_path="assign")
+    def assign(self, request, pk=None):
+        """Copy a line made before programme catalogues into one programme's catalogue.
+
+        Lines without a programme are never assigned automatically. An administrator picks the
+        programme and input type here; the old line is then switched off and kept as history.
+        """
+        from django.db import transaction
+
+        from apps.inputs.models import Input
+        from apps.programmes.models import INPUT_CATEGORY_CHOICES, Programme
+
+        line = self.get_object()
+        if line.programme_id:
+            raise ValidationError({"detail": ["This line already belongs to a programme."]})
+        programme = Programme.objects.filter(pk=request.data.get("programme")).first()
+        if programme is None:
+            raise ValidationError({"programme": ["Choose the programme this line belongs to."]})
+        category = str(request.data.get("input_category") or "").upper()
+        if category not in dict(INPUT_CATEGORY_CHOICES):
+            raise ValidationError({"input_category": ["Choose Seed, Fertilizer or Chemicals."]})
+        product = Input.objects.filter(pk=request.data.get("input_product")).first() if request.data.get("input_product") else None
+        with transaction.atomic():
+            if product is None:
+                product = Input.objects.filter(name__iexact=line.item_name.strip()).first()
+                if product is None:
+                    product = Input.objects.create(name=line.item_name.strip(), category=category, unit=line.unit or "kg")
+            serializer = self.get_serializer(data={
+                "crop": line.crop_id, "programme": programme.pk, "input_category": category, "input_product": product.pk,
+                "rate_per_hectare": line.rate_per_hectare, "unit": line.unit, "cost_per_unit": line.cost_per_unit,
+                "notes": f"Copied from the catalogue line {line.group_name} / {line.item_name} made before programme catalogues.",
+            })
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            line.active = False
+            line.save(update_fields=["active", "updated_at"])
+        return Response(serializer.data, status=201)
+
     def perform_destroy(self, instance):
         from apps.inputs.models import InputAllocationLine
 

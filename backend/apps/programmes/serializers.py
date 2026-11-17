@@ -40,8 +40,21 @@ class SeasonSerializer(serializers.ModelSerializer):
 
 
 class ProgrammeSerializer(serializers.ModelSerializer):
+    """A programme: its name, agricultural year, the crops and input types it supports, and whether it is active.
+
+    Code, institution and hectare capacity are kept for programmes set up earlier but are not
+    asked for any more. A code is generated when none is given.
+    """
+
     remaining_capacity = serializers.DecimalField(max_digits=14, decimal_places=2, read_only=True)
     season_name = serializers.SerializerMethodField()
+    code = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    crop = serializers.CharField(max_length=80, required=False, allow_blank=True)
+    crops = serializers.PrimaryKeyRelatedField(many=True, queryset=Crop.objects.all(), required=False)
+    crop_names = serializers.SerializerMethodField()
+    capacity_status = serializers.ChoiceField(choices=[("ACTIVE", "Active"), ("INACTIVE", "Inactive")], required=False)
+    input_category_labels = serializers.SerializerMethodField()
+    figures = serializers.SerializerMethodField()
 
     class Meta:
         model = Programme
@@ -53,6 +66,8 @@ class ProgrammeSerializer(serializers.ModelSerializer):
             "season",
             "season_name",
             "crop",
+            "crops",
+            "crop_names",
             "institution",
             "announced_hectares",
             "total_allocated_hectares",
@@ -64,8 +79,33 @@ class ProgrammeSerializer(serializers.ModelSerializer):
             "start_date",
             "end_date",
             "is_active",
+            "capacity_status",
             "input_categories",
+            "input_category_labels",
+            "figures",
         ]
+        read_only_fields = ["total_allocated_hectares", "remaining_capacity", "season_name"]
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["crops"] = list(instance.supported_crops().values_list("pk", flat=True))
+        data["capacity_status"] = instance.capacity_status
+        return data
+
+    def get_crop_names(self, obj):
+        return list(obj.supported_crops().values_list("name", flat=True))
+
+    def get_input_category_labels(self, obj):
+        labels = dict(INPUT_CATEGORY_CHOICES)
+        return [labels[code] for code in obj.input_categories or [] if code in labels]
+
+    def get_figures(self, obj):
+        from .figures import programme_figures
+
+        cache = self.context.setdefault("_programme_figures", {})
+        if obj.pk not in cache:
+            cache[obj.pk] = programme_figures(obj)
+        return cache[obj.pk]["totals"]
 
     def validate_input_categories(self, value):
         chosen = [str(item).upper() for item in (value or [])]
@@ -73,10 +113,98 @@ class ProgrammeSerializer(serializers.ModelSerializer):
         if unknown:
             raise serializers.ValidationError(f"Use Seed, Fertilizer or Chemicals, not {', '.join(unknown)}.")
         return [code for code in INPUT_CATEGORIES if code in chosen]
-        read_only_fields = ["total_allocated_hectares", "remaining_capacity", "season_name"]
 
     def get_season_name(self, obj):
         return obj.season.name if obj.season_id else ""
+
+    def validate(self, attrs):
+        capacity_status = attrs.pop("capacity_status", None)
+        if capacity_status:
+            attrs["is_active"] = capacity_status == "ACTIVE"
+        name = " ".join((attrs.get("name", getattr(self.instance, "name", "")) or "").split())
+        season = attrs.get("season", getattr(self.instance, "season", None))
+        if "name" in attrs:
+            attrs["name"] = name
+        if name and season is not None:
+            duplicate = Programme.objects.filter(name__iexact=name, season=season)
+            if self.instance is not None:
+                duplicate = duplicate.exclude(pk=self.instance.pk)
+            if duplicate.exists():
+                raise serializers.ValidationError({"name": [f"{name} already exists for {season.name}. Edit that programme instead."]})
+        if self.instance is None:
+            crops = attrs.get("crops") or []
+            if not crops and not attrs.get("crop"):
+                raise serializers.ValidationError({"crops": ["Select at least one crop this programme supports."]})
+            if not attrs.get("input_categories"):
+                raise serializers.ValidationError({"input_categories": ["Select at least one input type: Seed, Fertilizer or Chemicals."]})
+        elif "crops" in attrs and not attrs["crops"]:
+            raise serializers.ValidationError({"crops": ["A programme must support at least one crop."]})
+        elif "input_categories" in attrs and not attrs["input_categories"]:
+            raise serializers.ValidationError({"input_categories": ["A programme must supply at least one input type."]})
+        inactive = [crop.name for crop in attrs.get("crops") or [] if not crop.active]
+        if inactive:
+            raise serializers.ValidationError({"crops": [f"{', '.join(inactive)} is not an active crop."]})
+        return attrs
+
+    @staticmethod
+    def _generate_code(name, season):
+        import re
+
+        base = re.sub(r"[^A-Z0-9]+", "-", name.upper()).strip("-")[:50] or "PROGRAMME"
+        year = re.sub(r"[^0-9]+", "", season.name)[:8] if season else ""
+        code = f"{base}-{year}" if year else base
+        candidate, number = code, 2
+        while Programme.objects.filter(code__iexact=candidate).exists():
+            candidate = f"{code}-{number}"
+            number += 1
+        return candidate
+
+    def _save_crops(self, programme, crops):
+        from .models import ProgrammeCrop
+
+        if crops is None:
+            if (programme.crop or "").strip() and not programme.programme_crops.exists():
+                crop = Crop.objects.filter(name__iexact=programme.crop.strip()).first()
+                if crop is not None:
+                    ProgrammeCrop.objects.get_or_create(programme=programme, crop=crop)
+            return
+        wanted = {crop.pk for crop in crops}
+        for crop in crops:
+            link, created = ProgrammeCrop.objects.get_or_create(programme=programme, crop=crop)
+            if not created and not link.active:
+                link.active = True
+                link.save(update_fields=["active"])
+        # Removed crops are switched off, not deleted, so requests and allocations made for them stay readable.
+        programme.programme_crops.exclude(crop_id__in=wanted).update(active=False)
+        first = programme.supported_crops().order_by("name").first()
+        if first is not None and programme.crop != first.name:
+            programme.crop = first.name
+            programme.save(update_fields=["crop", "updated_at"])
+
+    def create(self, validated_data):
+        from django.db import transaction
+
+        crops = validated_data.pop("crops", None)
+        if not (validated_data.get("code") or "").strip():
+            validated_data["code"] = self._generate_code(validated_data["name"], validated_data.get("season"))
+        if crops and not validated_data.get("crop"):
+            validated_data["crop"] = min(crop.name for crop in crops)
+        with transaction.atomic():
+            programme = super().create(validated_data)
+            self._save_crops(programme, crops)
+        return programme
+
+    def update(self, instance, validated_data):
+        from django.db import transaction
+
+        crops = validated_data.pop("crops", None)
+        if "code" in validated_data and not (validated_data["code"] or "").strip():
+            validated_data.pop("code")
+        with transaction.atomic():
+            programme = super().update(instance, validated_data)
+            if crops is not None:
+                self._save_crops(programme, crops)
+        return programme
 
     def validate_announced_hectares(self, value):
         if value < 0:
@@ -86,7 +214,9 @@ class ProgrammeSerializer(serializers.ModelSerializer):
         return value
 
     def validate_code(self, value):
-        normalized = value.strip()
+        normalized = (value or "").strip()
+        if not normalized:
+            return normalized
         queryset = Programme.objects.filter(code__iexact=normalized)
         if self.instance is not None:
             queryset = queryset.exclude(pk=self.instance.pk)
@@ -102,7 +232,7 @@ class ProgrammeSerializer(serializers.ModelSerializer):
     def validate_crop(self, value):
         normalized = " ".join((value or "").split())
         if not normalized:
-            raise serializers.ValidationError("Select a crop from the catalogue.")
+            return ""
         crop = Crop.objects.filter(name__iexact=normalized, active=True).first()
         if crop is None:
             raise serializers.ValidationError("Select an active crop from the catalogue.")
@@ -180,6 +310,9 @@ class CropInputRequirementSerializer(serializers.ModelSerializer):
             "rate_per_hectare",
             "unit",
             "cost_per_unit",
+            "pack_label",
+            "pack_size",
+            "pack_price",
             "cost_per_hectare",
             "cost_type",
             "active",
@@ -205,6 +338,23 @@ class CropInputRequirementSerializer(serializers.ModelSerializer):
         rate = Decimal(str(attrs.get("rate_per_hectare", getattr(instance, "rate_per_hectare", 0))))
         if rate <= 0:
             raise serializers.ValidationError({"rate_per_hectare": ["Rate per hectare must be greater than zero."]})
+        if instance is None and attrs.get("programme") is None:
+            raise serializers.ValidationError({"programme": ["Choose the programme. Every catalogue line belongs to one programme."]})
+
+        # Sold in packs (for example 50 kg bags): the unit price follows the pack price and size.
+        pack_size = attrs.get("pack_size", getattr(instance, "pack_size", None))
+        pack_price = attrs.get("pack_price", getattr(instance, "pack_price", None))
+        if (pack_size is None) != (pack_price is None):
+            raise serializers.ValidationError({"pack_size": ["Enter both the pack size and the pack price, or neither."]})
+        if pack_size is not None:
+            if Decimal(str(pack_size)) <= 0:
+                raise serializers.ValidationError({"pack_size": ["Pack size must be greater than zero."]})
+            if Decimal(str(pack_price)) <= 0:
+                raise serializers.ValidationError({"pack_price": ["Pack price must be greater than zero."]})
+            attrs["cost_per_unit"] = (Decimal(str(pack_price)) / Decimal(str(pack_size))).quantize(Decimal("0.0001"))
+            attrs.pop("cost_per_hectare", None)
+        elif "pack_size" in attrs:
+            attrs["pack_label"] = ""
 
         cost_per_unit = attrs.get("cost_per_unit", getattr(instance, "cost_per_unit", None))
         cost_per_hectare = attrs.get("cost_per_hectare", getattr(instance, "cost_per_hectare", None))
@@ -260,6 +410,11 @@ class CropInputRequirementSerializer(serializers.ModelSerializer):
             if product.category in INPUT_CATEGORIES and product.category != category:
                 raise serializers.ValidationError({"input_product": [f"{product.name} is a {product.get_category_display().lower()} product, not {dict(INPUT_CATEGORY_CHOICES)[category].lower()}."]})
             crop = attrs.get("crop", getattr(instance, "crop", None))
+            if crop is not None and not programme.supports_crop(crop):
+                raise serializers.ValidationError({"crop": [f"{programme.name} does not support {crop.name}. Add the crop to the programme first."]})
+            if programme.input_categories and category not in programme.input_categories:
+                label = dict(INPUT_CATEGORY_CHOICES)[category].lower()
+                raise serializers.ValidationError({"input_category": [f"{programme.name} does not supply {label}. Add it to the programme's input types first."]})
             duplicate = CropInputRequirement.objects.filter(crop=crop, programme=programme, input_product=product)
             if instance is not None:
                 duplicate = duplicate.exclude(pk=instance.pk)

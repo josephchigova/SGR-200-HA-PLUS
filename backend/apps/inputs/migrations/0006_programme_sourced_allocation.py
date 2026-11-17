@@ -7,6 +7,10 @@ from django.db import migrations, models
 
 def pesticides_are_chemicals(apps, schema_editor):
     """Input products now fall in three categories: seed, fertilizer and chemicals."""
+    if schema_editor is not None and schema_editor.connection.vendor == "postgresql":
+        # Check foreign keys row by row, so no checks are left pending when this
+        # migration's new indexes and constraints are built in the same transaction.
+        schema_editor.execute("SET CONSTRAINTS ALL IMMEDIATE")
     apps.get_model("inputs", "Input").objects.filter(category="PESTICIDE").update(category="CHEMICALS")
 
 

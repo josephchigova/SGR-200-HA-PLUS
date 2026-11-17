@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.urls import reverse
@@ -5,7 +7,8 @@ from rest_framework.test import APIClient
 
 from apps.farmers.models import Farmer
 from apps.geography.models import District, Province, Ward
-from apps.programmes.models import Crop, CropInputRequirement, CropSellingPrice, Season
+from apps.inputs.models import Input
+from apps.programmes.models import Crop, CropSellingPrice, Season
 
 User = get_user_model()
 
@@ -122,12 +125,10 @@ class GoldenPathSystemTest(TestCase):
             reverse("programme-list"),
             {
                 "name": "SGR 200HA+ Golden 2026/27",
-                "code": "GOLDEN-200HA-2026",
                 "season": season_id,
-                "crop": "Maize",
-                "institution": "ARDA",
-                "announced_hectares": "20000.00",
-                "status": "OPEN",
+                "crops": [Crop.objects.get(name="Maize").id],
+                "input_categories": ["SEED"],
+                "capacity_status": "ACTIVE",
             },
             format="json",
         )
@@ -163,25 +164,30 @@ class GoldenPathSystemTest(TestCase):
         )
         self.assertEqual(approval_response.status_code, 200, approval_response.data)
 
+        # The request is submitted and approved before its hectares can be allocated.
+        batch_id = batch_response.data["id"]
+        self.assertEqual(self.client.post(reverse("arda-request-batch-submit", kwargs={"pk": batch_id})).status_code, 200)
+        approved = self.client.post(reverse("arda-request-batch-approve", kwargs={"pk": batch_id}), {"approved_hectares": "10.00"}, format="json")
+        self.assertEqual(approved.status_code, 200, approved.data)
+        self.assertEqual(Decimal(approved.data["remaining_hectares"]), Decimal("10.00"))
+
         crop = Crop.objects.get(name="Maize")
-        CropInputRequirement.objects.create(
-            crop=crop,
-            group_name="Seed",
-            item_name="Golden Seed",
-            rate_per_hectare="2.00",
-            unit="bags",
-            cost_per_unit="10.00",
-            cost_per_hectare="20.00",
-            active=True,
-        )
+        seed = Input.objects.create(name="Golden Seed", category="SEED", unit="bags")
+        catalogue_response = self.client.post(reverse("crop-input-requirement-list"), {
+            "crop": crop.id, "programme": programme_id, "input_category": "SEED", "input_product": seed.id,
+            "rate_per_hectare": "2.00", "unit": "bags", "cost_per_unit": "10.00",
+        }, format="json")
+        self.assertEqual(catalogue_response.status_code, 201, catalogue_response.data)
         CropSellingPrice.objects.create(crop=crop, season_id=season_id, price_per_tonne="200.00", active=True)
         allocation_response = self.client.post(
-            reverse("input-allocation-list"),
+            reverse("input-allocation-programme-allocate"),
             {
                 "farmer": farmer_id,
                 "farm": farm_id,
+                "season": season_id,
+                "crop": crop.id,
                 "programme": programme_id,
-                "crop_reference": crop.id,
+                "request_batch": batch_id,
                 "hectares": "10.00",
             },
             format="json",
