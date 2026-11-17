@@ -61,8 +61,8 @@ const navGroups = [
   {
     title: 'Programmes and inputs',
     items: [
-      { label: 'Crop catalogue', to: '/crops', icon: 'book', module: 'crops' },
       { label: 'Programmes', to: '/programmes', icon: 'clipboard', module: 'programmes' },
+      { label: 'Crop catalogue', to: '/crops', icon: 'book', module: 'crops' },
       { label: 'Input requests', to: '/arda-requests', icon: 'send', module: 'arda' },
       { label: 'Input allocations', to: '/input-allocations', icon: 'box', module: 'allocations' },
     ],

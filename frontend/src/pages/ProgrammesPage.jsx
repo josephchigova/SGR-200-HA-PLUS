@@ -141,7 +141,7 @@ function ProgrammesPage({ selectedSeason = null, cropSeason = '', periodStatus =
         ) : null}
       </section>
       {deleting ? (
-        <Modal title={`Delete ${deleting.name}?`} subtitle="A programme with requests, allocations or financial records cannot be deleted. Make it inactive instead." onClose={() => setDeleting(null)}
+        <Modal title={`Delete ${deleting.name}?`} subtitle="This also deletes its crop catalogue, its input requests, and any allocations and input debts made from it. It is refused once grain has been recovered against those debts; make the programme inactive instead." onClose={() => setDeleting(null)}
           footer={<><button type="button" className="ghost-btn" onClick={() => setDeleting(null)}>Keep it</button><button type="button" className="danger-solid" onClick={remove}>Delete</button></>}>
           <p>This cannot be undone.</p>
         </Modal>
@@ -216,6 +216,10 @@ function ProgrammeForm({ programme = null, seasons, crops, defaultSeason, onSave
   const [saving, setSaving] = useState(false)
   const [errors, setErrors] = useState({})
   const draft = useFormDraft({ key: `programme:${programme?.id || 'new'}`, value: form, enabled: !programme, onRestore: (data) => setForm((current) => ({ ...current, ...data })) })
+  const otherErrors = Object.entries(errors)
+    .filter(([key]) => !['name', 'season', 'crops', 'input_categories'].includes(key))
+    .map(([key, value]) => (['non_field_errors', 'detail'].includes(key) ? value : `${key.replace(/_/g, ' ')}: ${value}`))
+    .join(' ')
   const toggle = (field, value) => setForm((current) => ({
     ...current,
     [field]: current[field].includes(value) ? current[field].filter((item) => item !== value) : [...current[field], value],
@@ -249,7 +253,7 @@ function ProgrammeForm({ programme = null, seasons, crops, defaultSeason, onSave
     <form className={programme ? 'programme-form' : 'card programme-form'} onSubmit={submit}>
       {programme ? null : <div className="card-head"><h3><Icon name="plus" />New programme</h3></div>}
       {programme ? null : <DraftNotice draft={draft} />}
-      {errors.non_field_errors || errors.detail ? <div className="form-message error" role="alert">{errors.non_field_errors || errors.detail}</div> : null}
+      {otherErrors ? <div className="form-message error" role="alert">{otherErrors}</div> : null}
       <div className="workflow-fields">
         <label className="form-field">Programme name
           <input required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="For example ARDA Summer Inputs" />

@@ -49,35 +49,44 @@ class ProgrammeViewSet(viewsets.ModelViewSet):
         return Response(programme_figures(self.get_object()))
 
     def perform_destroy(self, instance):
-        from apps.finance.models import ExpenseClaim, JournalEntry, RecognizedReceipt, TradeReceivable
+        """Delete a programme with everything that belongs to it.
+
+        Its crop links, catalogue lines, input requests, allocations and the input debts from
+        those allocations go with it. Finance records keep their entry and lose the programme
+        link. Only money already moved stops it: grain recovered against its debts, or a debt
+        booked as a receivable.
+        """
+        from django.db import transaction
+        from django.db.models import ProtectedError, Q
+
+        from apps.arda_requests.models import BatchStockMovement, RequestBatchInput
+        from apps.finance.models import TradeReceivable
+        from apps.inputs.models import InputAllocation
         from apps.recovery.models import InputDebt
 
-        blockers = []
-        if instance.request_batches.exists():
-            blockers.append("ARDA requests")
-        if instance.input_allocations.exists():
-            blockers.append("input allocations")
-        if instance.allocations.exists():
-            blockers.append("programme allocations")
-        if InputDebt.objects.filter(programme=instance).exists():
-            blockers.append("recovery records")
-        if JournalEntry.objects.filter(programme=instance).exists():
-            blockers.append("journal entries")
-        if RecognizedReceipt.objects.filter(programme=instance).exists():
-            blockers.append("recognized receipts")
-        if ExpenseClaim.objects.filter(programme=instance).exists():
-            blockers.append("expense claims")
-        if TradeReceivable.objects.filter(programme=instance).exists():
-            blockers.append("receivables")
-        if blockers:
-            raise ValidationError({
-                "detail": [
-                    "This programme cannot be deleted because it is used by "
-                    + ", ".join(blockers)
-                    + ". Close or archive it instead."
-                ],
-            })
-        instance.delete()
+        from .models import CropInputRequirement
+
+        allocations = InputAllocation.objects.filter(
+            Q(programme=instance) | Q(calculation_lines__programme=instance) | Q(request_batch__programme=instance)
+        ).distinct()
+        allocation_ids = list(allocations.values_list("pk", flat=True))
+        debts = InputDebt.objects.filter(Q(programme=instance) | Q(input_allocation_id__in=allocation_ids))
+        if debts.filter(recovered_tonnes__gt=0).exists():
+            raise ValidationError({"detail": [f"Grain has already been recovered against {instance.name}'s input debts, so it cannot be deleted. Make it inactive instead."]})
+        if TradeReceivable.objects.filter(input_debt__in=debts).exists():
+            raise ValidationError({"detail": [f"{instance.name}'s input debts are booked as receivables in Finance, so it cannot be deleted. Make it inactive instead."]})
+        try:
+            with transaction.atomic():
+                BatchStockMovement.objects.filter(Q(allocation_id__in=allocation_ids) | Q(batch_input__batch__programme=instance)).delete()
+                debts.delete()
+                InputAllocation.objects.filter(pk__in=allocation_ids).delete()
+                RequestBatchInput.objects.filter(batch__programme=instance).delete()
+                instance.request_batches.all().delete()
+                CropInputRequirement.objects.filter(programme=instance).delete()
+                instance.delete()
+        except ProtectedError as error:
+            names = sorted({obj._meta.verbose_name_plural for obj in error.protected_objects})
+            raise ValidationError({"detail": [f"{instance.name} is still used by {', '.join(names)}, so it cannot be deleted. Make it inactive instead."]}) from error
 
 
 class SeasonViewSet(viewsets.ModelViewSet):

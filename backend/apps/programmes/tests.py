@@ -300,13 +300,15 @@ class ProgrammeAndPriceCrudTests(TestCase):
 
         from apps.arda_requests.models import ARDARequestBatch
         ARDARequestBatch.objects.create(request_number="SGR9000", programme_id=programme_id, season=self.year, crop="Maize", requested_hectares="10.00")
-        blocked = self.client.delete(reverse("programme-detail", args=[programme_id]))
-        self.assertEqual(blocked.status_code, 400)
-        self.assertIn("ARDA", str(blocked.data))
-
         self.client.force_authenticate(self.viewer)
         forbidden = self.client.delete(reverse("programme-detail", args=[programme_id]))
         self.assertEqual(forbidden.status_code, 403)
+
+        # Deleting a programme takes its input requests with it.
+        self.client.force_authenticate(self.user)
+        deleted = self.client.delete(reverse("programme-detail", args=[programme_id]))
+        self.assertEqual(deleted.status_code, 204)
+        self.assertFalse(ARDARequestBatch.objects.filter(request_number="SGR9000").exists())
 
     def test_crop_requirement_is_saved_for_one_crop_and_cost_is_calculated(self):
         self.client.force_authenticate(self.user)

@@ -389,6 +389,65 @@ class ProgrammeChainTests(ChainMixin, TestCase):
         self.assertEqual(debt.input_value, Decimal("1530.00"))  # 5 ha: seed 125 kg x 2.00 + fertilizer 2000 kg x 0.64
 
 
+class ProgrammeCrudTests(ChainMixin, TestCase):
+    """Create, read back, edit, read back and delete, as on the Programmes page."""
+
+    @classmethod
+    def setUpTestData(cls):
+        make_world(cls)
+
+    def setUp(self):
+        self.client = self.api()
+
+    def test_create_edit_and_delete_round_trip(self):
+        created = self.client.post(reverse("programme-list"), {
+            "name": "ARDA", "season": self.season.id, "crops": [self.maize.id, self.sorghum.id],
+            "input_categories": ["SEED", "CHEMICALS"], "capacity_status": "ACTIVE",
+        }, format="json")
+        self.assertEqual(created.status_code, 201, created.data)
+        pk = created.data["id"]
+        read = self.client.get(reverse("programme-detail", kwargs={"pk": pk})).data
+        self.assertEqual((sorted(read["crops"]), read["input_categories"], read["capacity_status"]), (sorted([self.maize.id, self.sorghum.id]), ["SEED", "CHEMICALS"], "ACTIVE"))
+
+        edited = self.client.patch(reverse("programme-detail", kwargs={"pk": pk}), {
+            "name": "ARDA Inputs", "season": self.season.id, "crops": [self.maize.id, self.wheat.id],
+            "input_categories": ["FERTILIZER"], "capacity_status": "INACTIVE",
+        }, format="json")
+        self.assertEqual(edited.status_code, 200, edited.data)
+        read = self.client.get(reverse("programme-detail", kwargs={"pk": pk})).data
+        self.assertEqual(read["name"], "ARDA Inputs")
+        self.assertEqual(read["crop_names"], ["Maize", "Wheat"])
+        self.assertEqual((read["input_categories"], read["capacity_status"]), (["FERTILIZER"], "INACTIVE"))
+
+        self.assertEqual(self.client.delete(reverse("programme-detail", kwargs={"pk": pk})).status_code, 204)
+        self.assertFalse(Programme.objects.filter(pk=pk).exists())
+
+    def test_delete_takes_its_requests_catalogue_allocations_and_debts(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        batch = self.approve(self.request(arda, self.maize, "100"))
+        self.assertEqual(self.allocate(arda, batch).status_code, 201)
+        kept = self.programme("Seed Co", [self.maize], ["SEED"])
+        deleted = self.client.delete(reverse("programme-detail", kwargs={"pk": arda.id}))
+        self.assertEqual(deleted.status_code, 204, getattr(deleted, "data", None))
+        self.assertFalse(ARDARequestBatch.objects.filter(programme_id=arda.id).exists())
+        self.assertFalse(CropInputRequirement.objects.filter(programme_id=arda.id).exists())
+        self.assertFalse(InputAllocation.objects.exists())
+        self.assertFalse(InputDebt.objects.exists())
+        self.assertTrue(Programme.objects.filter(pk=kept.id).exists())
+
+    def test_delete_is_refused_once_grain_was_recovered(self):
+        arda = self.programme("ARDA", [self.maize], ["SEED"])
+        self.line(arda, self.maize, "SEED", self.mbizi, "25", "2.00")
+        batch = self.approve(self.request(arda, self.maize, "100"))
+        self.allocate(arda, batch)
+        InputDebt.objects.update(recovered_tonnes=Decimal("0.50"))
+        refused = self.client.delete(reverse("programme-detail", kwargs={"pk": arda.id}))
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("recovered", str(refused.data))
+        self.assertTrue(Programme.objects.filter(pk=arda.id).exists())
+
+
 class ConcurrentAllocationTests(ChainMixin, TransactionTestCase):
     """Two officers allocating the last approved hectares at the same moment."""
 
