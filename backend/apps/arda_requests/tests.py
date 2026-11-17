@@ -434,7 +434,7 @@ class ARDARequestTests(TestCase):
             format="json",
         )
         self.assertEqual(duplicate.status_code, 400)
-        self.assertIn("already exists", str(duplicate.data).lower())
+        self.assertIn("already has a request", str(duplicate.data).lower())
         self.assertIn("edit", str(duplicate.data).lower())
 
     def test_batch_response_shows_dynamic_allocated_available_and_unique_farmers(self):
@@ -471,18 +471,16 @@ class ARDARequestTests(TestCase):
             farmer=farmer_two, farm=farm_two, programme=programme, crop="Maize", hectares="50.00",
         )
 
-        # Until the request is approved it has nothing to allocate.
-        row = self.client.get(reverse("arda-request-batch-list"), {"season": season.pk, "page_size": 20}).data["results"][0]
-        self.assertEqual((row["approved_hectares"], row["available_hectares"]), (Decimal("0.00"), Decimal("0.00")))
-        self.client.post(reverse("arda-request-batch-submit", kwargs={"pk": batch.data["id"]}))
-        approved = self.client.post(reverse("arda-request-batch-approve", kwargs={"pk": batch.data["id"]}), {"approved_hectares": "15000"}, format="json")
+        # A request is approved when it is made; a smaller approval is a request for fewer hectares.
+        self.assertEqual(batch.data["status"], "APPROVED")
+        approved = self.client.patch(reverse("arda-request-batch-detail", kwargs={"pk": batch.data["id"]}), {"requested_hectares": "15000"}, format="json")
         self.assertEqual(approved.status_code, 200, approved.data)
 
         snapshot = self.client.get(reverse("arda-request-batch-list"), {"season": season.pk, "page_size": 20})
         self.assertEqual(snapshot.status_code, 200, snapshot.data)
         row = snapshot.data["results"][0]
         self.assertEqual(row["id"], batch.data["id"])
-        self.assertEqual(row["requested_hectares"], "20000.00")
+        self.assertEqual(row["requested_hectares"], "15000.00")
         self.assertEqual(row["approved_hectares"], Decimal("15000.00"))
         self.assertEqual(row["allocated_hectares"], Decimal("170.00"))
         self.assertEqual(row["available_hectares"], Decimal("14830.00"))
@@ -547,12 +545,21 @@ class ARDARequestTests(TestCase):
         self.assertEqual(empty.status_code, 201, empty.data)
         deleted = self.client.delete(reverse("arda-request-batch-detail", args=[empty.data["id"]]))
         self.assertEqual(deleted.status_code, 204)
-        kept = ARDARequestBatch.objects.create(request_number="SGR1888", programme=programme, season=season, crop="Maize", requested_hectares="10.00")
+        # Farmer lines go with the request; an allocation made from it blocks the delete.
+        kept = ARDARequestBatch.objects.create(request_number="SGR1888", programme=programme, season=season, crop="Maize", requested_hectares="10.00", status="APPROVED", approved_hectares="10.00")
         from apps.arda_requests.models import ARDAFarmerRequest
         ARDAFarmerRequest.objects.create(request_batch=kept, farmer=self.farmer, requested_hectares="5.00")
+        farm = Farm.objects.create(farmer=self.farmer, farm_name="Delete Farm", province=self.province, district=self.district, total_hectares="10", arable_hectares="10")
+        allocation = InputAllocation.objects.create(farmer=self.farmer, farm=farm, programme=programme, crop="Maize", hectares="5.00", request_batch=kept, status="ALLOCATED")
         blocked = self.client.delete(reverse("arda-request-batch-detail", args=[kept.pk]))
         self.assertEqual(blocked.status_code, 400)
+        self.assertIn("Cancel them", str(blocked.data))
         self.assertTrue(ARDARequestBatch.objects.filter(pk=kept.pk).exists())
+        allocation.status = "CANCELLED"
+        allocation.save(update_fields=["status"])
+        self.assertEqual(self.client.delete(reverse("arda-request-batch-detail", args=[kept.pk])).status_code, 204)
+        allocation.refresh_from_db()
+        self.assertIsNone(allocation.request_batch_id)  # the cancelled allocation stays, unlinked
 
     def test_saved_request_is_the_same_dashboard_total_for_every_client(self):
         from apps.programmes.models import Crop

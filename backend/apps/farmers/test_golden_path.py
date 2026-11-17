@@ -164,12 +164,10 @@ class GoldenPathSystemTest(TestCase):
         )
         self.assertEqual(approval_response.status_code, 200, approval_response.data)
 
-        # The request is submitted and approved before its hectares can be allocated.
+        # Making the request means the programme approved it: its hectares can be allocated at once.
         batch_id = batch_response.data["id"]
-        self.assertEqual(self.client.post(reverse("arda-request-batch-submit", kwargs={"pk": batch_id})).status_code, 200)
-        approved = self.client.post(reverse("arda-request-batch-approve", kwargs={"pk": batch_id}), {"approved_hectares": "10.00"}, format="json")
-        self.assertEqual(approved.status_code, 200, approved.data)
-        self.assertEqual(Decimal(approved.data["remaining_hectares"]), Decimal("10.00"))
+        self.assertEqual(batch_response.data["status"], "APPROVED")
+        self.assertEqual(Decimal(batch_response.data["remaining_hectares"]), Decimal("10.00"))
 
         crop = Crop.objects.get(name="Maize")
         seed = Input.objects.create(name="Golden Seed", category="SEED", unit="bags")

@@ -8,11 +8,8 @@ from apps.accounts.permissions import ProgrammeWorkflowPermission
 from apps.accounts.scoping import scope_by_farmer
 from apps.programmes.period import filter_by_agricultural_year, filter_by_crop_name, parse_crop_season
 
-from apps.accounts.roles import can
-
 from .models import ARDAFarmerRequest, ARDARequest, ARDARequestBatch
 from .serializers import ARDAFarmerRequestSerializer, ARDARequestBatchSerializer, ARDARequestSerializer
-from .services import RequestWorkflowError, approve_request, reject_request, submit_request
 
 
 class ARDARequestViewSet(viewsets.ModelViewSet):
@@ -48,55 +45,37 @@ class ARDARequestBatchViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(status=params["status"].upper())
         return queryset
 
-    def _decide(self, request, change, action_name="approve"):
-        if not can(request.user, "arda", action_name):
-            return Response({"detail": "You do not have permission to do this."}, status=403)
-        batch = self.get_object()
-        try:
-            batch = change(batch)
-        except RequestWorkflowError as error:
-            return Response({"detail": str(error)}, status=400)
-        return Response(self.get_serializer(batch).data)
-
-    @action(detail=True, methods=["post"], url_path="submit")
-    def submit(self, request, pk=None):
-        return self._decide(request, lambda batch: submit_request(batch, user=request.user), "create")
-
-    @action(detail=True, methods=["post"], url_path="approve")
-    def approve(self, request, pk=None):
-        return self._decide(request, lambda batch: approve_request(
-            batch, hectares=request.data.get("approved_hectares"), line_hectares=request.data.get("lines") or {},
-            notes=request.data.get("notes", ""), user=request.user,
-        ))
-
-    @action(detail=True, methods=["post"], url_path="reject")
-    def reject(self, request, pk=None):
-        return self._decide(request, lambda batch: reject_request(batch, notes=request.data.get("notes", ""), user=request.user))
-
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
     def perform_destroy(self, instance):
+        """Delete a request. Refused while farmers hold allocations from it.
+
+        Cancelled allocations keep their own copy of the products and prices and are only
+        unlinked from the request. Its farmer lines and products go with it.
+        """
+        from django.db import transaction
+
+        from apps.inputs.models import InputAllocation, InputAllocationLine
         from apps.programmes.models import Season
+
+        from .models import BatchStockMovement, RequestBatchInput
+        from .services import batch_allocations
 
         season = instance.season
         if season is None or season.status != Season.STATUS_ACTIVE:
-            raise ValidationError({"non_field_errors": ["Past-season ARDA requests are read-only and cannot be modified."]})
-        if instance.farmer_requests.exists():
+            raise ValidationError({"non_field_errors": ["Past-season input requests are read-only and cannot be modified."]})
+        live = batch_allocations(instance)
+        if live.exists():
             raise ValidationError({
-                "detail": ["This request has farmer lines. Reject it instead of deleting the history."],
+                "detail": [f"{live.count()} allocation(s) were made from {instance.request_number}. Cancel them before deleting the request."],
             })
-        from .services import batch_allocations
-
-        if batch_allocations(instance).exists():
-            raise ValidationError({
-                "detail": ["This request already has input allocations. Reject or close it instead of deleting it."],
-            })
-        if instance.status == instance.STATUS_APPROVED:
-            raise ValidationError({
-                "detail": ["An approved request cannot be deleted. Reject it if it should no longer be used."],
-            })
-        super().perform_destroy(instance)
+        with transaction.atomic():
+            InputAllocationLine.objects.filter(request_line__batch=instance).update(request_line=None)
+            InputAllocation.objects.filter(request_batch=instance).update(request_batch=None)
+            BatchStockMovement.objects.filter(batch_input__batch=instance).delete()
+            RequestBatchInput.objects.filter(batch=instance).delete()
+            instance.delete()
 
 
 class ARDAFarmerRequestViewSet(viewsets.ModelViewSet):

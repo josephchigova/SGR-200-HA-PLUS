@@ -86,7 +86,8 @@ class ARDARequestBatchSerializer(serializers.ModelSerializer):
     season_name = serializers.SerializerMethodField()
     capacity_hectares = serializers.DecimalField(source="programme.announced_hectares", max_digits=14, decimal_places=2, read_only=True)
     request_number = serializers.CharField(read_only=True)
-    requested_hectares = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0.01"))
+    # Worked out from the product lines. Only requests without product lines give it directly.
+    requested_hectares = serializers.DecimalField(max_digits=14, decimal_places=2, min_value=Decimal("0.01"), required=False)
     allocated_hectares = serializers.SerializerMethodField()
     available_hectares = serializers.SerializerMethodField()
     total_farmers = serializers.SerializerMethodField()

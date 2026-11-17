@@ -3732,3 +3732,14 @@ select.invalid,
   font-size: 0.82rem;
   font-weight: 600;
 }
+
+.computed-total {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
