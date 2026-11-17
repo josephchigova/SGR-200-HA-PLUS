@@ -1,15 +1,31 @@
 """Delete operational records while leaving configuration and user accounts in place.
 
-Deletion order follows the foreign keys that use PROTECT. QuerySet.delete() is
-used so Django issues DELETE statements. Sequences are left unchanged.
+Deletion order follows the foreign keys that use PROTECT: every record is deleted before
+the record it points to. QuerySet.delete() is used so Django issues DELETE statements and
+still refuses anything the order missed. Sequences are left unchanged. The whole reset runs
+in one transaction, so a failure deletes nothing.
 """
 
 from django.db import transaction
 
-from apps.accounts.models import User
-from apps.arda_requests.models import ARDAFarmerRequest, ARDARequest, ARDARequestBatch, ARDARequestNumberSequence
+from apps.accounts.models import Notification, User
+from apps.arda_requests.models import (
+    ARDAFarmerRequest,
+    ARDARequest,
+    ARDARequestBatch,
+    ARDARequestNumberSequence,
+    BatchStockMovement,
+    RequestBatchInput,
+)
 from apps.clusters.models import Cluster
-from apps.farmers.models import Farm, Farmer, FarmerDocument
+from apps.farmers.models import (
+    Farm,
+    Farmer,
+    FarmerChangeRequest,
+    FarmerDocument,
+    FarmerReviewEvent,
+    RegistrationCropAllocation,
+)
 from apps.finance.models import (
     AccountingPeriod,
     Asset,
@@ -50,7 +66,15 @@ from apps.source_data.models import (
 from apps.geography.models import District, Province, Ward
 from apps.inputs.models import Input, InputAllocation, InputAllocationLine, InputIssue
 from apps.production.models import FarmerProduction, GMBDelivery, ProductionPlan, SeasonalPlantingPlan
-from apps.programmes.models import Crop, CropInputRequirement, CropSellingPrice, Programme, ProgrammeAllocation, Season
+from apps.programmes.models import (
+    Crop,
+    CropInputRequirement,
+    CropSellingPrice,
+    Programme,
+    ProgrammeAllocation,
+    ProgrammeCrop,
+    Season,
+)
 from apps.recovery.models import InputDebt, RecoveryRecord
 from apps.reports.models import ReportTemplate
 from apps.subscriptions.models import FarmerSubscription, Subscription, SubscriptionPayment
@@ -79,6 +103,8 @@ def operational_models():
         ("Journal entries", JournalEntry),
         ("Imported receipt rows", Receipt),
         ("Imported expense rows", Expense),
+        # Batch stock history points at allocations, allocation lines and batch inputs (PROTECT).
+        ("Request batch stock movements", BatchStockMovement),
         ("Input allocation lines", InputAllocationLine),
         ("Input debts", InputDebt),
         ("Input issues", InputIssue),
@@ -91,10 +117,16 @@ def operational_models():
         ("Programme allocations", ProgrammeAllocation),
         ("ARDA farmer requests", ARDAFarmerRequest),
         ("ARDA requests", ARDARequest),
+        # Batch inputs point at their request batch (PROTECT).
+        ("Request batch inputs", RequestBatchInput),
         ("ARDA request batches", ARDARequestBatch),
         ("Subscription payments", SubscriptionPayment),
         ("Farmer subscriptions", FarmerSubscription),
         ("Farmer documents", FarmerDocument),
+        ("Subscription reminders", Notification),
+        ("Registration crop allocations", RegistrationCropAllocation),
+        ("Farmer change requests", FarmerChangeRequest),
+        ("Farmer registration history", FarmerReviewEvent),
         ("Farms", Farm),
         ("Farmers", Farmer),
     )
@@ -112,6 +144,7 @@ def preserved_models():
         ("Crop input requirements", CropInputRequirement),
         ("Crop selling prices", CropSellingPrice),
         ("Programmes", Programme),
+        ("Programme crops", ProgrammeCrop),
         ("Input catalogue", Input),
         ("Subscription products", Subscription),
         ("Asset categories", AssetCategory),
@@ -136,8 +169,9 @@ def collect_counts(entries):
     return [(label, model.objects.count()) for label, model in entries]
 
 
+@transaction.atomic
 def reset_operational_data():
-    """Delete operational rows. The caller must already be inside transaction.atomic()."""
+    """Delete operational rows in one transaction: if any delete fails, nothing is deleted."""
     JournalEntry.objects.update(reversal_of=None)
     deleted = []
     for label, model in operational_models():

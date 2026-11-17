@@ -97,3 +97,58 @@ class ResetOperationalDataTests(TestCase):
                 call_command("reset_operational_data", "--confirm")
         self.assertTrue(Farmer.objects.filter(pk=self.farmer.pk).exists())
         self.assertTrue(JournalEntry.objects.exists())
+
+    def test_confirm_clears_request_batches_with_stock_and_every_farmer_record(self):
+        """Batch inputs and their stock history point at batches and allocations with PROTECT."""
+        from apps.accounts.models import Notification
+        from apps.arda_requests.models import ARDAFarmerRequest, ARDARequestBatch, BatchStockMovement, RequestBatchInput
+        from apps.farmers.models import FarmerChangeRequest, FarmerReviewEvent, RegistrationCropAllocation
+        from apps.inputs.models import Input, InputAllocationLine
+        from apps.programmes.models import CropInputRequirement, ProgrammeCrop
+        from apps.recovery.models import InputDebt
+
+        ProgrammeCrop.objects.create(programme=self.programme, crop=self.crop)
+        seed = Input.objects.create(name="Reset seed", category="SEED", unit="kg")
+        requirement = CropInputRequirement.objects.create(
+            crop=self.crop, programme=self.programme, input_category="SEED", input_product=seed,
+            group_name="Seed", item_name="Reset seed", rate_per_hectare="25", unit="kg", cost_per_unit="2",
+        )
+        batch = ARDARequestBatch.objects.create(
+            request_number="SGR-RESET", programme=self.programme, season=self.season, crop="Maize",
+            requested_hectares="100.00", approved_hectares="80.00", status=ARDARequestBatch.STATUS_APPROVED,
+        )
+        ARDAFarmerRequest.objects.create(request_batch=batch, farmer=self.farmer, farm=self.farm, requested_hectares="5.00")
+        allocation = InputAllocation.objects.create(
+            farmer=self.farmer, farm=self.farm, programme=self.programme, crop="Maize", crop_reference=self.crop,
+            hectares="5.00", request_batch=batch, sourced_by_category=True,
+        )
+        line = InputAllocationLine.objects.create(
+            allocation=allocation, source_requirement=requirement, input_category="SEED", programme=self.programme,
+            input_product=seed, group_name="Seed", item_name="Reset seed", required_quantity="125",
+        )
+        InputDebt.objects.create(farmer=self.farmer, programme=self.programme, input_allocation=allocation, crop="Maize", total_debt="250.00")
+        batch_input = RequestBatchInput.objects.create(batch=batch, input_product=seed, input_category="SEED", requested_quantity="1000", allocated_quantity="125")
+        BatchStockMovement.objects.create(batch_input=batch_input, kind=BatchStockMovement.KIND_OPENING, quantity="1000", available_after="1000")
+        BatchStockMovement.objects.create(
+            batch_input=batch_input, kind=BatchStockMovement.KIND_ALLOCATION, quantity="-125", available_after="875",
+            allocation=allocation, allocation_line=line,
+        )
+        RegistrationCropAllocation.objects.create(farmer=self.farmer, crop=self.crop, season=self.season, hectares="5.00")
+        FarmerChangeRequest.objects.create(farmer=self.farmer, changes={"phone_primary": "0770000000"})
+        FarmerReviewEvent.objects.create(farmer=self.farmer, action=FarmerReviewEvent.SUBMITTED)
+        Notification.objects.create(recipient=self.user, kind=Notification.KIND_SUBSCRIPTION_OVERDUE, dedupe_key="reset", title="Overdue", farmer=self.farmer)
+
+        output = StringIO()
+        call_command("reset_operational_data", "--confirm", stdout=output)
+
+        for model in (BatchStockMovement, RequestBatchInput, ARDARequestBatch, ARDAFarmerRequest, InputAllocation, InputAllocationLine,
+                      InputDebt, RegistrationCropAllocation, FarmerChangeRequest, FarmerReviewEvent, Notification, Farmer):
+            self.assertFalse(model.objects.exists(), model.__name__)
+        # Programme configuration stays: the programme, its crops, its catalogue and the products.
+        self.assertTrue(ProgrammeCrop.objects.filter(programme=self.programme, crop=self.crop).exists())
+        self.assertTrue(CropInputRequirement.objects.filter(pk=requirement.pk).exists())
+        self.assertTrue(Input.objects.filter(pk=seed.pk).exists())
+        text = output.getvalue()
+        self.assertIn("removed Request batch stock movements: 2", text)
+        self.assertIn("removed Request batch inputs: 1", text)
+        self.assertIn("removed ARDA request batches: 1", text)
