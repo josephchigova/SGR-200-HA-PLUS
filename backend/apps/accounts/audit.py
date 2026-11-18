@@ -26,6 +26,9 @@ ACTION_WORDS = {
     "dispose": "Disposal",
     "close": "Period closed",
     "reopen": "Period reopened",
+    "submit": "Input request submitted",
+    "reject": "Input request rejected",
+    "return-for-corrections": "Input request returned",
 }
 
 

@@ -79,6 +79,16 @@ MATRIX = {
         set(),
     ),
     "allocations": (ProgrammeWorkflowPermission.read_roles, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, PROGRAMME_WRITE, set()),
+    # Variety caps and the approval queue belong to programme administrators.
+    "input_caps": (PROGRAMME_WRITE | {User.ROLE_AUDITOR}, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, set(), set()),
+    "input_approvals": (PROGRAMME_WRITE | {User.ROLE_AUDITOR}, set(), set(), set(), PROGRAMME_WRITE, set()),
+    # Farmer-level allocation and submission belong only to the lead farmer. A superuser does not inherit these.
+    "input_supply": (
+        {User.ROLE_LEAD_FARMER},
+        {User.ROLE_LEAD_FARMER},
+        {User.ROLE_LEAD_FARMER},
+        set(), set(), set(),
+    ),
     "production": (ProgrammeWorkflowPermission.read_roles, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, set(), set()),
     "planting": (ProgrammeWorkflowPermission.read_roles, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, set(), set()),
     "deliveries": (RecoveryWorkflowPermission.read_roles, RecoveryWorkflowPermission.write_roles, set(), set(), set(), set()),
@@ -109,7 +119,15 @@ ACTIONS = ("view", "create", "edit", "delete", "approve", "export")
 
 # Rights that belong to a role, not to rank. Only a lead farmer registers ordinary farmers,
 # so a superuser account does not receive this one automatically.
-ROLE_BOUND = {("farmers", "create"), ("lead_requests", "create"), ("lead_requests", "edit"), ("lead_requests", "delete")}
+ROLE_BOUND = {
+    ("farmers", "create"),
+    ("lead_requests", "create"),
+    ("lead_requests", "edit"),
+    ("lead_requests", "delete"),
+    ("input_supply", "view"),
+    ("input_supply", "create"),
+    ("input_supply", "edit"),
+}
 
 
 def _allowed(user, module, action, roles):
