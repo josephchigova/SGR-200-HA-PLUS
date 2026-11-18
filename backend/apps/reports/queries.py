@@ -387,7 +387,6 @@ def _stored_subscriptions(spec, params):
         phone_primary=F("farmer__phone_primary"),
         province_name=Coalesce(F("farmer__province__name"), Value("Not recorded")),
         district_name=Coalesce(F("farmer__district__name"), Value("Not recorded")),
-        crop_season=Value("Shared by Summer and Winter"),
         status_label=F("report_status"),
     ).values(
         "id", "farmer_name", "membership_number", "national_id", "phone_primary", "province_name",
@@ -396,6 +395,8 @@ def _stored_subscriptions(spec, params):
     ).order_by("farmer_name", "season", "id")
     rows = []
     for row in query:
+        # crop_season is a stored field on the subscription; show it as a label.
+        row["crop_season"] = {"SUMMER": "Summer", "WINTER": "Winter"}.get(row["crop_season"], "Shared by Summer and Winter")
         row["payment_status"] = row.pop("status_label")
         rows.append(row)
     return rows

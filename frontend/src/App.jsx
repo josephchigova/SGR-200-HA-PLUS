@@ -29,7 +29,6 @@ import FarmersPage from './pages/FarmersPage'
 import InputApprovalsPage from './pages/InputApprovalsPage'
 import InputRequestsPage from './pages/InputRequestsPage'
 import LeadInputAllocationsPage from './pages/LeadInputAllocationsPage'
-import LeadRequestsPage from './pages/LeadRequestsPage'
 import MyInputRequestsPage from './pages/MyInputRequestsPage'
 import ProgrammesPage from './pages/ProgrammesPage'
 import ProductionPage from './pages/ProductionPage'
@@ -498,7 +497,6 @@ function Workspace() {
             <Route path="/crops" element={<Guard module="crops"><CropCataloguePage /></Guard>} />
             <Route path="/programmes" element={<Guard module="programmes"><ProgrammesPage {...period} /></Guard>} />
             <Route path="/arda-requests" element={<Guard module="arda"><InputRequestsPage {...period} /></Guard>} />
-            <Route path="/lead-requests" element={<Guard module="lead_requests"><LeadRequestsPage {...period} /></Guard>} />
             <Route path="/input-approvals" element={<Guard module="input_approvals"><InputApprovalsPage {...period} /></Guard>} />
             <Route path="/input-allocations" element={<Guard module="input_supply"><LeadInputAllocationsPage {...period} /></Guard>} />
             <Route path="/my-input-requests" element={<Guard module="input_supply"><MyInputRequestsPage {...period} /></Guard>} />

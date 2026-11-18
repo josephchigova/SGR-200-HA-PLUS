@@ -1,10 +1,10 @@
-"""Lead farmers allocate hectares. Admin sets the maximum, then confirms the distribution.
+"""Lead farmers allocate, Admin issues hectare limits, lead farmers redistribute, Admin approves.
 
+Every allocation is its own record: add, change and remove save straight to the database.
 Quantities and costs are calculated on the server. There is no variety cap and no stock.
-A submission is not an allocation until Admin confirms the final distribution.
+Only Admin's final approval makes allocations official and creates farmer input debts.
 """
 
-from datetime import date
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
@@ -14,9 +14,10 @@ from rest_framework.test import APIClient
 
 from apps.accounts.models import Notification
 from apps.clusters.models import Cluster
-from apps.inputs.models import InputAllocation, InputSupplyLimit, InputSupplyRequest
+from apps.farmers.models import RegistrationCropAllocation
+from apps.inputs.models import InputAllocation, InputSupplyFarmer, InputSupplyRequest
 from apps.inputs.test_programme_allocation import make_farmer, make_world
-from apps.programmes.models import Season
+from apps.programmes.models import CropSellingPrice, ProgrammeCrop
 from apps.recovery.models import InputDebt
 
 User = get_user_model()
@@ -47,331 +48,303 @@ class InputSupplyWorkflowTests(TestCase):
         cls.third = make_farmer(cls, "Chipo", "63-1111111C12", maize_hectares=10)
         cls.third.cluster = cls.cluster
         cls.third.save(update_fields=["cluster"])
+        for farmer in (cls.farmer, cls.third):
+            RegistrationCropAllocation.objects.create(farmer=farmer, crop=cls.sorghum, season=cls.season, hectares=6)
+        CropSellingPrice.objects.create(crop=cls.sorghum, season=cls.season, price_per_tonne=Decimal("250.00"))
 
     def setUp(self):
-        self.admin = APIClient()
-        self.admin.force_authenticate(self.__class__.admin)
+        self.admin_api = APIClient()
+        self.admin_api.force_authenticate(self.admin)
         self.lead_api = APIClient()
         self.lead_api.force_authenticate(self.lead)
         self.other_api = APIClient()
         self.other_api.force_authenticate(self.other_lead)
         self.officer_api = APIClient()
         self.officer_api.force_authenticate(self.officer)
+        self.arda = self.programme("ARDA")
+        # Catalogue line ids. The products themselves are on the class (Mbizi, Shumba, Compound D).
+        self.mbizi = self.line(self.arda, self.maize, "SEED", type(self).mbizi, "25", "2.00")
+        self.compound = self.line(self.arda, self.maize, "FERTILIZER", self.compound_d, "400", pack={"pack_size": "50", "pack_price": "32", "pack_label": "50 kg bag"})
+        self.sorghum_seed = self.line(self.arda, self.sorghum, "SEED", self.shumba, "10", "4.00")
 
-    def programme(self, name="ARDA"):
-        response = self.admin.post(reverse("programme-list"), {
-            "name": name, "season": self.season.id, "crops": [self.maize.id],
+    def programme(self, name):
+        response = self.admin_api.post(reverse("programme-list"), {
+            "name": name, "season": self.season.id, "crops": [self.maize.id, self.sorghum.id],
             "input_categories": ["SEED", "FERTILIZER", "CHEMICALS"], "capacity_status": "ACTIVE",
         }, format="json")
         self.assertEqual(response.status_code, 201, response.data)
         return response.data["id"]
 
-    def line(self, programme, category, product, rate, price=None, pack=None):
-        payload = {
-            "crop": self.maize.id, "programme": programme, "input_category": category,
-            "input_product": product.id, "rate_per_hectare": rate,
-        }
-        if pack:
-            payload.update(pack)
-        else:
-            payload["cost_per_unit"] = price
-        response = self.admin.post(reverse("crop-input-requirement-list"), payload, format="json")
+    def line(self, programme, crop, category, product, rate, price=None, pack=None):
+        payload = {"crop": crop.id, "programme": programme, "input_category": category, "input_product": product.id, "rate_per_hectare": rate}
+        payload.update(pack or {"cost_per_unit": price})
+        response = self.admin_api.post(reverse("crop-input-requirement-list"), payload, format="json")
         self.assertEqual(response.status_code, 201, response.data)
         return response.data["id"]
 
-    def farmers_payload(self, lines_by_farmer):
-        farmers = []
-        for farmer, lines in lines_by_farmer:
-            farmers.append({
-                "farmer": farmer.id,
-                "farm": farmer.farms.first().id,
-                "lines": [{"requirement": requirement, "hectares": hectares, "quantity": "1", "estimated_cost": "1"} for requirement, hectares in lines],
-            })
-        return farmers
+    # API helpers ------------------------------------------------------------------------
 
-    def save(self, client, programme, lines_by_farmer):
-        return client.post(reverse("input-supply-request-list"), {
-            "programme": programme, "season": self.season.id, "crop": self.maize.id,
-            "farmers": self.farmers_payload(lines_by_farmer),
+    def add(self, farmer, lines, crop=None, client=None, programme=None, submission=None):
+        payload = {
+            "programme": programme or self.arda, "season": self.season.id, "crop_season": "SUMMER",
+            "farmer": farmer.id, "crop": (crop or self.maize).id,
+            "lines": [{"requirement": requirement, "hectares": hectares, "quantity": "999", "estimated_cost": "1"} for requirement, hectares in lines],
+        }
+        if submission:
+            payload["submission"] = submission
+        return (client or self.lead_api).post(reverse("input-supply-request-allocations"), payload, format="json")
+
+    def entry(self, submission, farmer, crop=None):
+        crop = crop or self.maize
+        return next(row for row in submission["allocations"] if row["farmer"] == farmer.id and row["crop"] == crop.id)
+
+    def edit(self, row, lines, version=None, client=None):
+        return (client or self.lead_api).patch(reverse("input-supply-request-allocation", kwargs={"entry_id": row["id"]}), {
+            "version": row["version"] if version is None else version,
+            "lines": [{"requirement": requirement, "hectares": hectares} for requirement, hectares in lines],
         }, format="json")
 
-    def submit(self, client, pk):
-        return client.post(reverse("input-supply-request-submit", kwargs={"pk": pk}))
+    def remove(self, row, version=None, client=None):
+        url = reverse("input-supply-request-allocation", kwargs={"entry_id": row["id"]})
+        return (client or self.lead_api).delete(f"{url}?version={row['version'] if version is None else version}")
 
-    def limits(self, crop, categories, varieties):
-        payload = [{"scope": "CROP", "approved_hectares": crop}]
-        payload += [{"scope": "CATEGORY", "input_category": category, "approved_hectares": hectares} for category, hectares in categories]
-        payload += [{"scope": "VARIETY", "requirement": requirement, "approved_hectares": hectares} for requirement, hectares in varieties]
-        return payload
+    def fetch(self, pk, client=None):
+        return (client or self.lead_api).get(reverse("input-supply-request-detail", kwargs={"pk": pk})).data
 
-    def test_quantities_and_costs_are_calculated_and_only_final_approval_allocates(self):
-        programme = self.programme()
-        mbizi = self.line(programme, "SEED", self.mbizi, "25", "2.00")
-        compound = self.line(programme, "FERTILIZER", self.compound_d, "400", pack={
-            "pack_label": "50 kg bag", "pack_size": "50", "pack_price": "32",
-        })
+    def act(self, name, pk, client=None, **data):
+        return (client or self.admin_api).post(reverse(f"input-supply-request-{name}", kwargs={"pk": pk}), data, format="json")
 
-        refused = self.admin.post(reverse("input-supply-request-list"), {
-            "programme": programme, "season": self.season.id, "crop": self.maize.id, "farmers": [],
-        }, format="json")
-        self.assertEqual(refused.status_code, 403)
-        self.assertEqual(self.lead_api.post(reverse("input-supply-request-set-hectares", kwargs={"pk": 1}), {}, format="json").status_code, 403)
+    def build(self):
+        first = self.add(self.farmer, [(self.mbizi, "8"), (self.compound, "8")])
+        self.assertEqual(first.status_code, 201, first.data)
+        second = self.add(self.third, [(self.mbizi, "5")])
+        self.assertEqual(second.status_code, 201, second.data)
+        return second.data
 
-        saved = self.save(self.lead_api, programme, [(self.farmer, [(mbizi, "10"), (compound, "10")])])
-        self.assertEqual(saved.status_code, 201, saved.data)
-        self.assertEqual(saved.data["status"], "DRAFT")
-        self.assertEqual(saved.data["hectares_total"], "10.00")
-        totals = {row["product_name"]: row for row in saved.data["totals"]}
-        # 10 ha x 25 kg, priced at $2. The quantity and cost sent by the browser are ignored.
-        self.assertEqual(Decimal(totals["Mbizi"]["quantity"]), Decimal("250.0000"))
-        self.assertEqual(totals["Mbizi"]["estimated_cost"], "500.00")
-        # 10 ha x 400 kg, sold in 50 kg bags at $32: 4,000 / 50 x 32 = 2,560.
-        self.assertEqual(Decimal(totals["Compound D"]["quantity"]), Decimal("4000.0000"))
-        self.assertEqual(totals["Compound D"]["estimated_cost"], "2560.00")
-        self.assertEqual(saved.data["estimated_cost"], "3060.00")
+    # The whole workflow ------------------------------------------------------------------
 
-        too_much = self.save(self.lead_api, programme, [(self.farmer, [(mbizi, "6"), (self.line(programme, "SEED", self.shumba, "20", "3.00"), "5")])])
+    def test_full_workflow_from_allocation_to_approved_debt(self):
+        submission = self.build()
+        pk = submission["id"]
+        self.assertEqual((submission["status"], submission["programme_name"], submission["season_name"], submission["crop_season_label"]), ("DRAFT", "ARDA", "2026/2027", "Summer"))
+        row = self.entry(submission, self.farmer)
+        lines = {line["product_name"]: line for line in row["lines"]}
+        # 8 ha x 25 kg = 200 kg at 2.00; 8 ha x 400 kg = 3,200 kg at 32 per 50 kg bag. Browser figures are ignored.
+        self.assertEqual((lines["Mbizi"]["quantity"], lines["Mbizi"]["estimated_cost"]), ("200", "400.00"))
+        self.assertEqual((lines["Compound D"]["quantity"], lines["Compound D"]["estimated_cost"]), ("3200", "2048.00"))
+        self.assertEqual((submission["hectares_total"], submission["estimated_cost"]), ("13.00", "2698.00"))
+        self.assertFalse(InputAllocation.objects.exists())
+        self.assertFalse(InputDebt.objects.exists())
+
+        self.assertEqual(self.act("submit", pk, client=self.lead_api).data["status"], "SUBMITTED")
+        # Option B: Admin issues lower maximums.
+        issued = self.act("set-hectares", pk, mode="distribute", remarks="Seed is short", limits=[
+            {"scope": "CROP", "crop": self.maize.id, "approved_hectares": "10"},
+            {"scope": "VARIETY", "requirement": self.mbizi, "approved_hectares": "10"},
+            {"scope": "VARIETY", "requirement": self.compound, "approved_hectares": "8"},
+        ])
+        self.assertEqual(issued.status_code, 200, issued.data)
+        self.assertEqual(issued.data["status_label"], "Approved limits issued")
+        self.assertTrue(Notification.objects.filter(recipient=self.lead, kind=Notification.KIND_INPUT_SUPPLY_DECIDED).exists())
+        view = self.fetch(pk)
+        limits = {row["name"]: row for row in view["limits"]}
+        self.assertEqual((limits["Mbizi"]["requested_hectares"], limits["Mbizi"]["approved_hectares"], limits["Mbizi"]["difference_hectares"], limits["Mbizi"]["distributed_hectares"]), ("13.00", "10.00", "-3.00", "13.00"))
+        self.assertEqual((view["requested_hectares"], view["approved_hectares"]), ("13.00", "10.00"))
+
+        # The distribution cannot go past an approved maximum.
+        refused = self.act("submit", pk, client=self.lead_api)
+        self.assertEqual(refused.status_code, 400)
+        self.assertIn("Mbizi is limited to 10.00 ha", str(refused.data))
+        reduced = self.edit(self.entry(view, self.third), [(self.mbizi, "2")])
+        self.assertEqual(reduced.status_code, 200, reduced.data)
+        self.assertEqual(self.entry(reduced.data, self.third)["lines"][0]["quantity"], "50")
+        self.assertEqual({row["name"]: row["remaining_hectares"] for row in reduced.data["limits"]}["Maize"], "0.00")
+        final = self.act("submit", pk, client=self.lead_api)
+        self.assertEqual(final.data["status_label"], "Final distribution submitted")
+
+        # Returned for corrections, corrected and resubmitted.
+        self.assertEqual(self.act("return-for-corrections", pk, remarks="").status_code, 400)
+        returned = self.act("return-for-corrections", pk, remarks="Chipo's farm is wrong")
+        self.assertEqual(returned.data["status"], "RETURNED")
+        corrected = self.edit(self.entry(returned.data, self.farmer), [(self.mbizi, "8"), (self.compound, "7")])
+        self.assertEqual(corrected.status_code, 200, corrected.data)
+        self.assertEqual(self.act("submit", pk, client=self.lead_api).data["status"], "CONFIRMATION")
+        self.assertFalse(InputDebt.objects.exists())
+
+        approved = self.act("approve", pk, remarks="OK")
+        self.assertEqual(approved.status_code, 200, approved.data)
+        self.assertEqual(approved.data["status"], "APPROVED")
+        allocations = InputAllocation.objects.filter(allocation_reference=approved.data["reference"])
+        self.assertEqual(allocations.count(), 2)
+        debt = InputDebt.objects.get(input_allocation__farmer=self.farmer)
+        self.assertEqual(debt.input_value, Decimal("2192.00"))  # 400.00 + 7 ha x 400 kg / 50 x 32
+        self.assertEqual(InputDebt.objects.count(), 2)
+        # Approving again creates nothing more.
+        again = self.act("approve", pk)
+        self.assertEqual(again.status_code, 400)
+        self.assertEqual(InputDebt.objects.count(), 2)
+        # Approved allocations are locked against changes.
+        self.assertEqual(self.edit(self.entry(approved.data, self.farmer), [(self.mbizi, "1")]).status_code, 400)
+        actions = [event["action"] for event in approved.data["events"]]
+        for expected in ("SUBMITTED", "LIMITS_DISTRIBUTED", "FINAL_SUBMITTED", "RETURNED", "FINAL_RESUBMITTED", "APPROVED"):
+            self.assertIn(expected, actions)
+        self.assertTrue(approved.data["events"][-1]["detail"]["debts"])
+
+    def test_each_allocation_saves_edits_and_deletes_in_the_database(self):
+        created = self.add(self.farmer, [(self.mbizi, "4")])
+        self.assertEqual(created.status_code, 201, created.data)
+        pk = created.data["id"]
+        row = self.entry(created.data, self.farmer)
+        # Editing changes the same record and recalculates.
+        edited = self.edit(row, [(self.mbizi, "6"), (self.compound, "6")])
+        self.assertEqual(edited.status_code, 200, edited.data)
+        fresh = self.entry(self.fetch(pk), self.farmer)
+        self.assertEqual((fresh["id"], fresh["version"], fresh["hectares"]), (row["id"], row["version"] + 1, "6.00"))
+        self.assertEqual(InputSupplyFarmer.objects.count(), 1)
+        # An edit from a screen that loaded the old version is refused, not merged.
+        stale = self.edit(row, [(self.mbizi, "1")])
+        self.assertEqual(stale.status_code, 409)
+        self.assertEqual(self.entry(self.fetch(pk), self.farmer)["hectares"], "6.00")
+        # The same farmer and crop cannot be added twice.
+        self.assertEqual(self.add(self.farmer, [(self.mbizi, "1")]).status_code, 400)
+        # A failed edit changes nothing.
+        self.assertEqual(self.edit(fresh, [(self.mbizi, "-3")]).status_code, 400)
+        self.assertEqual(self.entry(self.fetch(pk), self.farmer)["hectares"], "6.00")
+        # Deleting removes the record; reading again does not bring it back.
+        self.add(self.third, [(self.mbizi, "2")])
+        removed = self.remove(fresh)
+        self.assertEqual(removed.status_code, 200, removed.data)
+        self.assertEqual([row["farmer"] for row in self.fetch(pk)["allocations"]], [self.third.id])
+        self.assertFalse(InputSupplyFarmer.objects.filter(pk=fresh["id"]).exists())
+        self.assertEqual(self.fetch(pk)["hectares_total"], "2.00")
+        # Removing the last allocation of a draft removes the empty draft.
+        last = self.entry(self.fetch(pk), self.third)
+        self.assertIsNone(self.remove(last).data["submission"])
+        self.assertFalse(InputSupplyRequest.objects.filter(pk=pk).exists())
+
+    def test_one_submission_per_programme_year_and_season_covers_several_crops(self):
+        self.add(self.farmer, [(self.mbizi, "5")])
+        sorghum = self.add(self.farmer, [(self.sorghum_seed, "4")], crop=self.sorghum)
+        self.assertEqual(sorghum.status_code, 201, sorghum.data)
+        self.assertEqual(InputSupplyRequest.objects.count(), 1)
+        crops = {row["crop_name"]: row for row in sorghum.data["crops"]}
+        self.assertEqual((crops["Maize"]["hectares"], crops["Sorghum"]["hectares"]), ("5.00", "4.00"))
+        self.assertEqual(crops["Sorghum"]["varieties"][0]["quantity"], "40")
+        winter = self.add(self.farmer, [(self.mbizi, "1")], crop=self.wheat)
+        self.assertEqual(winter.status_code, 400)
+        # Approval creates one official allocation and debt per farmer and crop.
+        pk = sorghum.data["id"]
+        self.act("submit", pk, client=self.lead_api)
+        self.act("set-hectares", pk, mode="approve")
+        self.act("submit", pk, client=self.lead_api)
+        self.assertEqual(self.act("approve", pk).status_code, 200)
+        self.assertEqual(set(InputAllocation.objects.values_list("crop", flat=True)), {"Maize", "Sorghum"})
+        self.assertEqual(InputDebt.objects.count(), 2)
+
+    def test_a_lead_farmer_sends_farmers_in_several_submissions(self):
+        # First submission: one farmer, sent to Admin.
+        first = self.add(self.farmer, [(self.mbizi, "6")])
+        self.assertEqual(first.status_code, 201, first.data)
+        first_id = first.data["id"]
+        self.assertEqual(self.act("submit", first_id, client=self.lead_api).data["status"], "SUBMITTED")
+        # It stays as sent: nothing more can be added to it while Admin has it.
+        late = self.add(self.third, [(self.mbizi, "4")], submission=first_id)
+        self.assertEqual(late.status_code, 400)
+        self.assertIn("Add more farmers in a new submission", str(late.data))
+        # New farmers start a second submission for the same programme and season.
+        second = self.add(self.third, [(self.mbizi, "4")])
+        self.assertEqual(second.status_code, 201, second.data)
+        second_id = second.data["id"]
+        self.assertNotEqual(second_id, first_id)
+        self.assertEqual(second.data["status"], "DRAFT")
+        # Only one draft at a time: the next farmer joins it.
+        sorghum = self.add(self.farmer, [(self.sorghum_seed, "3")], crop=self.sorghum)
+        self.assertEqual(sorghum.data["id"], second_id)
+        # The same farmer's crop cannot be sent twice while the first is undecided.
+        twice = self.add(self.farmer, [(self.compound, "2")])
+        self.assertEqual(twice.status_code, 400)
+        self.assertIn(first.data["reference"], str(twice.data))
+        self.assertEqual(self.act("submit", second_id, client=self.lead_api).data["status"], "SUBMITTED")
+        # Admin decides on each independently; each approval adds to the programme's allocated hectares.
+        figures = lambda: self.admin_api.get(reverse("programme-figures", kwargs={"pk": self.arda})).data["totals"]["allocated_hectares"]
+        self.assertEqual(Decimal(figures()), Decimal("0"))
+        for pk, expected in ((first_id, "6"), (second_id, "13")):
+            self.act("set-hectares", pk, mode="approve")
+            self.assertEqual(self.act("submit", pk, client=self.lead_api).data["status"], "CONFIRMATION")
+            self.assertEqual(self.act("approve", pk).status_code, 200)
+            self.assertEqual(Decimal(figures()), Decimal(expected))
+        self.assertEqual(InputAllocation.objects.count(), 3)
+        self.assertEqual(InputDebt.objects.count(), 3)
+        # Once the first is approved, a later submission can still add that farmer's other inputs.
+        fertilizer = self.add(self.farmer, [(self.compound, "2")])
+        self.assertEqual(fertilizer.status_code, 201, fertilizer.data)
+        self.assertNotIn(fertilizer.data["id"], (first_id, second_id))
+
+    def test_eligibility_and_access_are_enforced_on_the_server(self):
+        too_much = self.add(self.farmer, [(self.mbizi, "12")])
         self.assertEqual(too_much.status_code, 400)
-        self.assertIn("10.00 ha", str(too_much.data))
+        self.assertIn("intends to plant 10.00 ha", str(too_much.data))
+        self.assertEqual(self.add(self.other_farmer, [(self.mbizi, "2")]).status_code, 400)  # not this lead's farmer
+        made = self.add(self.farmer, [(self.mbizi, "8")])
+        # Hectares in another programme's submission count too.
+        seedco = self.programme("SEEDCO")
+        seedco_mbizi = self.line(seedco, self.maize, "SEED", self.shumba, "20", "3.00")
+        self.assertEqual(self.add(self.farmer, [(seedco_mbizi, "5")], programme=seedco).status_code, 400)
+        self.assertEqual(self.add(self.farmer, [(seedco_mbizi, "2")], programme=seedco).status_code, 201)
+        # Another lead farmer cannot see or change this lead farmer's allocations.
+        row = self.entry(made.data, self.farmer)
+        self.assertEqual(self.other_api.get(reverse("input-supply-request-detail", kwargs={"pk": made.data["id"]})).status_code, 404)
+        self.assertEqual(self.edit(row, [(self.mbizi, "1")], client=self.other_api).status_code, 400)
+        self.assertEqual(self.remove(row, client=self.other_api).status_code, 400)
+        # Lead farmers cannot decide; officers can.
+        self.act("submit", made.data["id"], client=self.lead_api)
+        self.assertEqual(self.act("set-hectares", made.data["id"], client=self.lead_api, mode="approve").status_code, 403)
+        self.assertEqual(self.act("set-hectares", made.data["id"], client=self.officer_api, mode="approve").status_code, 200)
+        self.assertEqual(self.officer_api.post(reverse("input-supply-request-allocations"), {}, format="json").status_code, 403)
 
-        saved = self.save(self.lead_api, programme, [(self.farmer, [(mbizi, "10"), (compound, "10")])])
-        self.assertEqual(saved.status_code, 200, saved.data)
-        submitted = self.submit(self.lead_api, saved.data["id"])
-        self.assertEqual(submitted.status_code, 200, submitted.data)
-        self.assertEqual(submitted.data["status"], "SUBMITTED")
-        self.assertTrue(Notification.objects.filter(kind=Notification.KIND_INPUT_SUPPLY_SUBMITTED, recipient=self.officer).exists())
-
-        early = self.officer_api.post(reverse("input-supply-request-approve", kwargs={"pk": saved.data["id"]}), {}, format="json")
-        self.assertEqual(early.status_code, 400)
-        self.assertFalse(InputAllocation.objects.filter(allocation_reference=saved.data["reference"]).exists())
-
-        approved_hectares = self.officer_api.post(
-            reverse("input-supply-request-set-hectares", kwargs={"pk": saved.data["id"]}),
-            {"mode": "approve", "limits": [{"scope": "CROP", "approved_hectares": "1"}]},
-            format="json",
-        )
-        self.assertEqual(approved_hectares.status_code, 200, approved_hectares.data)
-        self.assertEqual(approved_hectares.data["status"], "LIMITS_SET")
-        self.assertEqual(approved_hectares.data["stage"], "DISTRIBUTION")
-        crop_limit = next(row for row in approved_hectares.data["limits"] if row["scope"] == "CROP")
-        # Approve-as-requested ignores the 1 ha the browser sent.
-        self.assertEqual(crop_limit["requested_hectares"], "10.00")
-        self.assertEqual(crop_limit["approved_hectares"], "10.00")
-        self.assertEqual(approved_hectares.data["reviewed_by_name"], "Ada Ncube")
-        self.assertFalse(InputAllocation.objects.filter(allocation_reference=saved.data["reference"]).exists())
-
-        final = self.submit(self.lead_api, saved.data["id"])
-        self.assertEqual(final.status_code, 200, final.data)
-        self.assertEqual(final.data["status"], "CONFIRMATION")
-        self.assertIn("FINAL_SUBMITTED", [event["action"] for event in final.data["events"]])
-
-        confirmed = self.officer_api.post(
-            reverse("input-supply-request-approve", kwargs={"pk": saved.data["id"]}),
-            {"remarks": "Distribution matches the approved hectares."}, format="json",
-        )
-        self.assertEqual(confirmed.status_code, 200, confirmed.data)
-        self.assertEqual(confirmed.data["status"], "APPROVED")
-        allocation = InputAllocation.objects.get(farmer=self.farmer, allocation_reference=confirmed.data["reference"])
-        self.assertEqual(allocation.hectares, Decimal("10.00"))
-        self.assertEqual(allocation.total_input_cost, Decimal("3060.00"))
-        self.assertEqual(allocation.status, InputAllocation.STATUS_ALLOCATED)
-        debt = InputDebt.objects.get(input_allocation=allocation)
-        self.assertEqual(debt.total_debt, Decimal("3060.00"))
-        self.assertNotEqual(debt.status, InputDebt.STATUS_CANCELLED)
-
-    def test_admin_distributes_a_lower_maximum_and_the_lead_farmer_cannot_exceed_it(self):
-        programme = self.programme()
-        mbizi = self.line(programme, "SEED", self.mbizi, "25", "2.00")
-        shumba = self.line(programme, "SEED", self.shumba, "20", "3.00")
-        saved = self.save(self.lead_api, programme, [
-            (self.farmer, [(mbizi, "10")]),
-            (self.third, [(shumba, "10")]),
-        ])
-        self.assertEqual(saved.status_code, 201, saved.data)
-        self.assertEqual(saved.data["hectares_total"], "20.00")
-        self.assertEqual({row["farmer_name"] for row in saved.data["farmers"]}, {"Tendai Moyo", "Chipo Moyo"})
-        self.submit(self.lead_api, saved.data["id"])
-
-        distributed = self.officer_api.post(
-            reverse("input-supply-request-set-hectares", kwargs={"pk": saved.data["id"]}),
-            {"mode": "distribute", "remarks": "150 ha is not available; 15 ha is.", "limits": self.limits("15", [("SEED", "15")], [(mbizi, "9"), (shumba, "6")])},
-            format="json",
-        )
-        self.assertEqual(distributed.status_code, 200, distributed.data)
-        event = next(row for row in distributed.data["events"] if row["action"] == "LIMITS_DISTRIBUTED")
-        self.assertEqual(event["actor_name"], "Ada Ncube")
-        self.assertEqual(event["detail"]["limits"][0]["requested_hectares"], "20.00")
-        self.assertEqual(event["detail"]["limits"][0]["approved_hectares"], "15.00")
-        self.assertEqual(InputSupplyLimit.objects.filter(request_id=saved.data["id"], scope="VARIETY").count(), 2)
-
-        over = self.save(self.lead_api, programme, [(self.farmer, [(mbizi, "10")]), (self.third, [(shumba, "10")])])
-        self.assertEqual(over.status_code, 400)
-        self.assertIn("limited to 15.00 ha", str(over.data))
-        variety_over = self.save(self.lead_api, programme, [(self.farmer, [(mbizi, "10")]), (self.third, [(shumba, "5")])])
-        self.assertEqual(variety_over.status_code, 400)
-        self.assertIn("Mbizi", str(variety_over.data))
-
-        within = self.save(self.lead_api, programme, [(self.farmer, [(mbizi, "8")]), (self.third, [(shumba, "4")])])
-        self.assertEqual(within.status_code, 200, within.data)
-        self.assertEqual(within.data["hectares_total"], "12.00")
-        crop_limit = next(row for row in within.data["limits"] if row["scope"] == "CROP")
-        self.assertEqual(crop_limit["remaining_hectares"], "3.00")
-        self.submit(self.lead_api, saved.data["id"])
-        self.assertEqual(InputAllocation.objects.filter(allocation_reference=saved.data["reference"]).count(), 0)
-        confirmed = self.officer_api.post(reverse("input-supply-request-approve", kwargs={"pk": saved.data["id"]}), {}, format="json")
-        self.assertEqual(confirmed.status_code, 200, confirmed.data)
-        self.assertEqual(InputAllocation.objects.filter(allocation_reference=saved.data["reference"]).count(), 2)
-        mbizi_line = InputAllocation.objects.get(farmer=self.farmer, allocation_reference=saved.data["reference"]).calculation_lines.get()
-        self.assertEqual(mbizi_line.required_quantity, Decimal("200.0000"))
-
-        adjusted = self.officer_api.post(
-            reverse("input-supply-request-set-hectares", kwargs={"pk": saved.data["id"]}),
-            {"mode": "distribute", "limits": self.limits("12", [("SEED", "12")], [(mbizi, "8"), (shumba, "4")])},
-            format="json",
-        )
-        self.assertEqual(adjusted.status_code, 400)
-
-    def test_limits_can_be_lowered_before_confirmation_and_history_keeps_the_change(self):
-        programme = self.programme()
-        mbizi = self.line(programme, "SEED", self.mbizi, "25", "2.00")
-        saved = self.save(self.lead_api, programme, [(self.farmer, [(mbizi, "10")])])
-        self.submit(self.lead_api, saved.data["id"])
-        self.officer_api.post(
-            reverse("input-supply-request-set-hectares", kwargs={"pk": saved.data["id"]}),
-            {"mode": "approve"}, format="json",
-        )
-        lowered = self.officer_api.post(
-            reverse("input-supply-request-set-hectares", kwargs={"pk": saved.data["id"]}),
-            {"mode": "distribute", "remarks": "Only 4 ha can be supplied.", "limits": self.limits("4", [("SEED", "4")], [(mbizi, "4")])},
-            format="json",
-        )
+    def test_changing_limits_after_the_final_submission_sends_it_back_for_review(self):
+        pk = self.build()["id"]
+        self.act("submit", pk, client=self.lead_api)
+        self.act("set-hectares", pk, mode="approve")
+        self.assertEqual(self.act("submit", pk, client=self.lead_api).data["status"], "CONFIRMATION")
+        lowered = self.act("set-hectares", pk, mode="distribute", limits=[{"scope": "VARIETY", "requirement": self.mbizi, "approved_hectares": "9"}])
         self.assertEqual(lowered.status_code, 200, lowered.data)
-        self.assertEqual(lowered.data["status"], "LIMITS_SET")
-        change = next(row for row in lowered.data["events"] if row["action"] == "LIMITS_ADJUSTED")
-        self.assertEqual(change["detail"]["previous"][0]["approved_hectares"], "10.00")
-        self.assertEqual(change["detail"]["limits"][0]["approved_hectares"], "4.00")
-        self.assertEqual(change["detail"]["limits"][0]["requested_hectares"], "10.00")
-        blocked = self.submit(self.lead_api, saved.data["id"])
-        self.assertEqual(blocked.status_code, 400)
-        fixed = self.save(self.lead_api, programme, [(self.farmer, [(mbizi, "4")])])
-        self.assertEqual(fixed.status_code, 200, fixed.data)
-        self.assertEqual(self.submit(self.lead_api, saved.data["id"]).status_code, 200)
+        self.assertEqual((lowered.data["status"], lowered.data["limits_changed"]), ("LIMITS_SET", True))
+        notice = Notification.objects.filter(recipient=self.lead).order_by("-id").first()
+        self.assertIn("no longer fits", notice.body)
+        self.assertEqual(self.act("approve", pk).status_code, 400)
+        history = [event for event in lowered.data["events"] if event["action"] == "LIMITS_ADJUSTED"]
+        self.assertTrue(history and history[-1]["detail"]["previous"])
 
-    def test_return_reject_resubmit_and_reversal(self):
-        programme = self.programme()
-        mbizi = self.line(programme, "SEED", self.mbizi, "25", "2.00")
-        shumba = self.line(programme, "SEED", self.shumba, "20", "3.00")
+    def test_rejected_submission_stays_in_history_without_debt(self):
+        pk = self.build()["id"]
+        self.act("submit", pk, client=self.lead_api)
+        self.assertEqual(self.act("reject", pk, remarks="").status_code, 400)
+        rejected = self.act("reject", pk, remarks="Not in this programme")
+        self.assertEqual(rejected.data["status"], "REJECTED")
+        self.assertFalse(InputAllocation.objects.exists())
+        self.assertTrue(InputSupplyRequest.objects.filter(pk=pk).exists())
+        self.assertEqual(self.fetch(pk)["decision_notes"], "Not in this programme")
+        # The farmer's hectares are free again for a new submission.
+        self.assertEqual(self.add(self.farmer, [(self.mbizi, "8")]).status_code, 201)
+        self.assertEqual(InputSupplyRequest.objects.exclude(pk=pk).count(), 1)
 
-        rejected = self.save(self.other_api, programme, [(self.other_farmer, [(mbizi, "4")])])
-        self.submit(self.other_api, rejected.data["id"])
-        self.assertEqual(self.admin.post(reverse("input-supply-request-reject", kwargs={"pk": rejected.data["id"]}), {}, format="json").status_code, 400)
-        decision = self.admin.post(
-            reverse("input-supply-request-reject", kwargs={"pk": rejected.data["id"]}),
-            {"remarks": "Wrong variety for this cluster."}, format="json",
-        )
-        self.assertEqual(decision.status_code, 200, decision.data)
-        self.assertEqual(decision.data["status"], "REJECTED")
-        self.assertFalse(InputAllocation.objects.filter(allocation_reference=rejected.data["reference"]).exists())
+    def test_consolidated_view_for_admin(self):
+        ruth_farmer = make_farmer(type(self), "Panashe", "63-2222222D12", maize_hectares=10)
+        ruth_farmer.cluster = self.other_cluster
+        ruth_farmer.save(update_fields=["cluster"])
+        self.build()
+        self.add(ruth_farmer, [(self.mbizi, "9")], client=self.other_api)
+        summary = self.admin_api.get(reverse("input-supply-request-consolidated"), {"season": self.season.id, "crop_season": "SUMMER"}).data
+        self.assertEqual(sorted(row["lead_farmer_name"] for row in summary["lead_farmers"]), ["John Moyo", "Ruth Dube"])
+        mbizi = next(row for row in summary["varieties"] if row["product_name"] == "Mbizi")
+        self.assertEqual((mbizi["hectares"], mbizi["quantity"], mbizi["lead_farmers"]), ("22.00", "550", 2))
+        self.assertEqual(self.lead_api.get(reverse("input-supply-request-consolidated"), {"season": self.season.id}).status_code, 403)
 
-        returned = self.save(self.lead_api, programme, [(self.farmer, [(mbizi, "4")])])
-        self.submit(self.lead_api, returned.data["id"])
-        sent_back = self.admin.post(
-            reverse("input-supply-request-return-for-corrections", kwargs={"pk": returned.data["id"]}),
-            {"remarks": "Use Shumba, not Mbizi."}, format="json",
-        )
-        self.assertEqual(sent_back.data["status_label"], "Returned for corrections")
-        corrected = self.save(self.lead_api, programme, [(self.farmer, [(shumba, "4")])])
-        self.assertEqual(corrected.data["id"], returned.data["id"])
-        self.assertEqual(corrected.data["totals"][0]["product_name"], "Shumba")
-        self.assertEqual(Decimal(corrected.data["totals"][0]["quantity"]), Decimal("80.0000"))
-        resubmitted = self.submit(self.lead_api, returned.data["id"])
-        self.assertIn("RESUBMITTED", [event["action"] for event in resubmitted.data["events"]])
-
-        self.admin.post(reverse("input-supply-request-set-hectares", kwargs={"pk": returned.data["id"]}), {"mode": "approve"}, format="json")
-        self.submit(self.lead_api, returned.data["id"])
-        sent_back = self.admin.post(
-            reverse("input-supply-request-return-for-corrections", kwargs={"pk": returned.data["id"]}),
-            {"remarks": "Give Chipo some of the hectares."}, format="json",
-        )
-        self.assertEqual(sent_back.data["stage"], "DISTRIBUTION")
-        shared = self.save(self.lead_api, programme, [(self.farmer, [(shumba, "3")]), (self.third, [(shumba, "1")])])
-        self.assertEqual(shared.status_code, 200, shared.data)
-        again = self.submit(self.lead_api, returned.data["id"])
-        self.assertIn("FINAL_RESUBMITTED", [event["action"] for event in again.data["events"]])
-        confirmed = self.admin.post(reverse("input-supply-request-approve", kwargs={"pk": returned.data["id"]}), {}, format="json")
-        self.assertEqual(confirmed.status_code, 200, confirmed.data)
-
-        not_mine = self.save(self.lead_api, programme, [(self.other_farmer, [(mbizi, "2")])])
-        self.assertEqual(not_mine.status_code, 400)
-        self.assertIn("not one of your farmers", str(not_mine.data))
-        hidden = self.lead_api.get(reverse("input-supply-request-list"))
-        self.assertEqual({row["lead_farmer_name"] for row in hidden.data["results"]}, {"John Moyo"})
-
-        reversed_request = self.admin.post(
-            reverse("input-supply-request-reverse", kwargs={"pk": returned.data["id"]}),
-            {"remarks": "Allocated to the wrong farmer."}, format="json",
-        )
-        self.assertEqual(reversed_request.status_code, 200, reversed_request.data)
-        self.assertEqual(reversed_request.data["status"], "RETURNED")
-        allocation = InputAllocation.objects.filter(allocation_reference=returned.data["reference"]).first()
-        self.assertEqual(allocation.status, InputAllocation.STATUS_CANCELLED)
-        self.assertEqual(InputDebt.objects.get(input_allocation=allocation).status, InputDebt.STATUS_CANCELLED)
-        restored = self.save(self.lead_api, programme, [(self.farmer, [(shumba, "4")])])
-        self.assertEqual(restored.status_code, 200, restored.data)
-        self.assertEqual(self.submit(self.lead_api, returned.data["id"]).data["status"], "CONFIRMATION")
-
-    def test_catalogue_is_the_lead_farmers_own_and_programmes_keep_their_own_prices(self):
-        arda = self.programme("ARDA prices")
-        seedco = self.programme("Seed Co prices")
-        arda_mbizi = self.line(arda, "SEED", self.mbizi, "25", "2.00")
-        seedco_mbizi = self.line(seedco, "SEED", self.mbizi, "25", "2.50")
-        first = self.save(self.lead_api, arda, [(self.farmer, [(arda_mbizi, "4")])])
-        second = self.save(self.lead_api, seedco, [(self.third, [(seedco_mbizi, "4")])])
-        self.assertEqual(first.data["totals"][0]["estimated_cost"], "200.00")
-        self.assertEqual(second.data["totals"][0]["estimated_cost"], "250.00")
-        self.assertNotEqual(first.data["id"], second.data["id"])
-
-        catalogue = self.lead_api.get(reverse("input-supply-request-catalogue"), {"season": self.season.id, "crop_season": "SUMMER"})
-        self.assertEqual(catalogue.status_code, 200, catalogue.data)
-        self.assertEqual([farmer["name"] for farmer in catalogue.data["farmers"]], ["Chipo Moyo", "Tendai Moyo"])
-        names = [variety["product_name"] for programme in catalogue.data["programmes"] for crop in programme["crops"] for variety in crop["varieties"]]
-        self.assertIn("Mbizi", names)
-        self.assertNotIn("cap_quantity", catalogue.data["programmes"][0]["crops"][0]["varieties"][0])
-        winter = self.lead_api.get(reverse("input-supply-request-catalogue"), {"season": self.season.id, "crop_season": "WINTER"})
-        self.assertEqual(winter.data["programmes"], [])
-
-        self.season.status = Season.STATUS_CLOSED
-        self.season.save(update_fields=["status"])
-        closed = self.save(self.lead_api, arda, [(self.farmer, [(arda_mbizi, "4")])])
-        self.assertEqual(closed.status_code, 400)
-        self.assertIn("not the active agricultural year", str(closed.data))
-
-    def test_a_lead_farmer_only_confirms_through_admin_and_cannot_review(self):
-        programme = self.programme()
-        mbizi = self.line(programme, "SEED", self.mbizi, "25", "2.00")
-        saved = self.save(self.lead_api, programme, [(self.farmer, [(mbizi, "2")])])
-        self.submit(self.lead_api, saved.data["id"])
-        self.assertEqual(
-            self.lead_api.post(reverse("input-supply-request-set-hectares", kwargs={"pk": saved.data["id"]}), {"mode": "approve"}, format="json").status_code,
-            403,
-        )
-        self.assertEqual(self.lead_api.post(reverse("input-supply-request-approve", kwargs={"pk": saved.data["id"]}), {}, format="json").status_code, 403)
-        self.assertEqual(InputSupplyRequest.objects.get(pk=saved.data["id"]).status, InputSupplyRequest.STATUS_SUBMITTED)
-        queue = self.officer_api.get(reverse("input-supply-request-list"), {"status": "SUBMITTED", "season": self.season.id})
-        self.assertEqual(queue.data["results"][0]["lead_farmer_name"], "John Moyo")
-        added = self.save(self.lead_api, programme, [
-            (self.farmer, [(mbizi, "2")]),
-            (self.third, [(mbizi, "3")]),
-        ])
-        self.assertEqual(added.status_code, 200, added.data)
-        self.assertEqual(added.data["id"], saved.data["id"])
-        self.assertEqual(added.data["status"], "SUBMITTED")
-        self.assertEqual(added.data["farmer_count"], 2)
-        again = self.submit(self.lead_api, saved.data["id"])
-        self.assertEqual(again.status_code, 200, again.data)
-        self.assertEqual(again.data["status"], "SUBMITTED")
-        self.assertEqual(again.data["events"][-1]["action"], "RESUBMITTED")
-        self.assertEqual(queue.data["results"][0]["crop_season_label"], "Summer")
-        summary = self.officer_api.get(reverse("input-supply-request-consolidated"), {"season": self.season.id, "crop_season": "SUMMER"})
-        self.assertEqual(summary.data["submitted_count"], 1)
-        self.assertEqual(summary.data["confirmation_count"], 0)
+    def test_earlier_records_are_left_alone(self):
+        # An allocation made through the earlier admin screen stays official and blocks a second seed allocation.
+        ProgrammeCrop.objects.get_or_create(programme_id=self.arda, crop=self.maize)
+        InputAllocation.objects.create(farmer=self.farmer, programme_id=self.arda, season=self.season, crop_reference=self.maize, crop="Maize", hectares=4, status="ALLOCATED")
+        self.assertEqual(self.add(self.farmer, [(self.mbizi, "8")]).status_code, 400)
+        self.assertEqual(self.add(self.farmer, [(self.mbizi, "6")]).status_code, 400)  # earlier allocations cover every input
+        self.assertEqual(InputSupplyRequest.objects.count(), 0)

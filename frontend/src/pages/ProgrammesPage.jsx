@@ -1,7 +1,7 @@
 // Programmes: name, agricultural year, the crops and input types each supports, and whether it is active.
 //
-// A programme supports several crops and one, two or all three input types. Its figures show
-// the hectares requested, approved, allocated and still to allocate, overall and per crop.
+// A programme supports several crops and one, two or all three input types. Its allocated
+// hectares start at nothing and grow as Admin approves lead farmers' input submissions.
 
 import { useEffect, useMemo, useState } from 'react'
 
@@ -62,10 +62,9 @@ function ProgrammesPage({ selectedSeason = null, cropSeason = '', periodStatus =
   const loading = !blocked && loadedKey !== requestKey
   const reload = () => setToken((value) => value + 1)
   const totals = useMemo(() => rows.reduce((sum, row) => ({
-    approved: sum.approved + Number(row.figures?.approved_hectares || 0),
     allocated: sum.allocated + Number(row.figures?.allocated_hectares || 0),
-    remaining: sum.remaining + Number(row.figures?.remaining_hectares || 0),
-  }), { approved: 0, allocated: 0, remaining: 0 }), [rows])
+    farmers: sum.farmers + Number(row.figures?.farmers || 0),
+  }), { allocated: 0, farmers: 0 }), [rows])
 
   const remove = async () => {
     try {
@@ -81,7 +80,7 @@ function ProgrammesPage({ selectedSeason = null, cropSeason = '', periodStatus =
 
   return (
     <div className="page-card programmes-page">
-      <PageHead title="Programmes" subtitle="Each programme names the crops and input types it supports. Its crops have their own catalogue, its input requests set the hectares it can allocate, and inactive programmes take no new requests or allocations." />
+      <PageHead title="Programmes" subtitle="Each programme names the crops and input types it supports, and its crops have their own catalogue. Allocated hectares update automatically as Admin approves lead farmers’ submissions. Inactive programmes take no new submissions." />
       {blocked ? <div className="form-message">Choose an agricultural year in the header.</div> : null}
       {notice ? <div className="form-message success" role="status">{notice}</div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
@@ -99,7 +98,7 @@ function ProgrammesPage({ selectedSeason = null, cropSeason = '', periodStatus =
         <div className="card-head">
           <div>
             <h3>Programmes for {selectedSeason?.name || 'the agricultural year'}</h3>
-            <p className="card-sub">{rows.length} programme{rows.length === 1 ? '' : 's'} · {hectares(totals.approved)} approved · {hectares(totals.allocated)} allocated · {hectares(totals.remaining)} still to allocate</p>
+            <p className="card-sub">{rows.length} programme{rows.length === 1 ? '' : 's'} · {hectares(totals.allocated)} allocated to {totals.farmers} farmer{totals.farmers === 1 ? '' : 's'}</p>
           </div>
         </div>
         <div className="filter-row">
@@ -123,7 +122,7 @@ function ProgrammesPage({ selectedSeason = null, cropSeason = '', periodStatus =
         {rows.length ? (
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>Programme</th><th>Agricultural year</th><th>Supported crops</th><th>Input types</th><th className="num">Approved</th><th className="num">Allocated</th><th className="num">Remaining</th><th>Capacity status</th><th>Actions</th></tr></thead>
+              <thead><tr><th>Programme</th><th>Agricultural year</th><th>Supported crops</th><th>Input types</th><th className="num">Allocated</th><th className="num">Farmers</th><th>Capacity status</th><th>Actions</th></tr></thead>
               <tbody>
                 {rows.map((row) => (
                   <ProgrammeRow
@@ -166,9 +165,8 @@ function ProgrammeRow({ row, open, onToggle, onEdit, onDelete }) {
         <td>{row.season_name || '—'}</td>
         <td>{row.crop_names?.length ? row.crop_names.join(', ') : '—'}</td>
         <td>{row.input_category_labels?.length ? row.input_category_labels.join(', ') : <span className="field-error">None chosen</span>}</td>
-        <td className="num">{hectares(row.figures?.approved_hectares)}</td>
-        <td className="num">{hectares(row.figures?.allocated_hectares)}</td>
-        <td className="num"><strong>{hectares(row.figures?.remaining_hectares)}</strong></td>
+        <td className="num"><strong>{hectares(row.figures?.allocated_hectares)}</strong></td>
+        <td className="num">{row.figures?.farmers ?? 0}</td>
         <td><Pill tone={active ? 'good' : 'bad'}>{active ? 'Active' : 'Inactive'}</Pill></td>
         <td>
           <span className="table-actions">
@@ -180,24 +178,21 @@ function ProgrammeRow({ row, open, onToggle, onEdit, onDelete }) {
       </tr>
       {open ? (
         <tr className="allocation-lines">
-          <td colSpan="9">
+          <td colSpan="8">
             {!figures ? <div className="form-message">Loading…</div> : (
               <table className="data-table compact">
-                <thead><tr><th>Crop</th><th>Season</th><th className="num">Requested</th><th className="num">Approved</th><th className="num">Allocated</th><th className="num">Remaining</th><th className="num">Farmers</th><th className="num">Catalogue products</th></tr></thead>
+                <thead><tr><th>Crop</th><th>Season</th><th className="num">Allocated</th><th className="num">Farmers</th><th className="num">Catalogue products</th></tr></thead>
                 <tbody>
                   {figures.crops.map((crop) => (
                     <tr key={crop.crop}>
                       <td>{crop.crop_name}</td>
                       <td>{crop.season}</td>
-                      <td className="num">{hectares(crop.requested_hectares)}</td>
-                      <td className="num">{hectares(crop.approved_hectares)}</td>
                       <td className="num">{hectares(crop.allocated_hectares)}</td>
-                      <td className="num">{hectares(crop.remaining_hectares)}</td>
                       <td className="num">{crop.farmers}</td>
                       <td className="num">{crop.inputs_configured || <span className="field-error">None</span>}</td>
                     </tr>
                   ))}
-                  {!figures.crops.length ? <tr><td colSpan="8">This programme supports no crops yet.</td></tr> : null}
+                  {!figures.crops.length ? <tr><td colSpan="5">This programme supports no crops yet.</td></tr> : null}
                 </tbody>
               </table>
             )}

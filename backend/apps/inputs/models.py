@@ -213,8 +213,8 @@ class InputSupplyRequest(models.Model):
     STATUS_CHOICES: ClassVar[list[tuple[str, str]]] = [
         (STATUS_DRAFT, "Draft"),
         (STATUS_SUBMITTED, "Submitted"),
-        (STATUS_LIMITS_SET, "Hectares approved"),
-        (STATUS_CONFIRMATION, "Awaiting confirmation"),
+        (STATUS_LIMITS_SET, "Approved limits issued"),
+        (STATUS_CONFIRMATION, "Final distribution submitted"),
         (STATUS_APPROVED, "Approved"),
         (STATUS_RETURNED, "Returned for corrections"),
         (STATUS_REJECTED, "Rejected"),
@@ -237,7 +237,12 @@ class InputSupplyRequest(models.Model):
     )
     programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="input_supply_requests")
     season = models.ForeignKey(Season, on_delete=models.PROTECT, related_name="input_supply_requests")
-    crop = models.ForeignKey(Crop, on_delete=models.PROTECT, related_name="input_supply_requests")
+    # Submissions made before seasons were grouped name one crop. A submission now covers a
+    # programme, agricultural year and season, and each farmer row names its own crop.
+    crop = models.ForeignKey(Crop, on_delete=models.PROTECT, related_name="input_supply_requests", null=True, blank=True)
+    crop_season = models.CharField(max_length=10, blank=True, default="", choices=[("SUMMER", "Summer"), ("WINTER", "Winter")])
+    # Set when Admin changes approved limits after issuing them, so the lead farmer reviews the distribution.
+    limits_changed_at = models.DateTimeField(null=True, blank=True)
     stage = models.CharField(max_length=20, choices=STAGE_CHOICES, default=STAGE_REQUEST)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     submitted_at = models.DateTimeField(null=True, blank=True)
@@ -260,7 +265,18 @@ class InputSupplyRequest(models.Model):
                 condition=models.Q(status__in=["DRAFT", "SUBMITTED", "RETURNED", "LIMITS_SET", "CONFIRMATION"]),
                 name="one_open_input_supply_request",
             ),
+            # A lead farmer can have several submissions with Admin for the same programme and season,
+            # but only one draft at a time to add new farmers to.
+            models.UniqueConstraint(
+                fields=["lead_farmer", "programme", "season", "crop_season"],
+                condition=models.Q(crop__isnull=True, status="DRAFT"),
+                name="one_draft_input_submission_per_season",
+            ),
         ]
+
+    @property
+    def season_code(self):
+        return self.crop_season or (self.crop.category if self.crop_id else "")
 
     def __str__(self):
         return self.reference or f"Request {self.pk}"
@@ -272,12 +288,17 @@ class InputSupplyFarmer(models.Model):
     request = models.ForeignKey(InputSupplyRequest, on_delete=models.CASCADE, related_name="farmers")
     farmer = models.ForeignKey(Farmer, on_delete=models.PROTECT, related_name="input_supply_rows")
     farm = models.ForeignKey("farmers.Farm", on_delete=models.PROTECT, related_name="input_supply_rows")
+    crop = models.ForeignKey(Crop, on_delete=models.PROTECT, related_name="input_supply_rows", null=True, blank=True)
     hectares = models.DecimalField(max_digits=12, decimal_places=2)
+    # Raised on every save. An edit sent with an older version is refused, so two people
+    # editing the same allocation never silently overwrite each other.
+    version = models.PositiveIntegerField(default=1)
+    updated_at = models.DateTimeField(auto_now=True, null=True)
 
     class Meta:
-        ordering = ["farmer__surname", "farmer__first_name", "id"]
+        ordering = ["farmer__surname", "farmer__first_name", "crop__name", "id"]
         constraints = [
-            models.UniqueConstraint(fields=["request", "farmer"], name="unique_supply_request_farmer"),
+            models.UniqueConstraint(fields=["request", "farmer", "crop"], name="unique_supply_request_farmer_crop"),
             models.CheckConstraint(condition=models.Q(hectares__gt=0), name="supply_farmer_hectares_positive"),
         ]
 
@@ -324,7 +345,13 @@ class InputSupplyEvent(models.Model):
     REVERSED = "REVERSED"
     CORRECTED = "CORRECTED"
     SAVED = "SAVED"
+    ALLOCATION_ADDED = "ALLOCATION_ADDED"
+    ALLOCATION_CHANGED = "ALLOCATION_CHANGED"
+    ALLOCATION_REMOVED = "ALLOCATION_REMOVED"
     ACTION_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (ALLOCATION_ADDED, "Allocation added"),
+        (ALLOCATION_CHANGED, "Allocation changed"),
+        (ALLOCATION_REMOVED, "Allocation removed"),
         (SAVED, "Draft saved"),
         (CORRECTED, "Corrections saved"),
         (SUBMITTED, "Submitted"),
@@ -373,6 +400,7 @@ class InputSupplyLimit(models.Model):
     ]
 
     request = models.ForeignKey(InputSupplyRequest, on_delete=models.CASCADE, related_name="limits")
+    crop = models.ForeignKey(Crop, on_delete=models.PROTECT, related_name="supply_limits", null=True, blank=True)
     scope = models.CharField(max_length=20, choices=SCOPE_CHOICES)
     input_category = models.CharField(max_length=20, blank=True, default="")
     requirement = models.ForeignKey(
@@ -390,10 +418,10 @@ class InputSupplyLimit(models.Model):
         ordering = ["request_id", "scope", "input_category", "id"]
         constraints = [
             models.UniqueConstraint(
-                fields=["request"], condition=models.Q(scope="CROP"), name="unique_supply_crop_limit",
+                fields=["request", "crop"], condition=models.Q(scope="CROP"), name="unique_supply_crop_limit_per_crop",
             ),
             models.UniqueConstraint(
-                fields=["request", "input_category"], condition=models.Q(scope="CATEGORY"), name="unique_supply_category_limit",
+                fields=["request", "crop", "input_category"], condition=models.Q(scope="CATEGORY"), name="unique_supply_category_limit_per_crop",
             ),
             models.UniqueConstraint(
                 fields=["request", "requirement"], condition=models.Q(scope="VARIETY"), name="unique_supply_variety_limit",

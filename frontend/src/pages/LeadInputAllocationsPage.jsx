@@ -1,466 +1,326 @@
-// Lead farmer input allocations.
+// Lead farmer: input allocations for one programme, agricultural year and season.
 //
-// The lead farmer searches for one of their farmers, and the farm fills in. They then add the
-// varieties they need and the hectares of each. Quantity and cost come from the catalogue.
-// Hectares of one input cannot pass what that farmer intends to plant for the crop. Admin's
-// approved hectares, once set, are a separate maximum for the whole submission.
+// Farmers are sent to Admin in submissions. A lead farmer can send some farmers now and more
+// later: once a submission is with Admin, new farmers go into the next one (one draft at a time).
+// Each allocation (one farmer, one crop, its varieties and hectares) is saved, changed or
+// removed on its own, straight away. The page always shows what the server saved; it never keeps
+// a separate working copy that could drift.
 
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
 
 import apiClient from '../api/client'
 import Icon from '../components/Icon'
 import SearchSelect from '../components/SearchSelect'
-import { EmptyState, PageHead, Pill, errorMessage } from '../components/ui'
-import { canEditSubmission, STATUS_TONE, when } from '../inputSupply'
-import { cropSeasonLabel } from '../period'
-import { CATEGORY_LABEL, money, qty, requestTotal } from '../programmeData'
+import { AllocationsTable, CropBreakdown, HectareSummary, History, LimitsTable, StatusPill } from '../components/SubmissionParts'
+import { EmptyState, Modal, PageHead, errorMessage } from '../components/ui'
+import { CATEGORIES } from '../inputCategories'
+import { OPEN_STATUSES, estimate, nextStep, submitLabel } from '../inputSupply'
+import { hectares, listOf, money, qty } from '../programmeData'
 
-const blankLine = () => ({ requirement: '', hectares: '' })
-const blankRow = () => ({ key: `${Date.now()}-${Math.random()}`, farmer: '', farm: '', lines: [blankLine()] })
-
-const toAllocationRow = (entry) => ({
-  key: `saved-${entry.id}`,
-  farmer: String(entry.farmer),
-  farm: entry.farm ? String(entry.farm) : '',
-  lines: (entry.lines || []).length
-    ? entry.lines.map((line) => ({ requirement: String(line.requirement), hectares: String(line.hectares) }))
-    : [blankLine()],
-})
-
-const filledLines = (row) => (row.lines || []).filter((line) => line.requirement && Number(line.hectares) > 0)
-
-function previewCost(variety, hectares) {
-  const quantity = (Number(hectares) || 0) * Number(variety?.rate_per_hectare || 0)
-  if (variety?.pack_size && variety?.pack_price) {
-    return quantity / Number(variety.pack_size) * Number(variety.pack_price)
-  }
-  return quantity * Number(variety?.unit_price || 0)
-}
-
-function categoryTotals(lines, varieties) {
-  const totals = {}
-  lines.forEach((line) => {
-    const variety = varieties.find((item) => String(item.requirement) === String(line.requirement))
-    if (!variety) return
-    totals[variety.input_category] = (totals[variety.input_category] || 0) + (Number(line.hectares) || 0)
-  })
-  return totals
-}
+const SEASON = { SUMMER: 'Summer', WINTER: 'Winter' }
 
 function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', periodStatus = 'ready' }) {
+  const season = cropSeason || 'SUMMER'
   const [catalogue, setCatalogue] = useState(null)
+  const [submissions, setSubmissions] = useState([])
   const [programme, setProgramme] = useState('')
-  const [crop, setCrop] = useState('')
-  const [rows, setRows] = useState([])
-  const [dirty, setDirty] = useState(false)
-  const [boundKey, setBoundKey] = useState('')
-  const [rowNotes, setRowNotes] = useState({})
-  const [loadedKey, setLoadedKey] = useState('')
+  const [picked, setPicked] = useState(null)
+  const [editing, setEditing] = useState(null)
+  const [deleting, setDeleting] = useState(null)
   const [token, setToken] = useState(0)
+  const [loadedKey, setLoadedKey] = useState('')
+  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const [saving, setSaving] = useState(false)
   const blocked = periodStatus !== 'ready' || !selectedSeason
   const readOnlyYear = Boolean(selectedSeason?.status && selectedSeason.status !== 'ACTIVE')
-  const seasonId = selectedSeason?.id || ''
-  const requestKey = JSON.stringify([seasonId, cropSeason, token])
-  const seasonName = cropSeasonLabel(selectedSeason, cropSeason)
+  const baseKey = JSON.stringify([selectedSeason?.id, season])
+  const requestKey = `${baseKey}#${token}`
 
+  // The catalogue and this season's submissions, read from the server every time something changes.
   useEffect(() => {
     if (blocked) return undefined
     let active = true
-    const params = { season: seasonId }
-    if (cropSeason) params.crop_season = cropSeason
-    apiClient.get('/input-supply-requests/catalogue/', { params })
-      .then((response) => { if (active) { setCatalogue(response.data); setError('') } })
-      .catch((requestError) => { if (active) setError(errorMessage(requestError, 'The programme catalogue could not be loaded.')) })
+    const params = { season: selectedSeason.id, crop_season: season }
+    Promise.all([
+      apiClient.get('/input-supply-requests/catalogue/', { params }),
+      apiClient.get('/input-supply-requests/', { params: { ...params, page_size: 100 } }),
+    ])
+      .then(([options, list]) => { if (active) { setCatalogue(options.data); setSubmissions(listOf(list.data)); setError('') } })
+      .catch((requestError) => { if (active) setError(errorMessage(requestError, 'Your allocations could not be loaded.')) })
       .finally(() => { if (active) setLoadedKey(requestKey) })
     return () => { active = false }
-  }, [blocked, seasonId, cropSeason, requestKey])
+  }, [blocked, selectedSeason, season, requestKey])
 
+  // A reload after a save keeps the current figures on screen until the fresh ones arrive.
+  const loading = !blocked && !loadedKey.startsWith(`${baseKey}#`)
+  const reload = () => setToken((value) => value + 1)
   const programmes = catalogue?.programmes || []
-  const selectedProgramme = programmes.find((item) => String(item.programme) === programme) || null
-  const crops = selectedProgramme?.crops || []
-  const selectedCrop = crops.find((item) => String(item.crop) === crop) || null
-  const varieties = selectedCrop?.varieties || []
-  const farmers = catalogue?.farmers || []
-  const loading = !blocked && loadedKey !== requestKey
-  const openRequest = (catalogue?.open_requests || []).find((item) => String(item.programme) === programme && String(item.crop) === crop) || null
-  const request = openRequest
-  const editable = !readOnlyYear && canEditSubmission(request)
-  const distributing = request?.stage === 'DISTRIBUTION'
-  const limits = request?.limits || []
+  const chosen = programmes.find((item) => String(item.programme) === programme) || (programmes.length === 1 ? programmes[0] : null)
+  // This programme's submissions, newest first. The draft is where new farmers go.
+  const batches = chosen ? submissions.filter((item) => item.programme === chosen.programme && item.status !== 'REJECTED').sort((a, b) => b.id - a.id) : []
+  const draft = batches.find((item) => item.status === 'DRAFT') || null
+  const fallback = draft || batches.find((item) => item.editable) || batches.find((item) => OPEN_STATUSES.includes(item.status)) || null
+  const submission = picked === 'new' ? null : batches.find((item) => item.id === picked) || fallback
+  const canStartNew = !readOnlyYear && !draft
+  const editable = !readOnlyYear && (submission ? submission.editable : canStartNew)
+  // Farmer and crop pairs already in an open submission of this programme cannot be sent again.
+  const pending = batches.filter((item) => OPEN_STATUSES.includes(item.status)).flatMap((item) => item.allocations || [])
 
-  useEffect(() => {
-    if (!selectedCrop || loading) return undefined
-    const nextKey = `${programme}:${crop}:${openRequest?.id || 'new'}:${openRequest?.status || ''}`
-    if (dirty && boundKey.startsWith(`${programme}:${crop}:`)) return undefined
-    if (boundKey === nextKey) return undefined
-    const seeded = openRequest?.farmers?.length ? openRequest.farmers.map(toAllocationRow) : [blankRow()]
-    setRows(seeded)
-    setDirty(false)
-    setRowNotes({})
-    setBoundKey(nextKey)
-    return undefined
-  }, [selectedCrop, loading, programme, crop, openRequest, dirty, boundKey])
-
-  const editRows = (next) => {
-    setDirty(true)
-    setRows(next)
-  }
-  const updateRow = (key, changes) => editRows((current) => current.map((row) => (row.key === key ? { ...row, ...changes } : row)))
-  const note = (key, message) => setRowNotes((current) => ({ ...current, [key]: message }))
-
-  const chooseFarmer = (key, farmerId) => {
-    const farmer = farmers.find((item) => String(item.id) === farmerId)
-    const farm = farmer?.farms?.[0]
-    const onlyVariety = varieties.length === 1 ? String(varieties[0].requirement) : ''
-    editRows((current) => current.map((row) => {
-      if (row.key !== key) return row
-      const lines = row.lines.some((line) => line.requirement)
-        ? row.lines
-        : [{ requirement: onlyVariety, hectares: '' }]
-      return { ...row, farmer: farmerId, farm: farm ? String(farm.id) : '', lines }
-    }))
-    note(key, '')
-  }
-
-  const setLine = (key, index, changes) => {
-    editRows((current) => current.map((row) => {
-      if (row.key !== key) return row
-      const lines = row.lines.map((line, lineIndex) => (lineIndex === index ? { ...line, ...changes } : line))
-      return { ...row, lines }
-    }))
-  }
-
-  const setHectares = (key, index, raw) => {
-    const row = rows.find((item) => item.key === key)
-    const farmer = farmers.find((item) => String(item.id) === row?.farmer)
-    const intended = farmer ? Number(farmer.crops?.find((item) => String(item.crop) === crop)?.hectares) : NaN
-    const variety = varieties.find((item) => String(item.requirement) === String(row?.lines?.[index]?.requirement))
-    let value = raw
-    let message = ''
-    if (variety && Number.isFinite(intended) && raw !== '') {
-      const others = (row.lines || []).reduce((total, line, lineIndex) => {
-        if (lineIndex === index) return total
-        const other = varieties.find((item) => String(item.requirement) === String(line.requirement))
-        return other?.input_category === variety.input_category ? total + (Number(line.hectares) || 0) : total
-      }, 0)
-      const room = Math.max(intended - others, 0)
-      if (Number(raw) > room) {
-        value = room ? String(room) : ''
-        message = `${farmer.name} intends to plant ${qty(intended)} ha of ${selectedCrop.crop_name}. ${variety.input_category_label} cannot go past that.`
-      }
-    }
-    setLine(key, index, { hectares: value })
-    note(key, message)
-  }
-
-  const preview = []
-  const summed = new Map()
-  rows.forEach((row) => {
-    filledLines(row).forEach((line) => {
-      const variety = varieties.find((item) => String(item.requirement) === String(line.requirement))
-      if (!variety) return
-      const current = summed.get(variety.requirement) || { ...variety, hectares: 0, quantity: 0, cost: 0 }
-      current.hectares += Number(line.hectares) || 0
-      current.quantity += (Number(line.hectares) || 0) * Number(variety.rate_per_hectare || 0)
-      current.cost += previewCost(variety, line.hectares)
-      summed.set(variety.requirement, current)
+  // A server response replaces what the page shows; nothing is kept from before it.
+  const applied = (fresh, message, removedId = null) => {
+    setSubmissions((current) => {
+      const others = current.filter((item) => item.id !== fresh?.id && item.id !== removedId)
+      return fresh ? [fresh, ...others] : others
     })
-  })
-  summed.forEach((value) => preview.push(value))
-  const land = rows.reduce((total, row) => total + requestTotal(filledLines(row).map((line) => {
-    const variety = varieties.find((item) => String(item.requirement) === String(line.requirement))
-    return { input_category: variety?.input_category, hectares: line.hectares }
-  })), 0)
+    setPicked(fresh ? fresh.id : null)
+    setNotice(message)
+    setError('')
+    reload()
+  }
 
-  const overLimit = rows.some((row) => {
-    const farmer = farmers.find((item) => String(item.id) === row.farmer)
-    if (!farmer || !filledLines(row).length) return false
-    const intended = farmer.crops?.find((item) => String(item.crop) === crop)
-    if (!intended) return true
-    const ceiling = Number(intended.hectares)
-    return Object.values(categoryTotals(filledLines(row), varieties)).some((area) => area > ceiling + 0.001)
-  })
-
-  const payloadFarmers = rows.filter((row) => row.farmer && filledLines(row).length).map((row) => ({
-    farmer: Number(row.farmer),
-    farm: row.farm ? Number(row.farm) : undefined,
-    lines: filledLines(row).map((line) => ({ requirement: Number(line.requirement), hectares: line.hectares })),
-  }))
-
-  const payload = () => ({
-    programme: Number(programme),
-    season: seasonId,
-    crop: Number(crop),
-    crop_season: cropSeason || undefined,
-    farmers: payloadFarmers,
-  })
-
-  const save = async (andSubmit) => {
-    if (!payloadFarmers.length) {
-      setError('Choose a farmer and enter the hectares of at least one variety.')
+  const failed = (requestError, fallback) => {
+    setNotice('')
+    if (requestError.response?.status === 409) {
+      setError(`${requestError.response.data.detail} The latest figures are shown below.`)
+      reload()
       return
     }
-    if (overLimit) {
-      setError('Input hectares cannot exceed what the farmer intends to plant.')
+    setError(errorMessage(requestError, fallback))
+  }
+
+  const remove = async () => {
+    const row = deleting
+    setDeleting(null)
+    setBusy(true)
+    try {
+      const response = await apiClient.delete(`/input-supply-requests/allocations/${row.id}/`, { params: { version: row.version } })
+      applied(response.data.submission, `${row.farmer_name}’s ${row.crop_name} allocation was removed.`, submission?.id)
+      if (editing?.id === row.id) setEditing(null)
+    } catch (requestError) {
+      failed(requestError, 'The allocation could not be removed.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submit = async () => {
+    setBusy(true)
+    try {
+      const response = await apiClient.post(`/input-supply-requests/${submission.id}/submit/`)
+      applied(response.data, `${response.data.reference} ${response.data.status_label.toLowerCase()}.`)
+    } catch (requestError) {
+      failed(requestError, 'The submission could not be sent.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="page-card lead-allocations-page">
+      <PageHead title="Input allocations" subtitle="Choose a programme, then add each farmer’s crop, varieties and hectares. Quantities and costs are calculated for you. Every change is saved straight away." />
+      {blocked ? <div className="form-message">Choose the agricultural year and season in the header.</div> : null}
+      {readOnlyYear ? <div className="form-message">{selectedSeason.name} is not the active agricultural year, so its allocations are read-only.</div> : null}
+      {notice ? <div className="form-message success" role="status">{notice}</div> : null}
+      {error ? <div className="form-message error" role="alert">{error}</div> : null}
+      {loading ? <div className="form-message">Loading…</div> : null}
+
+      {!loading && !blocked ? (
+        programmes.length ? (
+          <section className="card">
+            <SearchSelect
+              label="Programme"
+              value={chosen ? String(chosen.programme) : ''}
+              onChange={(value) => { setProgramme(value); setPicked(null); setEditing(null); setNotice('') }}
+              placeholder="Choose the programme"
+              options={programmes.map((item) => ({ value: String(item.programme), label: item.programme_name }))}
+            />
+            {chosen ? <p className="card-sub">{selectedSeason.name} · {SEASON[season]} · {chosen.crops.map((crop) => crop.crop_name).join(', ')}</p> : null}
+          </section>
+        ) : <EmptyState icon="clipboard" title="No programme to allocate from">No active programme has a {SEASON[season].toLowerCase()} catalogue for {selectedSeason.name} yet.</EmptyState>
+      ) : null}
+
+      {chosen && !loading && (batches.length || !canStartNew) ? (
+        <section className="card">
+          <div className="card-head"><h3>Your submissions for {chosen.programme_name}</h3></div>
+          <div className="category-chips submission-picker" role="group" aria-label="Submissions">
+            {batches.map((item) => (
+              <button key={item.id} type="button" className={submission?.id === item.id ? 'chip active' : 'chip'} aria-pressed={submission?.id === item.id} onClick={() => { setPicked(item.id); setEditing(null); setNotice('') }}>
+                {item.reference} · {item.status_label} · {item.farmer_count} farmer{item.farmer_count === 1 ? '' : 's'} · {hectares(item.hectares_total)}
+              </button>
+            ))}
+            {canStartNew ? <button type="button" className={submission ? 'chip' : 'chip active'} aria-pressed={!submission} onClick={() => { setPicked('new'); setEditing(null); setNotice('') }}><Icon name="plus" />New submission</button> : null}
+          </div>
+        </section>
+      ) : null}
+
+      {chosen && !loading ? (
+        <>
+          <section className="card">
+            <div className="card-head">
+              <div>
+                <h3>{chosen.programme_name} · {selectedSeason.name} {SEASON[season]} · {submission ? <>{submission.reference} <StatusPill submission={submission} /></> : 'New submission'}</h3>
+                <p className="card-sub">{submission ? nextStep(submission) : batches.length ? 'Add the farmers for your next submission. Your earlier submissions stay as they are with Admin.' : nextStep(null)}</p>
+                {submission?.decision_notes ? <p className={submission.status === 'RETURNED' || submission.status === 'REJECTED' ? 'field-error' : 'card-sub'}>Admin: {submission.decision_notes}</p> : null}
+                {submission?.limits_changed ? <div className="form-message warning" role="alert">Admin changed your approved hectares. Check the remaining hectares below before submitting.</div> : null}
+              </div>
+              {submission && submission.editable && submission.allocation_count && submission.status !== 'SUBMITTED' ? (
+                <button type="button" className="primary-btn" disabled={busy} onClick={submit}><Icon name="send" />{submitLabel(submission)}</button>
+              ) : null}
+            </div>
+            {submission ? <HectareSummary submission={submission} /> : null}
+            {submission?.limits?.length ? <><h4>Your approved maximum hectares</h4><LimitsTable limits={submission.limits} /></> : null}
+          </section>
+
+          {editable ? (
+            <AllocationForm
+              key={editing ? `edit-${editing.id}-${editing.version}` : `new-${chosen.programme}-${submission?.id || 'new'}-${token}`}
+              programme={chosen}
+              farmers={catalogue.farmers}
+              season={selectedSeason}
+              cropSeason={season}
+              submission={submission}
+              pending={pending}
+              allocation={editing}
+              onCancel={() => setEditing(null)}
+              onSaved={(fresh, message) => { setEditing(null); applied(fresh, message) }}
+              onFailed={failed}
+            />
+          ) : null}
+
+          <section className="card">
+            <div className="card-head"><h3>Allocations</h3></div>
+            <AllocationsTable
+              allocations={submission?.allocations || []}
+              empty={submission ? 'No allocations in this submission.' : 'No allocations yet. Add a farmer above to start this submission.'}
+              actions={editable && submission?.editable ? (row) => (
+                <span className="table-actions">
+                  <button type="button" className="icon-btn" aria-label={`Edit ${row.farmer_name} ${row.crop_name}`} onClick={() => { setEditing(row); setNotice('') }}><Icon name="pencil" /></button>
+                  <button type="button" className="icon-btn danger" aria-label={`Delete ${row.farmer_name} ${row.crop_name}`} onClick={() => setDeleting(row)}><Icon name="trash" /></button>
+                </span>
+              ) : null}
+            />
+            {submission?.crops?.length ? <><h4>Totals by crop and variety</h4><CropBreakdown crops={submission.crops} /></> : null}
+          </section>
+          {submission?.events?.length ? <section className="card"><div className="card-head"><h3>History</h3></div><History events={submission.events} /></section> : null}
+        </>
+      ) : null}
+
+      {deleting ? (
+        <Modal title={`Delete ${deleting.farmer_name}’s ${deleting.crop_name} allocation?`} subtitle={`${hectares(deleting.hectares)} · ${money(deleting.estimated_cost)}. This removes it from the database.`} onClose={() => setDeleting(null)}
+          footer={<><button type="button" className="ghost-btn" onClick={() => setDeleting(null)}>Keep it</button><button type="button" className="danger-solid" disabled={busy} onClick={remove}>Delete</button></>}>
+          <p>The totals are recalculated straight away.</p>
+        </Modal>
+      ) : null}
+    </div>
+  )
+}
+
+const blankLine = () => ({ category: '', requirement: '', hectares: '' })
+
+function AllocationForm({ programme, farmers, season, cropSeason, submission, pending = [], allocation, onSaved, onCancel, onFailed }) {
+  const crops = programme.crops
+  const [form, setForm] = useState(() => (allocation
+    ? {
+        farmer: String(allocation.farmer), crop: String(allocation.crop),
+        lines: allocation.lines.map((line) => ({ category: line.input_category, requirement: String(line.requirement), hectares: String(Number(line.hectares)) })),
+      }
+    : { farmer: '', crop: crops.length === 1 ? String(crops[0].crop) : '', lines: [blankLine()] }))
+  const [saving, setSaving] = useState(false)
+  const [message, setMessage] = useState('')
+  const crop = crops.find((item) => String(item.crop) === form.crop)
+  const varieties = crop?.varieties || []
+  const farmer = farmers.find((item) => String(item.id) === form.farmer)
+  const intended = farmer?.crops?.find((item) => String(item.crop) === form.crop)
+  const taken = new Set(pending.filter((row) => row.id !== allocation?.id && String(row.crop) === form.crop).map((row) => String(row.farmer)))
+  const setLine = (index, changes) => setForm((current) => ({ ...current, lines: current.lines.map((line, at) => (at === index ? { ...line, ...changes } : line)) }))
+  const filled = form.lines.filter((line) => line.requirement && Number(line.hectares) > 0)
+  const preview = filled.map((line) => ({ line, variety: varieties.find((item) => String(item.requirement) === line.requirement) })).filter((item) => item.variety)
+  const totalCost = preview.reduce((sum, item) => sum + estimate(item.variety, item.line.hectares).cost, 0)
+
+  const save = async (event) => {
+    event.preventDefault()
+    setMessage('')
+    if (!filled.length) {
+      setMessage('Choose at least one variety and enter its hectares.')
       return
     }
     setSaving(true)
-    setError('')
-    setNotice('')
+    const lines = filled.map((line) => ({ requirement: Number(line.requirement), hectares: line.hectares }))
     try {
-      const saved = await apiClient.post('/input-supply-requests/', payload())
-      let current = saved.data
-      if (andSubmit) {
-        const submitted = await apiClient.post(`/input-supply-requests/${saved.data.id}/submit/`)
-        current = submitted.data
-      }
-      const nextRows = current.farmers?.length ? current.farmers.map(toAllocationRow) : [blankRow()]
-      setRows(nextRows)
-      setDirty(false)
-      setRowNotes({})
-      setBoundKey(`${programme}:${crop}:${current.id}:${current.status}`)
-      const savedLand = `${qty(current.hectares_total)} ha`
-      const savedCost = money(current.estimated_cost)
-      setNotice(andSubmit
-        ? `${current.reference} ${current.status_label.toLowerCase()}. Calculated total ${savedLand}, estimated cost ${savedCost}.`
-        : `${current.reference} saved. Quantities and costs were calculated from the catalogue (${savedLand}, ${savedCost}).`)
-      setToken((value) => value + 1)
+      const response = allocation
+        ? await apiClient.patch(`/input-supply-requests/allocations/${allocation.id}/`, { lines, version: allocation.version })
+        : await apiClient.post('/input-supply-requests/allocations/', { programme: programme.programme, season: season.id, crop_season: cropSeason, farmer: Number(form.farmer), crop: Number(form.crop), lines, ...(submission ? { submission: submission.id } : {}) })
+      onSaved(response.data, allocation ? `${allocation.farmer_name}’s allocation was updated.` : `${farmer?.name}’s ${crop?.crop_name} allocation was saved.`)
     } catch (requestError) {
-      setError(errorMessage(requestError, andSubmit ? 'The submission could not be sent.' : 'The allocation could not be saved.'))
+      onFailed(requestError, 'The allocation could not be saved.')
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <div className="page-card">
-      <PageHead
-        title="Input allocations"
-        subtitle="Choose the agricultural year and season above, then a programme and crop. Search for each farmer, and enter the hectares of the varieties they need. Quantities and costs are calculated for you."
-      />
-      {blocked ? <div className="form-message">Choose an agricultural year in the header.</div> : null}
-      {readOnlyYear ? <div className="form-message">{selectedSeason.name} is not the active agricultural year, so allocations are read-only.</div> : null}
-      {!blocked ? <p className="card-sub">Agricultural year {selectedSeason.name}{seasonName ? ` · ${seasonName} season` : ''}.</p> : null}
-      {notice ? <div className="form-message success" role="status">{notice}</div> : null}
-      {error ? <div className="form-message error" role="alert">{error}</div> : null}
-      {request?.status === 'RETURNED' ? (
-        <div className="form-message" role="status">
-          Admin returned {request.reference} for corrections{request.decision_notes ? `: ${request.decision_notes}` : '.'} Update the allocations and submit again.
-        </div>
-      ) : null}
-      {distributing && editable ? (
-        <div className="form-message" role="status">
-          Admin approved a maximum of {qty(limits.find((limit) => limit.scope === 'CROP')?.approved_hectares)} ha for this crop.
-          Share it across your farmers. Hectares you do not use stay unallocated.
-        </div>
-      ) : null}
-      {request?.status === 'SUBMITTED' && !distributing && editable ? (
-        <div className="form-message" role="status">
-          {request.reference} is submitted. Search for another farmer and submit them on this same programme. It stays open until Admin sets the hectare limits.
-        </div>
-      ) : null}
-      {request && !editable ? (
-        <div className="form-message" role="status">
-          {request.reference} is {request.status_label.toLowerCase()}. <Link to="/my-input-requests">Open it in your submission history</Link>.
-        </div>
-      ) : null}
-
-      <section className="card">
-        <div className="filter-row">
-          <label className="form-field">Programme
-            <select value={programme} onChange={(event) => { setProgramme(event.target.value); setCrop(''); setRows([]); setDirty(false); setBoundKey(''); setRowNotes({}) }} disabled={blocked}>
-              <option value="">Select a programme</option>
-              {programmes.map((item) => <option key={item.programme} value={item.programme}>{item.programme_name}</option>)}
-            </select>
-          </label>
-          <label className="form-field">Crop
-            <select value={crop} onChange={(event) => { setCrop(event.target.value); setRows([]); setDirty(false); setBoundKey(''); setRowNotes({}) }} disabled={!selectedProgramme}>
-              <option value="">Select a crop</option>
-              {crops.map((item) => <option key={item.crop} value={item.crop}>{item.crop_name} ({item.crop_season_label})</option>)}
-            </select>
-          </label>
-        </div>
-        {loading ? <div className="form-message">Loading the catalogue…</div> : null}
-        {!loading && catalogue && !programmes.length ? <EmptyState icon="box" title="No programme catalogue">Admin has not configured varieties for {selectedSeason?.name}{seasonName ? ` ${seasonName}` : ''} yet.</EmptyState> : null}
-        {selectedCrop ? <p className="card-sub">{varieties.length} varieties are in this catalogue. Add only the ones each farmer needs. The rate and price appear on the line you choose.</p> : null}
-      </section>
-
-      {limits.length ? (
-        <section className="card">
-          <div className="card-head"><h3>Approved hectare limits</h3></div>
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead><tr><th>Level</th><th>Item</th><th className="num">Requested</th><th className="num">Approved maximum</th><th className="num">Allocated now</th><th className="num">Still available</th></tr></thead>
-              <tbody>
-                {limits.map((limit) => (
-                  <tr key={limit.id}>
-                    <td>{limit.scope_label}</td>
-                    <td>{limit.name}</td>
-                    <td className="num">{qty(limit.requested_hectares)} ha</td>
-                    <td className="num"><strong>{qty(limit.approved_hectares)} ha</strong></td>
-                    <td className="num">{qty(limit.allocated_hectares)} ha</td>
-                    <td className="num">{qty(limit.remaining_hectares)} ha</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      ) : null}
-
-      {selectedCrop ? (
-        <section className="card">
-          <div className="card-head">
-            <div>
-              <h3>Your farmers</h3>
-              <p className="card-sub">Search for a farmer and the farm fills in. Add the next farmer with the button here. Each farmer only lists the varieties you add.</p>
-            </div>
-            {editable ? <button type="button" className="ghost-btn" onClick={() => editRows((current) => [...current, blankRow()])}><Icon name="plus" />Add farmer</button> : null}
-          </div>
-          {!farmers.length ? <EmptyState icon="users" title="No farmers in your cluster">Farmers you register appear here once they can receive inputs.</EmptyState> : null}
-          {rows.map((row, index) => {
-            const farmer = farmers.find((item) => String(item.id) === row.farmer)
-            const intended = farmer?.crops?.find((item) => String(item.crop) === crop)
-            const taken = new Set(rows.filter((item) => item.key !== row.key && item.farmer).map((item) => String(item.farmer)))
-            const farmerOptions = farmers
-              .filter((item) => String(item.id) === row.farmer || !taken.has(String(item.id)))
-              .map((item) => ({ value: String(item.id), label: item.name }))
-            const usedVarieties = new Set(row.lines.map((line) => String(line.requirement)).filter(Boolean))
-            const farms = farmer?.farms || []
+    <form className="card allocation-form" onSubmit={save}>
+      <div className="card-head"><h3><Icon name={allocation ? 'pencil' : 'plus'} />{allocation ? `Edit ${allocation.farmer_name} · ${allocation.crop_name}` : 'Add an allocation'}</h3></div>
+      {message ? <div className="form-message error" role="alert">{message}</div> : null}
+      <div className="workflow-fields">
+        <SearchSelect
+          label="Farmer"
+          searchable
+          value={form.farmer}
+          disabled={Boolean(allocation)}
+          onChange={(value) => setForm({ ...form, farmer: value })}
+          placeholder="Search your farmers"
+          options={farmers.filter((item) => !taken.has(String(item.id)) || String(item.id) === form.farmer).map((item) => ({ value: String(item.id), label: `${item.name}${item.membership_number ? ` · ${item.membership_number}` : ''}` }))}
+          emptyText="No farmers in your cluster."
+        />
+        <label className="form-field">Crop
+          <select required value={form.crop} disabled={Boolean(allocation)} onChange={(event) => setForm({ ...form, crop: event.target.value, lines: [blankLine()] })}>
+            <option value="">Choose the crop</option>
+            {crops.map((item) => <option key={item.crop} value={item.crop}>{item.crop_name}</option>)}
+          </select>
+          {farmer && crop ? <span className="field-hint">{intended ? `${farmer.name} intends to plant ${hectares(intended.hectares)} of ${crop.crop_name}.` : `${farmer.name} has no ${crop.crop_name} planting recorded.`}</span> : null}
+        </label>
+      </div>
+      {crop ? (
+        <div className="allocation-lines-form">
+          {form.lines.map((line, index) => {
+            const options = varieties.filter((item) => (!line.category || item.input_category === line.category) && (String(item.requirement) === line.requirement || !form.lines.some((other, at) => at !== index && other.requirement === String(item.requirement))))
+            const variety = varieties.find((item) => String(item.requirement) === line.requirement)
+            const figures = variety ? estimate(variety, line.hectares) : null
             return (
-              <div key={row.key} className="card" style={{ marginBottom: 12 }}>
-                <div className="filter-row">
-                  <SearchSelect
-                    label={`Farmer ${index + 1}`}
-                    searchable
-                    value={row.farmer}
-                    options={farmerOptions}
-                    placeholder="Search or choose a farmer"
-                    disabled={!editable}
-                    emptyText="No other farmers in your cluster."
-                    onChange={(farmerId) => chooseFarmer(row.key, farmerId)}
-                  />
-                  <label className="form-field">Farm
-                    {farms.length > 1 ? (
-                      <select aria-label={`Farm for farmer ${index + 1}`} value={row.farm} disabled={!editable} onChange={(event) => updateRow(row.key, { farm: event.target.value })}>
-                        {farms.map((farm) => <option key={farm.id} value={farm.id}>{farm.name}</option>)}
-                      </select>
-                    ) : (
-                      <input aria-label={`Farm for farmer ${index + 1}`} value={farms[0]?.name || (row.farmer ? 'No farm recorded' : '')} placeholder="Fills in when you choose a farmer" readOnly />
-                    )}
-                  </label>
-                  {editable && rows.length > 1 ? <button type="button" className="ghost-btn" onClick={() => editRows((current) => current.filter((item) => item.key !== row.key))}>Remove</button> : null}
+              <div key={index} className="allocation-line">
+                <label className="form-field">Input type
+                  <select value={line.category} onChange={(event) => setLine(index, { category: event.target.value, requirement: '' })}>
+                    <option value="">Any</option>
+                    {CATEGORIES.filter(([code]) => varieties.some((item) => item.input_category === code)).map(([code, label]) => <option key={code} value={code}>{label}</option>)}
+                  </select>
+                </label>
+                <label className="form-field">Variety or product
+                  <select required value={line.requirement} onChange={(event) => setLine(index, { requirement: event.target.value })}>
+                    <option value="">Choose</option>
+                    {options.map((item) => <option key={item.requirement} value={item.requirement}>{item.product_name} · {item.input_category_label}</option>)}
+                  </select>
+                </label>
+                <label className="form-field">Hectares
+                  <input required type="number" min="0.01" step="any" aria-label={`Hectares for line ${index + 1}`} value={line.hectares} onChange={(event) => setLine(index, { hectares: event.target.value })} />
+                </label>
+                <div className="line-figures">
+                  {figures && Number(line.hectares) > 0 ? <>{qty(figures.quantity)} {variety.unit}<small className="block-hint">{qty(variety.rate_per_hectare, 4)} {variety.unit}/ha · {money(figures.cost)}</small></> : <small className="block-hint">Quantity is calculated</small>}
                 </div>
-                {farmer && intended ? <p className="card-sub">{farmer.name} intends to plant {qty(intended.hectares)} ha of {selectedCrop.crop_name}. Each input stays within that.</p> : null}
-                {farmer && !intended ? <p className="card-sub">{farmer.name} has no intended planting for {selectedCrop.crop_name}. Record it on the farmer's registration before allocating inputs.</p> : null}
-                {rowNotes[row.key] ? <div className="form-message error" role="alert">{rowNotes[row.key]}</div> : null}
-                <div className="table-wrap">
-                  <table className="data-table">
-                    <thead><tr><th>Variety</th><th>Hectares</th><th className="num">Quantity</th><th className="num">Estimated cost</th><th></th></tr></thead>
-                    <tbody>
-                      {row.lines.map((line, lineIndex) => {
-                        const variety = varieties.find((item) => String(item.requirement) === String(line.requirement))
-                        const quantity = (Number(line.hectares) || 0) * Number(variety?.rate_per_hectare || 0)
-                        const varietyOptions = varieties
-                          .filter((item) => String(item.requirement) === String(line.requirement) || !usedVarieties.has(String(item.requirement)))
-                          .map((item) => ({ value: String(item.requirement), label: `${item.input_category_label} · ${item.product_name} · ${qty(item.rate_per_hectare)} ${item.unit}/ha · ${item.pack_size ? `${money(item.pack_price)} / ${qty(item.pack_size)} ${item.unit}` : money(item.unit_price)}` }))
-                        return (
-                          <tr key={`${row.key}-${lineIndex}`}>
-                            <td>
-                              <SearchSelect
-                                label={`Variety ${lineIndex + 1} for farmer ${index + 1}`}
-                                searchable
-                                value={line.requirement}
-                                options={varietyOptions}
-                                placeholder="Search or choose a variety"
-                                disabled={!editable || !row.farmer}
-                                onChange={(requirementId) => setLine(row.key, lineIndex, { requirement: requirementId })}
-                              />
-                            </td>
-                            <td>
-                              <input
-                                aria-label={variety ? `Hectares of ${variety.product_name} for farmer ${index + 1}` : `Hectares for farmer ${index + 1} line ${lineIndex + 1}`}
-                                type="number"
-                                min="0"
-                                step="0.01"
-                                value={line.hectares}
-                                disabled={!editable || !line.requirement}
-                                onChange={(event) => setHectares(row.key, lineIndex, event.target.value)}
-                                style={{ width: 120 }}
-                              />
-                            </td>
-                            <td className="num">{line.hectares && variety ? `${qty(quantity)} ${variety.unit}` : '—'}</td>
-                            <td className="num">{line.hectares && variety ? money(previewCost(variety, line.hectares)) : '—'}</td>
-                            <td>
-                              {editable && row.lines.length > 1 ? (
-                                <button type="button" className="icon-btn danger" aria-label={`Remove variety ${lineIndex + 1} for farmer ${index + 1}`} onClick={() => editRows((current) => current.map((item) => item.key === row.key ? { ...item, lines: item.lines.filter((_, itemIndex) => itemIndex !== lineIndex) } : item))}>
-                                  <Icon name="trash" />
-                                </button>
-                              ) : null}
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                {editable ? (
-                  <button type="button" className="ghost-btn small" disabled={!row.farmer || row.lines.length >= varieties.length} onClick={() => editRows((current) => current.map((item) => item.key === row.key ? { ...item, lines: [...item.lines, blankLine()] } : item))}>
-                    <Icon name="plus" />Add variety
-                  </button>
-                ) : null}
+                {form.lines.length > 1 ? <button type="button" className="icon-btn danger" aria-label={`Remove line ${index + 1}`} onClick={() => setForm((current) => ({ ...current, lines: current.lines.filter((_, at) => at !== index) }))}><Icon name="trash" /></button> : null}
               </div>
             )
           })}
-          <h3>{distributing ? 'Distribution' : 'Consolidated submission'}</h3>
-          <p className="card-sub">Land allocated {qty(land)} ha. Varieties of one input type add together. Seed, fertilizer and chemicals share the same land, so the total is the largest of those.</p>
-          {!preview.length ? <p className="card-sub">Choose a variety and enter hectares. The quantity is hectares times the catalogue rate, and the cost uses that programme's price.</p> : (
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead><tr><th>Input</th><th>Variety</th><th className="num">Hectares</th><th className="num">Quantity</th><th className="num">Estimated cost</th></tr></thead>
-                <tbody>
-                  {preview.map((row) => (
-                    <tr key={row.requirement}>
-                      <td>{row.input_category_label || CATEGORY_LABEL[row.input_category]}</td>
-                      <td>{row.product_name}</td>
-                      <td className="num">{qty(row.hectares)} ha</td>
-                      <td className="num"><strong>{qty(row.quantity)} {row.unit}</strong></td>
-                      <td className="num">{money(row.cost)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {request && !dirty ? (
-            <p className="card-sub">Last saved calculation: {qty(request.hectares_total)} ha, {money(request.estimated_cost)}. These figures come from the server.</p>
-          ) : null}
-          {editable ? (
-            <div className="page-actions" style={{ marginTop: 16 }}>
-              <button type="button" className="ghost-btn" disabled={saving || !payloadFarmers.length || overLimit} onClick={() => save(false)}>{saving ? 'Saving…' : 'Save draft'}</button>
-              <button type="button" className="primary-btn" disabled={saving || !payloadFarmers.length || overLimit} onClick={() => save(true)}>
-                <Icon name="send" />{distributing ? 'Submit final distribution' : request?.status === 'SUBMITTED' ? 'Submit another farmer' : 'Submit for approval'}
-              </button>
-            </div>
-          ) : null}
-          {request?.events?.length ? (
-            <ol className="timeline">
-              {request.events.map((event) => (
-                <li key={event.id}>
-                  <Pill tone={STATUS_TONE[event.action] || ''}>{event.action_label}</Pill>
-                  <span>{when(event.created_at)} · {event.actor_name || 'System'}</span>
-                  {event.remarks ? <p>{event.remarks}</p> : null}
-                </li>
-              ))}
-            </ol>
-          ) : null}
-        </section>
+          {form.lines.length < varieties.length ? <button type="button" className="link-btn" onClick={() => setForm((current) => ({ ...current, lines: [...current.lines, blankLine()] }))}><Icon name="plus" />Add another variety</button> : null}
+          {preview.length ? <p className="field-hint">Estimated cost {money(totalCost)}. The saved figures are calculated by the server from the catalogue.</p> : null}
+        </div>
       ) : null}
-    </div>
+      <div className="workflow-form-actions">
+        <button type="submit" className="primary-btn small" disabled={saving || !form.farmer || !form.crop}>{saving ? 'Saving…' : allocation ? 'Save changes' : 'Save allocation'}</button>
+        {allocation ? <button type="button" className="ghost-btn" onClick={onCancel}>Cancel</button> : null}
+      </div>
+    </form>
   )
 }
 

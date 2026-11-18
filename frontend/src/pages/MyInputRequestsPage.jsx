@@ -1,146 +1,88 @@
-// A lead farmer's submission history: drafts, hectare decisions, distributions and final approvals.
+// Lead farmer: every input submission, its status, Admin's feedback, limits and history.
 
-import { Fragment, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 
-import { EmptyState, PageHead, Pill, errorMessage } from '../components/ui'
-import { canEditSubmission, STATUS_TONE, when } from '../inputSupply'
-import { loadAll, money, qty } from '../programmeData'
+import apiClient from '../api/client'
+import { AllocationsTable, CropBreakdown, HectareSummary, History, LimitsTable, StatusPill } from '../components/SubmissionParts'
+import { EmptyState, PageHead, errorMessage } from '../components/ui'
+import { nextStep, when } from '../inputSupply'
+import { hectares, listOf } from '../programmeData'
 
 function MyInputRequestsPage({ selectedSeason = null, cropSeason = '', periodStatus = 'ready' }) {
   const [rows, setRows] = useState([])
+  const [open, setOpen] = useState(null)
   const [loadedKey, setLoadedKey] = useState('')
   const [error, setError] = useState('')
-  const [open, setOpen] = useState(null)
   const blocked = periodStatus !== 'ready' || !selectedSeason
   const requestKey = JSON.stringify([selectedSeason?.id, cropSeason])
 
   useEffect(() => {
     if (blocked) return undefined
     let active = true
-    const params = { season: selectedSeason.id }
+    const params = { season: selectedSeason.id, page_size: 100 }
     if (cropSeason) params.crop_season = cropSeason
-    loadAll('/input-supply-requests/', params)
-      .then((list) => { if (active) { setRows(list); setError('') } })
-      .catch((requestError) => { if (active) setError(errorMessage(requestError, 'Your input requests could not be loaded.')) })
+    apiClient.get('/input-supply-requests/', { params })
+      .then((response) => { if (active) { setRows(listOf(response.data)); setError('') } })
+      .catch((requestError) => { if (active) setError(errorMessage(requestError, 'Your requests could not be loaded.')) })
       .finally(() => { if (active) setLoadedKey(requestKey) })
     return () => { active = false }
   }, [blocked, selectedSeason, cropSeason, requestKey])
 
   const loading = !blocked && loadedKey !== requestKey
-  const waiting = rows.filter((row) => row.status === 'SUBMITTED' || row.status === 'CONFIRMATION').length
+  const current = rows.find((row) => row.id === open)
 
   return (
     <div className="page-card">
-      <PageHead
-        title="My input requests"
-        subtitle="Submission history for this agricultural year and season. A draft, a returned submission, or approved hectares can be changed from Input allocations."
-      />
-      {blocked ? <div className="form-message">Choose an agricultural year in the header.</div> : null}
+      <PageHead title="My input requests" subtitle="Your submissions to Admin for each programme and season, with their status, Admin’s feedback and history." />
+      {blocked ? <div className="form-message">Choose the agricultural year and season in the header.</div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
-      <section className="card">
-        <div className="card-head">
-          <div>
-            <h3>{selectedSeason?.name || 'Agricultural year'}</h3>
-            <p className="card-sub">{waiting ? `${waiting} waiting for Admin.` : 'Nothing is waiting for Admin.'}</p>
-          </div>
-        </div>
-        {loading ? <div className="form-message">Loading submissions…</div> : null}
-        {!loading && !blocked && !rows.length ? <EmptyState icon="send" title="No input requests">Allocate varieties to your farmers, then submit the request.</EmptyState> : null}
-        {rows.length ? (
+      {loading ? <div className="form-message">Loading…</div> : null}
+      {!loading && !blocked && !rows.length ? <EmptyState icon="send" title="No requests yet">Add allocations on the Input allocations page to start one.</EmptyState> : null}
+      {rows.length ? (
+        <section className="card">
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>Submission</th><th>Programme</th><th>Crop</th><th>Season</th><th className="num">Hectares</th><th className="num">Estimated cost</th><th>Status</th><th>Submitted</th><th></th></tr></thead>
+              <thead><tr><th>Request</th><th>Programme</th><th>Year and season</th><th className="num">Requested</th><th className="num">Approved maximum</th><th className="num">Distributed</th><th>Status</th><th>Updated</th><th /></tr></thead>
               <tbody>
                 {rows.map((row) => (
-                  <Fragment key={row.id}>
-                    <tr>
-                      <td><strong>{row.reference}</strong></td>
-                      <td>{row.programme_name}</td>
-                      <td>{row.crop_name}</td>
-                      <td>{row.crop_season_label}</td>
-                      <td className="num">{qty(row.hectares_total)} ha</td>
-                      <td className="num">{money(row.estimated_cost)}</td>
-                      <td><Pill tone={STATUS_TONE[row.status] || ''}>{row.status_label}</Pill></td>
-                      <td>{when(row.submitted_at)}</td>
-                      <td>
-                        <button type="button" className="ghost-btn" onClick={() => setOpen(open === row.id ? null : row.id)}>{open === row.id ? 'Hide' : 'Details'}</button>
-                      </td>
-                    </tr>
-                    {open === row.id ? (
-                      <tr>
-                        <td colSpan={9}>
-                          {row.decision_notes ? <p><strong>Admin:</strong> {row.decision_notes}</p> : null}
-                          {row.reviewed_by_name ? <p className="card-sub">Reviewed by {row.reviewed_by_name} on {when(row.reviewed_at)}.</p> : null}
-                          {row.limits?.length ? (
-                            <div className="table-wrap">
-                              <table className="data-table">
-                                <thead><tr><th>Level</th><th>Item</th><th className="num">Requested</th><th className="num">Approved</th><th className="num">Allocated</th><th className="num">Still available</th></tr></thead>
-                                <tbody>
-                                  {row.limits.map((limit) => (
-                                    <tr key={limit.id}>
-                                      <td>{limit.scope_label}</td>
-                                      <td>{limit.name}</td>
-                                      <td className="num">{qty(limit.requested_hectares)} ha</td>
-                                      <td className="num"><strong>{qty(limit.approved_hectares)} ha</strong></td>
-                                      <td className="num">{qty(limit.allocated_hectares)} ha</td>
-                                      <td className="num">{qty(limit.remaining_hectares)} ha</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          ) : null}
-                          <div className="table-wrap">
-                            <table className="data-table">
-                              <thead><tr><th>Input</th><th>Variety</th><th className="num">Hectares</th><th className="num">Quantity</th><th className="num">Estimated cost</th></tr></thead>
-                              <tbody>
-                                {(row.totals || []).map((line) => (
-                                  <tr key={line.requirement}>
-                                    <td>{line.input_category_label}</td>
-                                    <td>{line.product_name}</td>
-                                    <td className="num">{qty(line.hectares)} ha</td>
-                                    <td className="num">{qty(line.quantity)} {line.unit}</td>
-                                    <td className="num">{money(line.estimated_cost)}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          <div className="table-wrap">
-                            <table className="data-table">
-                              <thead><tr><th>Farmer</th><th className="num">Land ha</th><th>Varieties</th></tr></thead>
-                              <tbody>
-                                {row.farmers.map((farmer) => (
-                                  <tr key={farmer.id}>
-                                    <td>{farmer.farmer_name}</td>
-                                    <td className="num">{qty(farmer.hectares)}</td>
-                                    <td>{farmer.lines.map((line) => `${line.product_name} ${qty(line.hectares)} ha`).join(', ')}</td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          <ol className="timeline">
-                            {(row.events || []).map((event) => (
-                              <li key={event.id}>
-                                <Pill tone={STATUS_TONE[event.action] || ''}>{event.action_label}</Pill>
-                                <span>{when(event.created_at)} · {event.actor_name || 'System'}</span>
-                                {event.remarks ? <p>{event.remarks}</p> : null}
-                              </li>
-                            ))}
-                          </ol>
-                          {canEditSubmission(row) ? <Link to="/input-allocations">Change this submission</Link> : null}
-                        </td>
-                      </tr>
-                    ) : null}
-                  </Fragment>
+                  <tr key={row.id} className={open === row.id ? 'selected-row' : ''}>
+                    <td><strong>{row.reference}</strong>{row.earlier_workflow ? <small className="block-hint">Earlier one-crop request</small> : null}</td>
+                    <td>{row.programme_name}</td>
+                    <td>{row.season_name} · {row.crop_season_label}</td>
+                    <td className="num">{hectares(row.requested_hectares)}</td>
+                    <td className="num">{row.approved_hectares ? hectares(row.approved_hectares) : '—'}</td>
+                    <td className="num">{hectares(row.hectares_total)}</td>
+                    <td><StatusPill submission={row} />{row.limits_changed ? <small className="block-hint field-error">Limits changed</small> : null}</td>
+                    <td>{when(row.reviewed_at || row.submitted_at)}</td>
+                    <td><button type="button" className="ghost-btn small" onClick={() => setOpen(open === row.id ? null : row.id)}>{open === row.id ? 'Close' : 'Open'}</button></td>
+                  </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        ) : null}
-      </section>
+        </section>
+      ) : null}
+      {current ? (
+        <section className="card">
+          <div className="card-head">
+            <div>
+              <h3>{current.reference} · {current.programme_name} · {current.season_name} {current.crop_season_label} <StatusPill submission={current} /></h3>
+              <p className="card-sub">{nextStep(current)}</p>
+              {current.decision_notes ? <p className={['RETURNED', 'REJECTED'].includes(current.status) ? 'field-error' : 'card-sub'}>Admin: {current.decision_notes}</p> : null}
+            </div>
+            {current.editable ? <Link className="primary-btn small" to="/input-allocations">Open in Input allocations</Link> : null}
+          </div>
+          <HectareSummary submission={current} />
+          {current.limits?.length ? <><h4>Approved maximum hectares</h4><LimitsTable limits={current.limits} /></> : null}
+          <h4>By crop and variety</h4>
+          <CropBreakdown crops={current.crops} />
+          <h4>Farmer allocations</h4>
+          <AllocationsTable allocations={current.allocations} />
+          <h4>History</h4>
+          <History events={current.events} />
+        </section>
+      ) : null}
     </div>
   )
 }

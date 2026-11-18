@@ -1,4 +1,4 @@
-"""HTTP API for lead-farmer input submissions and Admin hectare decisions."""
+"""HTTP API for lead-farmer input allocations and Admin's input approvals."""
 
 from django.db.models import Q
 from rest_framework import permissions, serializers, status, viewsets
@@ -13,17 +13,21 @@ from apps.programmes.period import parse_crop_season
 
 from .models import InputSupplyRequest
 from .supply import (
+    SupplyConflict,
     SupplyError,
+    add_allocation,
     approve,
     consolidated,
+    delete_allocation,
     options_for,
     present,
     reject,
     return_for_corrections,
     reverse,
-    save_draft,
     set_hectares,
     submit,
+    supply_queryset,
+    update_allocation,
 )
 
 
@@ -33,15 +37,11 @@ class SupplyPagination(PageNumberPagination):
     max_page_size = 200
 
 
-def _fail(error):
-    raise ValidationError({"detail": str(error)}) from error
-
-
 class InputSupplyPermission(permissions.BasePermission):
-    """Lead farmers draft and submit. Administrators set hectare limits and confirm the distribution."""
+    """Lead farmers allocate and submit. Administrators issue limits and give the final approval."""
 
     DECISIONS = {"approve", "reject", "return_for_corrections", "reverse", "set_hectares"}
-    LEAD_ONLY = {"create", "destroy", "submit", "catalogue"}
+    LEAD_ONLY = {"allocations", "allocation", "submit", "catalogue", "destroy"}
 
     def has_permission(self, request, view):
         user = request.user
@@ -50,29 +50,16 @@ class InputSupplyPermission(permissions.BasePermission):
         writer = user.is_superuser or user.role in ProgrammePermission.allowed_roles
         auditor = user.role == User.ROLE_AUDITOR
         lead = user.role == User.ROLE_LEAD_FARMER
-        action = getattr(view, "action", None)
-        if action in self.DECISIONS:
+        name = getattr(view, "action", None)
+        if name in self.DECISIONS:
             return writer
-        if action == "consolidated":
+        if name == "consolidated":
             return writer or auditor
-        if action in self.LEAD_ONLY:
+        if name in self.LEAD_ONLY:
             return lead
-        if action in {"list", "retrieve"}:
+        if name in {"list", "retrieve"}:
             return lead or writer or auditor
         return False
-
-
-def _supply_queryset():
-    return InputSupplyRequest.objects.select_related(
-        "lead_farmer", "programme", "season", "crop", "reviewed_by",
-    ).prefetch_related(
-        "farmers__farmer",
-        "farmers__farm",
-        "farmers__lines__requirement__input_product",
-        "limits__requirement__input_product",
-        "limits__updated_by",
-        "events",
-    )
 
 
 class _ReadOnlySerializer(serializers.Serializer):
@@ -80,111 +67,120 @@ class _ReadOnlySerializer(serializers.Serializer):
 
 
 class InputSupplyRequestViewSet(viewsets.ModelViewSet):
-    queryset = _supply_queryset()
     serializer_class = _ReadOnlySerializer
     permission_classes = [permissions.IsAuthenticated, InputSupplyPermission]
     pagination_class = SupplyPagination
-    http_method_names = ["get", "post", "delete", "head", "options"]
+    http_method_names = ["get", "post", "patch", "delete", "head", "options"]
 
     def get_queryset(self):
         user = self.request.user
-        queryset = super().get_queryset()
+        queryset = supply_queryset()
         if user.role == User.ROLE_LEAD_FARMER:
             queryset = queryset.filter(lead_farmer=user)
         params = self.request.query_params
         if params.get("status"):
-            queryset = queryset.filter(status=str(params["status"]).strip().upper())
-        if params.get("programme"):
-            queryset = queryset.filter(programme_id=params["programme"])
-        if params.get("season"):
-            queryset = queryset.filter(season_id=params["season"])
-        if params.get("crop"):
-            queryset = queryset.filter(crop_id=params["crop"])
-        if params.get("lead_farmer") and user.role != User.ROLE_LEAD_FARMER:
+            queryset = queryset.filter(status__in=[part.strip().upper() for part in params["status"].split(",") if part.strip()])
+        for name, field in (("programme", "programme_id"), ("season", "season_id")):
+            if str(params.get(name) or "").isdigit():
+                queryset = queryset.filter(**{field: params[name]})
+        if str(params.get("lead_farmer") or "").isdigit() and user.role != User.ROLE_LEAD_FARMER:
             queryset = queryset.filter(lead_farmer_id=params["lead_farmer"])
         crop_season = parse_crop_season(params.get("crop_season"))
         if crop_season:
-            queryset = queryset.filter(crop__category=crop_season)
+            queryset = queryset.filter(Q(crop_season=crop_season) | Q(crop__category=crop_season))
         term = (params.get("search") or "").strip()
         if term:
             queryset = queryset.filter(
-                Q(reference__icontains=term)
-                | Q(lead_farmer__first_name__icontains=term)
-                | Q(lead_farmer__last_name__icontains=term)
+                Q(reference__icontains=term) | Q(lead_farmer__first_name__icontains=term) | Q(lead_farmer__last_name__icontains=term)
                 | Q(programme__name__icontains=term)
-                | Q(crop__name__icontains=term)
             )
-        return queryset
+        return queryset.order_by("-updated_at", "-id")
 
-    def _loaded(self, pk):
+    def _fresh(self, pk):
+        """The submission as saved, read back from the database."""
         try:
-            return self.get_queryset().get(pk=pk)
+            return present(self.get_queryset().get(pk=pk))
         except InputSupplyRequest.DoesNotExist as error:
             raise NotFound() from error
 
+    def _error(self, error):
+        if isinstance(error, SupplyConflict):
+            return Response({"detail": str(error), "conflict": True}, status=status.HTTP_409_CONFLICT)
+        raise ValidationError({"detail": str(error)}) from error
+
     def list(self, request, *args, **kwargs):
-        page = self.paginate_queryset(self.filter_queryset(self.get_queryset()))
+        page = self.paginate_queryset(self.get_queryset())
         return self.get_paginated_response([present(row) for row in page])
 
     def retrieve(self, request, *args, **kwargs):
         return Response(present(self.get_object()))
 
     def create(self, request, *args, **kwargs):
-        try:
-            supply, created = save_draft(
-                lead=request.user,
-                programme_id=request.data.get("programme"),
-                season_id=request.data.get("season"),
-                crop_id=request.data.get("crop"),
-                farmers=request.data.get("farmers") or [],
-                crop_season=request.data.get("crop_season") or None,
-            )
-        except SupplyError as error:
-            _fail(error)
-        return Response(present(self._loaded(supply.pk)), status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+        raise ValidationError({"detail": "Add allocations one at a time with /input-supply-requests/allocations/."})
 
     def destroy(self, request, *args, **kwargs):
         supply = self.get_object()
         if supply.lead_farmer_id != request.user.id or supply.status != InputSupplyRequest.STATUS_DRAFT:
-            _fail(SupplyError("Only a draft you own can be deleted."))
+            raise ValidationError({"detail": "Only a draft you own can be deleted."})
         supply.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=["get"])
+    def catalogue(self, request):
+        try:
+            return Response(options_for(lead=request.user, season_id=request.query_params.get("season"), crop_season=request.query_params.get("crop_season")))
+        except SupplyError as error:
+            return self._error(error)
+
+    @action(detail=False, methods=["get"])
+    def consolidated(self, request):
+        season = request.query_params.get("season")
+        if not str(season or "").isdigit():
+            raise ValidationError({"detail": "Select the agricultural year."})
+        return Response(consolidated(
+            season_id=season, crop_season=parse_crop_season(request.query_params.get("crop_season")),
+            programme_id=request.query_params.get("programme") if str(request.query_params.get("programme") or "").isdigit() else None,
+        ))
+
+    @action(detail=False, methods=["post"])
+    def allocations(self, request):
+        """Add one farmer's crop allocation. Returns the whole submission as saved."""
+        data = request.data
+        try:
+            supply, _entry = add_allocation(
+                user=request.user, programme_id=data.get("programme"), season_id=data.get("season"), crop_season=data.get("crop_season"),
+                farmer_id=data.get("farmer"), crop_id=data.get("crop"), lines=data.get("lines"), farm_id=data.get("farm") or None,
+                request_id=data.get("submission") or None,
+            )
+        except SupplyError as error:
+            return self._error(error)
+        return Response(self._fresh(supply.pk), status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["patch", "delete"], url_path=r"allocations/(?P<entry_id>[0-9]+)")
+    def allocation(self, request, entry_id=None):
+        """Change or remove one allocation. The version must match what the screen loaded."""
+        try:
+            if request.method == "DELETE":
+                version = request.query_params.get("version") or request.data.get("version")
+                supply = delete_allocation(user=request.user, entry_id=entry_id, version=version)
+                if supply is None:
+                    return Response({"deleted": True, "submission": None})
+                return Response({"deleted": True, "submission": self._fresh(supply.pk)})
+            supply, _entry = update_allocation(
+                user=request.user, entry_id=entry_id, lines=request.data.get("lines"), version=request.data.get("version"),
+                farm_id=request.data.get("farm") or None,
+            )
+        except SupplyError as error:
+            return self._error(error)
+        return Response(self._fresh(supply.pk))
 
     def _act(self, request, function, **extra):
         supply = self.get_object()
         try:
             updated = function(request_id=supply.pk, user=request.user, **extra)
         except SupplyError as error:
-            _fail(error)
-        except InputSupplyRequest.DoesNotExist as error:
-            raise NotFound() from error
-        return Response(present(self._loaded(updated.pk)))
-
-    @action(detail=False, methods=["get"])
-    def catalogue(self, request):
-        season = request.query_params.get("season")
-        if not season:
-            _fail(SupplyError("Select the agricultural year."))
-        try:
-            payload = options_for(
-                lead=request.user,
-                season_id=season,
-                crop_season=parse_crop_season(request.query_params.get("crop_season")),
-            )
-        except SupplyError as error:
-            _fail(error)
-        return Response(payload)
-
-    @action(detail=False, methods=["get"])
-    def consolidated(self, request):
-        season = request.query_params.get("season")
-        if not season:
-            _fail(SupplyError("Select the agricultural year."))
-        try:
-            payload = consolidated(season_id=season, crop_season=parse_crop_season(request.query_params.get("crop_season")))
-        except SupplyError as error:
-            _fail(error)
-        return Response(payload)
+            return self._error(error)
+        return Response(self._fresh(updated.pk))
 
     @action(detail=True, methods=["post"])
     def submit(self, request, pk=None):
@@ -192,13 +188,7 @@ class InputSupplyRequestViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="set-hectares")
     def set_hectares(self, request, pk=None):
-        return self._act(
-            request,
-            set_hectares,
-            mode=request.data.get("mode"),
-            limits=request.data.get("limits") or [],
-            remarks=request.data.get("remarks") or "",
-        )
+        return self._act(request, set_hectares, mode=request.data.get("mode"), limits=request.data.get("limits") or [], remarks=request.data.get("remarks") or "")
 
     @action(detail=True, methods=["post"])
     def approve(self, request, pk=None):

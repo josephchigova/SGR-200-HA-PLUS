@@ -165,7 +165,9 @@ class AccessControlTests(TestCase):
         self.assertFalse(lead["permissions"]["users"]["view"])
         self.assertEqual(lead["cluster_name"], "Chinhoyi Cluster")
         admin = self.client_for(self.admin).get("/api/auth/me/").json()
-        self.assertTrue(all(admin["permissions"][module]["view"] for module in admin["permissions"]))
+        # Farmer-level input allocation belongs to lead farmers only; every other module is visible to Admin.
+        self.assertTrue(all(admin["permissions"][module]["view"] for module in admin["permissions"] if module != "input_supply"))
+        self.assertFalse(admin["permissions"]["input_supply"]["view"])
         self.assertFalse(admin["permissions"]["farmers"]["create"])
         self.assertTrue(admin["permissions"]["lead_registration"]["create"])
         self.assertEqual(self.client_for(self.lead).patch("/api/auth/me/", {"role": "super_admin", "first_name": "Lead"}, format="json").status_code, 200)
