@@ -69,6 +69,15 @@ MATRIX = {
     "crops": (ProgrammeWorkflowPermission.read_roles - {User.ROLE_LEAD_FARMER}, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, set(), set()),
     "programmes": (ProgrammeWorkflowPermission.read_roles - {User.ROLE_LEAD_FARMER}, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, set(), set()),
     "arda": (ProgrammeWorkflowPermission.read_roles - {User.ROLE_LEAD_FARMER}, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, PROGRAMME_WRITE, set()),
+    # Lead farmers build the request. Programme staff approve or reject it. Creating one belongs to the lead farmer.
+    "lead_requests": (
+        ProgrammeWorkflowPermission.read_roles,
+        {User.ROLE_LEAD_FARMER},
+        {User.ROLE_LEAD_FARMER},
+        {User.ROLE_LEAD_FARMER},
+        PROGRAMME_WRITE,
+        set(),
+    ),
     "allocations": (ProgrammeWorkflowPermission.read_roles, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, PROGRAMME_WRITE, set()),
     "production": (ProgrammeWorkflowPermission.read_roles, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, set(), set()),
     "planting": (ProgrammeWorkflowPermission.read_roles, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, set(), set()),
@@ -100,7 +109,7 @@ ACTIONS = ("view", "create", "edit", "delete", "approve", "export")
 
 # Rights that belong to a role, not to rank. Only a lead farmer registers ordinary farmers,
 # so a superuser account does not receive this one automatically.
-ROLE_BOUND = {("farmers", "create")}
+ROLE_BOUND = {("farmers", "create"), ("lead_requests", "create"), ("lead_requests", "edit"), ("lead_requests", "delete")}
 
 
 def _allowed(user, module, action, roles):

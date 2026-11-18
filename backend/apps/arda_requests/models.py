@@ -238,3 +238,82 @@ class BatchStockMovement(models.Model):
 
     def __str__(self):
         return f"{self.get_kind_display()} {self.quantity} ({self.batch_input})"
+
+
+class LeadRequest(models.Model):
+    """One consolidated input request from a lead farmer for a programme, year and season."""
+
+    STATUS_DRAFT = "DRAFT"
+    STATUS_SUBMITTED = "SUBMITTED"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_SUBMITTED, "Submitted"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+    SEASON_SUMMER = "SUMMER"
+    SEASON_WINTER = "WINTER"
+    SEASON_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (SEASON_SUMMER, "Summer"),
+        (SEASON_WINTER, "Winter"),
+    ]
+
+    cluster = models.ForeignKey("clusters.Cluster", on_delete=models.PROTECT, related_name="input_requests")
+    programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="lead_requests")
+    season = models.ForeignKey(Season, on_delete=models.PROTECT, related_name="lead_requests")
+    crop_season = models.CharField(max_length=10, choices=SEASON_CHOICES)
+    status = models.CharField(max_length=12, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    notes = models.TextField(blank=True)
+    decision_notes = models.TextField(blank=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    decided_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="lead_requests_created",
+    )
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="lead_requests_submitted",
+    )
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="lead_requests_decided",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at", "-id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=("cluster", "programme", "season", "crop_season"),
+                name="one_lead_request_per_programme_year_season",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.cluster} {self.programme} {self.season} {self.get_crop_season_display()}"
+
+
+class LeadRequestLine(models.Model):
+    """One farmer, crop and set of products inside a lead farmer's request."""
+
+    request = models.ForeignKey(LeadRequest, on_delete=models.CASCADE, related_name="lines")
+    farmer = models.ForeignKey(Farmer, on_delete=models.PROTECT, related_name="lead_request_lines")
+    farm = models.ForeignKey("farmers.Farm", on_delete=models.PROTECT, null=True, blank=True, related_name="lead_request_lines")
+    crop = models.ForeignKey("programmes.Crop", on_delete=models.PROTECT, related_name="lead_request_lines")
+    hectares = models.DecimalField(max_digits=12, decimal_places=2)
+    batch = models.ForeignKey(ARDARequestBatch, on_delete=models.PROTECT, related_name="lead_request_lines")
+    products = models.ManyToManyField(RequestBatchLine, related_name="lead_request_lines")
+    allocation = models.OneToOneField(
+        "inputs.InputAllocation", on_delete=models.SET_NULL, null=True, blank=True, related_name="lead_request_line",
+    )
+
+    class Meta:
+        ordering = ["request_id", "farmer__full_name", "crop__name", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=("request", "farmer", "crop"), name="one_lead_request_line_per_farmer_crop"),
+            models.CheckConstraint(condition=models.Q(hectares__gt=0), name="lead_request_line_hectares_positive"),
+        ]
+
+    def __str__(self):
+        return f"{self.farmer} {self.crop} {self.hectares} ha"

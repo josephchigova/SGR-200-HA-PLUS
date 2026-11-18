@@ -11,7 +11,7 @@ import { useFormDraft } from '../drafts'
 const EMPTY = { email: '', first_name: '', last_name: '', phone_number: '', role: 'viewer', is_active: true, assigned_cluster: '', district: '', province: '', farmer: '', password: '' }
 const MODULE_LABELS = {
   dashboard: 'Overview', farmers: 'Farmers', verification: 'Verification', clusters: 'Clusters', subscriptions: 'Subscriptions',
-  crops: 'Crop catalogue', programmes: 'Programmes', arda: 'Input requests', allocations: 'Input allocations', production: 'Production',
+  crops: 'Crop catalogue', programmes: 'Programmes', arda: 'Input requests', lead_requests: 'Lead farmer requests', allocations: 'Input allocations', production: 'Production',
   planting: 'Seasonal planting', deliveries: 'GMB deliveries', recovery: 'Grain recovery', finance: 'Finance', reports: 'Operational reports',
   reports_finance: 'Financial reports', reports_users: 'User reports', users: 'Team & access', audit: 'Audit log',
 }

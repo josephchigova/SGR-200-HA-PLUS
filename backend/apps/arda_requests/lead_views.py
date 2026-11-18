@@ -21,7 +21,16 @@ ACTIONS = {"GET": "view", "HEAD": "view", "OPTIONS": "view", "POST": "create", "
 
 class LeadRequestPermission(permissions.BasePermission):
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and can(request.user, "lead_requests", ACTIONS.get(request.method, "view")))
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        # Approve and reject are POSTs, but they are an approval decision, not a new request.
+        action = getattr(view, "action", None)
+        if action in {"approve", "reject"}:
+            return can(user, "lead_requests", "approve")
+        if action == "submit":
+            return can(user, "lead_requests", "create")
+        return can(user, "lead_requests", ACTIONS.get(request.method, "view"))
 
 
 def _person(user):

@@ -28,6 +28,7 @@ import FarmerDetailsPage from './pages/FarmerDetailsPage'
 import FarmersPage from './pages/FarmersPage'
 import InputAllocationsPage from './pages/InputAllocationsPage'
 import InputRequestsPage from './pages/InputRequestsPage'
+import LeadRequestsPage from './pages/LeadRequestsPage'
 import ProgrammesPage from './pages/ProgrammesPage'
 import ProductionPage from './pages/ProductionPage'
 import InputDebtPage from './pages/InputDebtPage'
@@ -64,6 +65,7 @@ const navGroups = [
       { label: 'Programmes', to: '/programmes', icon: 'clipboard', module: 'programmes' },
       { label: 'Crop catalogue', to: '/crops', icon: 'book', module: 'crops' },
       { label: 'Input requests', to: '/arda-requests', icon: 'send', module: 'arda' },
+      { label: 'Lead farmer requests', to: '/lead-requests', icon: 'send', module: 'lead_requests' },
       { label: 'Input allocations', to: '/input-allocations', icon: 'box', module: 'allocations' },
     ],
   },
@@ -494,6 +496,7 @@ function Workspace() {
             <Route path="/crops" element={<Guard module="crops"><CropCataloguePage /></Guard>} />
             <Route path="/programmes" element={<Guard module="programmes"><ProgrammesPage {...period} /></Guard>} />
             <Route path="/arda-requests" element={<Guard module="arda"><InputRequestsPage {...period} /></Guard>} />
+            <Route path="/lead-requests" element={<Guard module="lead_requests"><LeadRequestsPage {...period} /></Guard>} />
             <Route path="/input-allocations" element={<Guard module="allocations"><InputAllocationsPage {...period} /></Guard>} />
             <Route path="/production" element={<Guard module="production"><ProductionPage {...period} /></Guard>} />
             <Route path="/seasonal-planting" element={<Guard module="planting"><WorkflowPage {...workflowPages.seasonalPlanting} {...period} module="planting" /></Guard>} />
