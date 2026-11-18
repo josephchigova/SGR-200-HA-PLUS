@@ -588,8 +588,8 @@ def submit(*, request_id, user):
         raise SupplyError(_waiting_message(supply))
     if not supply.farmers.exists():
         raise SupplyError("Add at least one allocation before submitting.")
-    _revalidate(supply)
     final = supply.stage == InputSupplyRequest.STAGE_DISTRIBUTION
+    _revalidate(supply)
     if final:
         _enforce_limits(supply)
     was_returned = supply.status == InputSupplyRequest.STATUS_RETURNED
@@ -730,12 +730,15 @@ def _write_limits(supply, resolved, user, *, keep_requested):
 
 @transaction.atomic
 def set_hectares(*, request_id, user, mode, limits, remarks=""):
-    """Option A: approve the requested hectares. Option B: issue lower maximum hectares.
+    """Set maximum hectares on a submission instead of approving it as it is.
 
-    Issuing sends the limits to the lead farmer to distribute. Changing limits that were
-    already issued flags the submission; if the saved distribution no longer fits, it goes
-    back to the lead farmer to review.
+    The lead farmer shares the maximum among that submission's farmers and submits the final
+    distribution for approval; it cannot go past the maximum. Other submissions are not limited
+    by it. Changing a maximum flags the submission; if the saved distribution no longer fits, it
+    goes back to the lead farmer. Approving as it is (mode "approve") is the approval itself.
     """
+    if str(mode or "").strip().lower() == "approve":
+        return approve(request_id=request_id, user=user, remarks=remarks)
     user = _decision_user(user)
     supply = _locked(request_id)
     issuing = supply.stage == InputSupplyRequest.STAGE_REQUEST and supply.status == InputSupplyRequest.STATUS_SUBMITTED
@@ -745,8 +748,8 @@ def set_hectares(*, request_id, user, mode, limits, remarks=""):
     if not issuing and not adjusting:
         raise SupplyError(f"{supply.reference} is {supply.get_status_display().lower()}. Hectare limits are set on a submitted request, or changed before the final approval.")
     choice = str(mode or "").strip().lower()
-    if choice not in ("approve", "distribute"):
-        raise SupplyError("Approve the requested hectares, or distribute the hectares that are available.")
+    if choice != "distribute":
+        raise SupplyError("Approve the request as it is, or set maximum hectares.")
     levels = requested_levels(supply)
     if adjusting:
         # Requested hectares stay what the lead farmer asked for when the limits were first issued.
@@ -756,17 +759,14 @@ def set_hectares(*, request_id, user, mode, limits, remarks=""):
                 level["requested"] = Decimal(stored[_level_key(level)].requested_hectares)
     if not levels:
         raise SupplyError(f"{supply.reference} has no allocations to approve.")
-    if choice == "approve":
-        resolved = [{**level, "approved": level["requested"]} for level in levels]
-        action = InputSupplyEvent.LIMITS_APPROVED
-    else:
-        resolved = _approved_from_client(levels, limits)
-        action = InputSupplyEvent.LIMITS_ADJUSTED if adjusting else InputSupplyEvent.LIMITS_DISTRIBUTED
+    resolved = _approved_from_client(levels, limits)
+    action = InputSupplyEvent.LIMITS_ADJUSTED if adjusting else InputSupplyEvent.LIMITS_DISTRIBUTED
     before = _limit_rows(supply) if adjusting else []
     _write_limits(supply, resolved, user, keep_requested=adjusting)
     note = (remarks or "").strip()
     message = None
-    fields = ["stage", "status", "reviewed_at", "reviewed_by", "decision_notes", "updated_at"]
+    fields = ["stage", "status", "reviewed_at", "reviewed_by", "decision_notes", "hectares_capped", "updated_at"]
+    supply.hectares_capped = True
     if issuing:
         supply.stage = InputSupplyRequest.STAGE_DISTRIBUTION
         supply.status = InputSupplyRequest.STATUS_LIMITS_SET
@@ -795,20 +795,28 @@ def set_hectares(*, request_id, user, mode, limits, remarks=""):
 
 @transaction.atomic
 def approve(*, request_id, user, remarks=""):
-    """Final approval: the only step that makes allocations official and creates farmer debts.
+    """Approval: the only step that makes allocations official and creates farmer debts.
 
-    Everything happens in one transaction. Quantities and prices are recalculated from the
-    catalogue now and kept on the official lines as the approved snapshot.
+    A submitted request is approved as it is. Where Admin set maximum hectares, this is the
+    final approval of the lead farmer's distribution. Everything happens in one transaction.
+    Quantities and prices are recalculated from the catalogue now and kept on the official lines
+    as the approved snapshot. The lead farmer can then send more farmers in a new submission.
     """
     user = _decision_user(user)
     supply = _locked(request_id)
     if supply.status == InputSupplyRequest.STATUS_APPROVED:
         raise SupplyError(f"{supply.reference} is already approved. Its allocations and debts were created once.")
-    if supply.status != InputSupplyRequest.STATUS_CONFIRMATION:
-        raise SupplyError(f"{supply.reference} is {supply.get_status_display().lower()}. Give the final approval after the lead farmer submits the final distribution.")
+    as_requested = supply.status == InputSupplyRequest.STATUS_SUBMITTED
+    # Earlier requests whose hectares were approved unchanged wait in this status; they can be approved now.
+    uncapped_earlier = supply.status == InputSupplyRequest.STATUS_LIMITS_SET and not supply.hectares_capped
+    if not (as_requested or uncapped_earlier or supply.status == InputSupplyRequest.STATUS_CONFIRMATION):
+        raise SupplyError(f"{supply.reference} is {supply.get_status_display().lower()}. Approve it once the lead farmer has submitted it.")
     if supply.allocations.exists():
         raise SupplyError(f"{supply.reference} already has official allocations.")
-    _enforce_limits(supply)
+    if not supply.farmers.exists():
+        raise SupplyError(f"{supply.reference} has no allocations to approve.")
+    if not as_requested:
+        _enforce_limits(supply)
     _revalidate(supply)
     prices = {}
     for entry in supply.farmers.select_related("farmer", "farm", "crop").prefetch_related("lines__requirement__input_product"):
@@ -904,7 +912,8 @@ def reverse(*, request_id, user, remarks):
     # The cancelled allocations and debts stay on record, and the event below lists them.
     # Clearing the links lets a corrected distribution be approved again with new allocations.
     InputSupplyAllocation.objects.filter(request=supply).delete()
-    supply.stage = InputSupplyRequest.STAGE_DISTRIBUTION
+    # Within a maximum the corrected distribution must still fit it; otherwise it is corrected freely.
+    supply.stage = InputSupplyRequest.STAGE_DISTRIBUTION if supply.hectares_capped else InputSupplyRequest.STAGE_REQUEST
     supply.status = InputSupplyRequest.STATUS_RETURNED
     supply.reviewed_at = timezone.now()
     supply.reviewed_by = user
@@ -1022,8 +1031,9 @@ def present(supply):
         "farmer_count": len(farmers), "allocation_count": len(allocations),
         "hectares_total": _ha(hectares_total), "estimated_cost": _money(estimated_cost),
         "requested_hectares": _ha(requested_total) if limit_rows else _ha(hectares_total),
-        "approved_hectares": _ha(approved_total) if limit_rows else None,
+        "approved_hectares": _ha(approved_total) if limit_rows else (_ha(hectares_total) if supply.status == InputSupplyRequest.STATUS_APPROVED else None),
         "difference_hectares": _ha(approved_total - requested_total) if limit_rows else None,
+        "hectares_capped": supply.hectares_capped,
         "remaining_hectares": _ha(approved_total - hectares_total) if limit_rows else None,
         "limits_changed": limits_changed, "limits_changed_at": supply.limits_changed_at.isoformat() if supply.limits_changed_at else None,
         "submitted_at": supply.submitted_at.isoformat() if supply.submitted_at else None,

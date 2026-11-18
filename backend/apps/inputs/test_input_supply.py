@@ -144,7 +144,11 @@ class InputSupplyWorkflowTests(TestCase):
             {"scope": "VARIETY", "requirement": self.compound, "approved_hectares": "8"},
         ])
         self.assertEqual(issued.status_code, 200, issued.data)
-        self.assertEqual(issued.data["status_label"], "Approved limits issued")
+        self.assertEqual((issued.data["status_label"], issued.data["hectares_capped"]), ("Maximum hectares set", True))
+        # The maximum limits this submission only: other farmers can go in a new submission.
+        more = self.add(self.farmer, [(self.sorghum_seed, "2")], crop=self.sorghum)
+        self.assertEqual(more.status_code, 201, more.data)
+        self.assertNotEqual(more.data["id"], pk)
         self.assertTrue(Notification.objects.filter(recipient=self.lead, kind=Notification.KIND_INPUT_SUPPLY_DECIDED).exists())
         view = self.fetch(pk)
         limits = {row["name"]: row for row in view["limits"]}
@@ -235,8 +239,6 @@ class InputSupplyWorkflowTests(TestCase):
         # Approval creates one official allocation and debt per farmer and crop.
         pk = sorghum.data["id"]
         self.act("submit", pk, client=self.lead_api)
-        self.act("set-hectares", pk, mode="approve")
-        self.act("submit", pk, client=self.lead_api)
         self.assertEqual(self.act("approve", pk).status_code, 200)
         self.assertEqual(set(InputAllocation.objects.values_list("crop", flat=True)), {"Maize", "Sorghum"})
         self.assertEqual(InputDebt.objects.count(), 2)
@@ -269,9 +271,9 @@ class InputSupplyWorkflowTests(TestCase):
         figures = lambda: self.admin_api.get(reverse("programme-figures", kwargs={"pk": self.arda})).data["totals"]["allocated_hectares"]
         self.assertEqual(Decimal(figures()), Decimal("0"))
         for pk, expected in ((first_id, "6"), (second_id, "13")):
-            self.act("set-hectares", pk, mode="approve")
-            self.assertEqual(self.act("submit", pk, client=self.lead_api).data["status"], "CONFIRMATION")
-            self.assertEqual(self.act("approve", pk).status_code, 200)
+            approved = self.act("approve", pk)
+            self.assertEqual(approved.status_code, 200, approved.data)
+            self.assertEqual(approved.data["approved_hectares"], approved.data["hectares_total"])
             self.assertEqual(Decimal(figures()), Decimal(expected))
         self.assertEqual(InputAllocation.objects.count(), 3)
         self.assertEqual(InputDebt.objects.count(), 3)
@@ -279,6 +281,36 @@ class InputSupplyWorkflowTests(TestCase):
         fertilizer = self.add(self.farmer, [(self.compound, "2")])
         self.assertEqual(fertilizer.status_code, 201, fertilizer.data)
         self.assertNotIn(fertilizer.data["id"], (first_id, second_id))
+
+    def test_approving_as_requested_is_final_and_a_maximum_limits_only_its_submission(self):
+        # Approving a submitted request as it is makes it official at once: no second step.
+        first = self.add(self.farmer, [(self.mbizi, "4")])
+        self.act("submit", first.data["id"], client=self.lead_api)
+        approved = self.act("approve", first.data["id"], remarks="Fine")
+        self.assertEqual((approved.status_code, approved.data["status"]), (200, "APPROVED"))
+        self.assertEqual(InputDebt.objects.count(), 1)
+        self.assertFalse(approved.data["limits"])
+        # The lead farmer carries on: two more farmers' crops in the next submission.
+        second = self.add(self.third, [(self.mbizi, "5")])
+        self.add(self.farmer, [(self.sorghum_seed, "3")], crop=self.sorghum)
+        self.act("submit", second.data["id"], client=self.lead_api)
+        # This time Admin sets a maximum instead.
+        capped = self.act("set-hectares", second.data["id"], mode="distribute", limits=[{"scope": "CROP", "crop": self.maize.id, "approved_hectares": "3"}])
+        self.assertEqual((capped.status_code, capped.data["status"]), (200, "LIMITS_SET"))
+        # The capped submission cannot go past its maximum...
+        self.assertEqual(self.act("submit", second.data["id"], client=self.lead_api).status_code, 400)
+        self.assertEqual(self.add(self.farmer, [(self.compound, "2")], submission=second.data["id"]).status_code, 400)
+        # ...but other farmers can still be sent in a new submission.
+        third = self.add(self.third, [(self.sorghum_seed, "2")], crop=self.sorghum)
+        self.assertEqual(third.status_code, 201, third.data)
+        self.assertNotEqual(third.data["id"], second.data["id"])
+        self.assertEqual(self.edit(self.entry(capped.data, self.third), [(self.mbizi, "3")]).status_code, 200)
+        self.assertEqual(self.act("submit", second.data["id"], client=self.lead_api).data["status"], "CONFIRMATION")
+        self.assertEqual(self.act("approve", second.data["id"]).status_code, 200)
+        self.assertEqual(InputDebt.objects.count(), 3)
+        # Reversing an uncapped approval reopens it for correction without any maximum.
+        reversed_ = self.act("reverse", first.data["id"], remarks="Wrong farm")
+        self.assertEqual((reversed_.data["status"], reversed_.data["stage"]), ("RETURNED", "REQUEST"))
 
     def test_eligibility_and_access_are_enforced_on_the_server(self):
         too_much = self.add(self.farmer, [(self.mbizi, "12")])
@@ -305,7 +337,7 @@ class InputSupplyWorkflowTests(TestCase):
     def test_changing_limits_after_the_final_submission_sends_it_back_for_review(self):
         pk = self.build()["id"]
         self.act("submit", pk, client=self.lead_api)
-        self.act("set-hectares", pk, mode="approve")
+        self.act("set-hectares", pk, mode="distribute", limits=[{"scope": "CROP", "crop": self.maize.id, "approved_hectares": "13"}])
         self.assertEqual(self.act("submit", pk, client=self.lead_api).data["status"], "CONFIRMATION")
         lowered = self.act("set-hectares", pk, mode="distribute", limits=[{"scope": "VARIETY", "requirement": self.mbizi, "approved_hectares": "9"}])
         self.assertEqual(lowered.status_code, 200, lowered.data)

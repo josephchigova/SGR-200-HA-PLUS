@@ -213,7 +213,7 @@ class InputSupplyRequest(models.Model):
     STATUS_CHOICES: ClassVar[list[tuple[str, str]]] = [
         (STATUS_DRAFT, "Draft"),
         (STATUS_SUBMITTED, "Submitted"),
-        (STATUS_LIMITS_SET, "Approved limits issued"),
+        (STATUS_LIMITS_SET, "Maximum hectares set"),
         (STATUS_CONFIRMATION, "Final distribution submitted"),
         (STATUS_APPROVED, "Approved"),
         (STATUS_RETURNED, "Returned for corrections"),
@@ -243,6 +243,9 @@ class InputSupplyRequest(models.Model):
     crop_season = models.CharField(max_length=10, blank=True, default="", choices=[("SUMMER", "Summer"), ("WINTER", "Winter")])
     # Set when Admin changes approved limits after issuing them, so the lead farmer reviews the distribution.
     limits_changed_at = models.DateTimeField(null=True, blank=True)
+    # Admin set maximum hectares on this submission instead of approving it as it was. The lead
+    # farmer shares those hectares among its farmers and cannot go past them.
+    hectares_capped = models.BooleanField(default=False)
     stage = models.CharField(max_length=20, choices=STAGE_CHOICES, default=STAGE_REQUEST)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     submitted_at = models.DateTimeField(null=True, blank=True)
