@@ -159,10 +159,10 @@ class InputAllocationLine(models.Model):
 
 
 class ProgrammeVarietyCap(models.Model):
-    """How much of one catalogue variety Admin has made available.
+    """Retired quantity cap. Hectare limits on a lead farmer's submission replaced this.
 
-    The cap is a quantity (kg, litres, bags), not a farmer allocation and not a stock balance.
-    Approval of a lead farmer's request is what consumes it.
+    The table stays so databases created with the earlier workflow still migrate. New
+    allocations do not read or write it, and there is no stock balance behind it.
     """
 
     programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="variety_caps")
@@ -196,21 +196,40 @@ class ProgrammeVarietyCap(models.Model):
 
 
 class InputSupplyRequest(models.Model):
-    """A lead farmer's consolidated request for the varieties they allocated to their farmers."""
+    """A lead farmer's consolidated input submission for one programme, year, season and crop.
+
+    The lead farmer first submits the hectares they want. Admin then sets the maximum
+    hectares that lead farmer may use. The lead farmer distributes those hectares among
+    their own farmers and submits that distribution. Only Admin's final approval confirms it.
+    """
 
     STATUS_DRAFT = "DRAFT"
     STATUS_SUBMITTED = "SUBMITTED"
+    STATUS_LIMITS_SET = "LIMITS_SET"
+    STATUS_CONFIRMATION = "CONFIRMATION"
     STATUS_APPROVED = "APPROVED"
     STATUS_RETURNED = "RETURNED"
     STATUS_REJECTED = "REJECTED"
     STATUS_CHOICES: ClassVar[list[tuple[str, str]]] = [
         (STATUS_DRAFT, "Draft"),
         (STATUS_SUBMITTED, "Submitted"),
+        (STATUS_LIMITS_SET, "Hectares approved"),
+        (STATUS_CONFIRMATION, "Awaiting confirmation"),
         (STATUS_APPROVED, "Approved"),
         (STATUS_RETURNED, "Returned for corrections"),
         (STATUS_REJECTED, "Rejected"),
     ]
-    EDITABLE = (STATUS_DRAFT, STATUS_RETURNED)
+    # A submission is open until Admin confirms it or rejects it. Approved and rejected
+    # rows stay as history and do not block a later submission for the same crop.
+    OPEN_STATUSES = (
+        STATUS_DRAFT, STATUS_SUBMITTED, STATUS_RETURNED, STATUS_LIMITS_SET, STATUS_CONFIRMATION,
+    )
+    STAGE_REQUEST = "REQUEST"
+    STAGE_DISTRIBUTION = "DISTRIBUTION"
+    STAGE_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (STAGE_REQUEST, "Hectare request"),
+        (STAGE_DISTRIBUTION, "Farmer distribution"),
+    ]
 
     reference = models.CharField(max_length=40, unique=True, blank=True)
     lead_farmer = models.ForeignKey(
@@ -219,6 +238,7 @@ class InputSupplyRequest(models.Model):
     programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="input_supply_requests")
     season = models.ForeignKey(Season, on_delete=models.PROTECT, related_name="input_supply_requests")
     crop = models.ForeignKey(Crop, on_delete=models.PROTECT, related_name="input_supply_requests")
+    stage = models.CharField(max_length=20, choices=STAGE_CHOICES, default=STAGE_REQUEST)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
     submitted_at = models.DateTimeField(null=True, blank=True)
     reviewed_at = models.DateTimeField(null=True, blank=True)
@@ -232,11 +252,12 @@ class InputSupplyRequest(models.Model):
     class Meta:
         ordering = ["-submitted_at", "-updated_at", "-id"]
         constraints = [
-            # One open request per lead farmer, programme, year and crop. Approved and rejected
-            # requests stay as history and do not block a later one.
+            # One open submission per lead farmer, programme, agricultural year and crop.
+            # The crop's summer or winter category is the season. Approved and rejected
+            # submissions stay as history and do not block a later one.
             models.UniqueConstraint(
                 fields=["lead_farmer", "programme", "season", "crop"],
-                condition=models.Q(status__in=["DRAFT", "SUBMITTED", "RETURNED"]),
+                condition=models.Q(status__in=["DRAFT", "SUBMITTED", "RETURNED", "LIMITS_SET", "CONFIRMATION"]),
                 name="one_open_input_supply_request",
             ),
         ]
@@ -262,17 +283,24 @@ class InputSupplyFarmer(models.Model):
 
 
 class InputSupplyLine(models.Model):
-    """One variety allocated to one farmer. Quantity is hectares times the catalogue rate."""
+    """One variety allocated to one farmer.
+
+    Hectares are entered for this variety. Quantity and cost are calculated from the
+    programme catalogue and stored here so a later price change does not rewrite history.
+    """
 
     farmer_entry = models.ForeignKey(InputSupplyFarmer, on_delete=models.CASCADE, related_name="lines")
     requirement = models.ForeignKey(
         "programmes.CropInputRequirement", on_delete=models.PROTECT, related_name="supply_lines",
     )
-    cap = models.ForeignKey(ProgrammeVarietyCap, on_delete=models.PROTECT, related_name="supply_lines")
+    # Unused. Kept so rows written by the retired quantity-cap workflow still load.
+    cap = models.ForeignKey(ProgrammeVarietyCap, on_delete=models.PROTECT, related_name="supply_lines", null=True, blank=True)
+    hectares = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
     rate_per_hectare = models.DecimalField(max_digits=14, decimal_places=4, default=Decimal("0.0000"))
     quantity = models.DecimalField(max_digits=16, decimal_places=4, default=Decimal("0.0000"))
     unit = models.CharField(max_length=40, blank=True, default="")
     unit_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+    estimated_cost = models.DecimalField(max_digits=16, decimal_places=2, default=Decimal("0.00"))
 
     class Meta:
         ordering = ["requirement__input_category", "requirement__item_name", "id"]
@@ -285,6 +313,11 @@ class InputSupplyLine(models.Model):
 class InputSupplyEvent(models.Model):
     SUBMITTED = "SUBMITTED"
     RESUBMITTED = "RESUBMITTED"
+    LIMITS_APPROVED = "LIMITS_APPROVED"
+    LIMITS_DISTRIBUTED = "LIMITS_DISTRIBUTED"
+    LIMITS_ADJUSTED = "LIMITS_ADJUSTED"
+    FINAL_SUBMITTED = "FINAL_SUBMITTED"
+    FINAL_RESUBMITTED = "FINAL_RESUBMITTED"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
     RETURNED = "RETURNED"
@@ -296,6 +329,11 @@ class InputSupplyEvent(models.Model):
         (CORRECTED, "Corrections saved"),
         (SUBMITTED, "Submitted"),
         (RESUBMITTED, "Resubmitted"),
+        (LIMITS_APPROVED, "Requested hectares approved"),
+        (LIMITS_DISTRIBUTED, "Hectares distributed"),
+        (LIMITS_ADJUSTED, "Approved hectares adjusted"),
+        (FINAL_SUBMITTED, "Final distribution submitted"),
+        (FINAL_RESUBMITTED, "Final distribution resubmitted"),
         (APPROVED, "Approved"),
         (REJECTED, "Rejected"),
         (RETURNED, "Returned for corrections"),
@@ -303,16 +341,69 @@ class InputSupplyEvent(models.Model):
     ]
 
     request = models.ForeignKey(InputSupplyRequest, on_delete=models.CASCADE, related_name="events")
-    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    action = models.CharField(max_length=32, choices=ACTION_CHOICES)
     actor = models.ForeignKey(
         "accounts.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="input_supply_events",
     )
     actor_name = models.CharField(max_length=180, blank=True)
     remarks = models.TextField(blank=True)
+    # Requested and approved hectares, or the previous and new limits, for this decision.
+    detail = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["created_at", "id"]
+
+
+class InputSupplyLimit(models.Model):
+    """The maximum hectares Admin has allowed one lead farmer to allocate.
+
+    This is not an allocation to an individual farmer and it is not a stock balance.
+    The lead farmer decides which of their farmers receive the hectares, up to these maximums.
+    A limit can sit on the crop, on one input category, or on one variety.
+    """
+
+    SCOPE_CROP = "CROP"
+    SCOPE_CATEGORY = "CATEGORY"
+    SCOPE_VARIETY = "VARIETY"
+    SCOPE_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (SCOPE_CROP, "Crop"),
+        (SCOPE_CATEGORY, "Input category"),
+        (SCOPE_VARIETY, "Variety"),
+    ]
+
+    request = models.ForeignKey(InputSupplyRequest, on_delete=models.CASCADE, related_name="limits")
+    scope = models.CharField(max_length=20, choices=SCOPE_CHOICES)
+    input_category = models.CharField(max_length=20, blank=True, default="")
+    requirement = models.ForeignKey(
+        "programmes.CropInputRequirement", on_delete=models.PROTECT, related_name="supply_limits", null=True, blank=True,
+    )
+    requested_hectares = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    approved_hectares = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal("0.00"))
+    updated_by = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="supply_limits_set",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["request_id", "scope", "input_category", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["request"], condition=models.Q(scope="CROP"), name="unique_supply_crop_limit",
+            ),
+            models.UniqueConstraint(
+                fields=["request", "input_category"], condition=models.Q(scope="CATEGORY"), name="unique_supply_category_limit",
+            ),
+            models.UniqueConstraint(
+                fields=["request", "requirement"], condition=models.Q(scope="VARIETY"), name="unique_supply_variety_limit",
+            ),
+            models.CheckConstraint(condition=models.Q(approved_hectares__gte=0), name="supply_limit_approved_nonnegative"),
+            models.CheckConstraint(condition=models.Q(requested_hectares__gte=0), name="supply_limit_requested_nonnegative"),
+        ]
+
+    def __str__(self):
+        return f"{self.scope} {self.approved_hectares} ha ({self.request_id})"
 
 
 class InputSupplyAllocation(models.Model):

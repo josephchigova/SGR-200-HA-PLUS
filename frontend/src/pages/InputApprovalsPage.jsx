@@ -1,7 +1,8 @@
-// Admin reviews the requests lead farmers submit, and sets the variety caps those requests draw from.
+// Admin reviews consolidated submissions from lead farmers.
 //
-// Approving consumes the cap. Rejecting or returning it does not. An approved request is reversed,
-// not edited, and the reversal cancels the farmer allocations that approval created.
+// A submitted request can be approved as requested, or Admin can set the maximum hectares
+// that lead farmer may use. The lead farmer then distributes those hectares and submits
+// again. Only the confirmation of that distribution creates farmer allocations.
 
 import { Fragment, useEffect, useState } from 'react'
 
@@ -9,28 +10,42 @@ import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import Icon from '../components/Icon'
 import { EmptyState, Modal, PageHead, Pill, errorMessage } from '../components/ui'
-import { CATEGORY_LABEL, loadAll, qty } from '../programmeData'
 import { STATUS_TONE, when } from '../inputSupply'
+import { loadAll, money, qty } from '../programmeData'
 
 const TABS = [
-  ['pending', 'Awaiting approval'],
-  ['all', 'All requests'],
-  ['caps', 'Variety caps'],
+  ['hectares', 'Hectare decisions'],
+  ['confirmation', 'Final confirmation'],
+  ['all', 'All submissions'],
 ]
+
+const limitKey = (limit) => (limit.scope === 'CROP' ? 'crop' : limit.scope === 'CATEGORY' ? `cat:${limit.input_category}` : `var:${limit.requirement}`)
+
+function seedLimits(row) {
+  const seed = { crop: row.hectares_total || '' }
+  ;(row.categories || []).forEach((category) => { seed[`cat:${category.input_category}`] = category.hectares })
+  ;(row.totals || []).forEach((variety) => { seed[`var:${variety.requirement}`] = variety.hectares })
+  ;(row.limits || []).forEach((limit) => { seed[limitKey(limit)] = limit.approved_hectares })
+  return seed
+}
+
+function clampLimits(current, key, value) {
+  const next = { ...current, [key]: value }
+  const crop = Number(next.crop)
+  if (key === 'crop' && Number.isFinite(crop)) {
+    Object.keys(next).forEach((child) => {
+      if (child !== 'crop' && Number(next[child]) > crop) next[child] = value
+    })
+  }
+  return next
+}
 
 function InputApprovalsPage({ selectedSeason = null, cropSeason = '', periodStatus = 'ready' }) {
   const { can } = useAuth()
   const canDecide = can('input_approvals', 'approve')
-  const canConfigure = can('input_caps', 'create')
-  const [tab, setTab] = useState('pending')
+  const [tab, setTab] = useState('hectares')
   const [rows, setRows] = useState([])
-  const [caps, setCaps] = useState([])
-  const [combined, setCombined] = useState(null)
-  const [programmes, setProgrammes] = useState([])
-  const [crops, setCrops] = useState([])
-  const [requirements, setRequirements] = useState([])
-  const [requirementProgramme, setRequirementProgramme] = useState('')
-  const [requirementCrop, setRequirementCrop] = useState('')
+  const [counts, setCounts] = useState(null)
   const [loadedKey, setLoadedKey] = useState('')
   const [token, setToken] = useState(0)
   const [error, setError] = useState('')
@@ -38,10 +53,9 @@ function InputApprovalsPage({ selectedSeason = null, cropSeason = '', periodStat
   const [open, setOpen] = useState(null)
   const [decision, setDecision] = useState(null)
   const [remarks, setRemarks] = useState('')
+  const [approved, setApproved] = useState({})
   const [saving, setSaving] = useState(false)
-  const [capForm, setCapForm] = useState({ programme: '', crop: '', requirement: '', cap_quantity: '' })
   const blocked = periodStatus !== 'ready' || !selectedSeason
-  const readOnlyYear = Boolean(selectedSeason?.status && selectedSeason.status !== 'ACTIVE')
   const requestKey = JSON.stringify([selectedSeason?.id, cropSeason, tab, token])
 
   useEffect(() => {
@@ -49,22 +63,14 @@ function InputApprovalsPage({ selectedSeason = null, cropSeason = '', periodStat
     let active = true
     const params = { season: selectedSeason.id }
     if (cropSeason) params.crop_season = cropSeason
-    const requests = tab === 'caps'
-      ? Promise.resolve([])
-      : loadAll('/input-supply-requests/', tab === 'pending' ? { ...params, status: 'SUBMITTED' } : params)
+    const status = tab === 'hectares' ? 'SUBMITTED' : tab === 'confirmation' ? 'CONFIRMATION' : ''
     Promise.all([
-      requests,
-      loadAll('/programme-variety-caps/', params),
+      loadAll('/input-supply-requests/', status ? { ...params, status } : params),
       apiClient.get('/input-supply-requests/consolidated/', { params }).then((response) => response.data),
-      loadAll('/programmes/', params),
-      loadAll('/crops/'),
-    ]).then(([requestRows, capRows, summary, programmeRows, cropRows]) => {
+    ]).then(([requestRows, summary]) => {
       if (!active) return
       setRows(requestRows)
-      setCaps(capRows)
-      setCombined(summary)
-      setProgrammes(programmeRows)
-      setCrops(cropRows)
+      setCounts(summary)
       setError('')
     }).catch((requestError) => {
       if (active) setError(errorMessage(requestError, 'Input approvals could not be loaded.'))
@@ -72,26 +78,12 @@ function InputApprovalsPage({ selectedSeason = null, cropSeason = '', periodStat
     return () => { active = false }
   }, [blocked, selectedSeason, cropSeason, tab, requestKey])
 
-  const loadRequirements = (programmeId, cropId) => {
-    setRequirementProgramme(programmeId)
-    setRequirementCrop(cropId)
-    if (!programmeId || !cropId) {
-      setRequirements([])
-      return
-    }
-    loadAll('/crop-input-requirements/', { programme: programmeId, crop: cropId })
-      .then((list) => {
-        setRequirements(list.filter((row) => row.active !== false && row.input_product))
-      })
-      .catch(() => setRequirements([]))
-  }
-
   const loading = !blocked && loadedKey !== requestKey
   const reload = () => setToken((value) => value + 1)
-  const selectedProgramme = programmes.find((item) => String(item.id) === capForm.programme)
-  const programmeCrops = crops.filter((item) => (selectedProgramme?.crops || []).map(String).includes(String(item.id)) && (!cropSeason || item.category === cropSeason))
-  const requirementChoices = requirementProgramme === capForm.programme && requirementCrop === capForm.crop ? requirements : []
-  const selectedRequirement = requirementChoices.find((item) => String(item.id) === capForm.requirement)
+  const reveal = (row) => {
+    setOpen(open === row.id ? null : row.id)
+    setApproved(seedLimits(row))
+  }
 
   const decide = async () => {
     if (!decision) return
@@ -103,6 +95,7 @@ function InputApprovalsPage({ selectedSeason = null, cropSeason = '', periodStat
       setDecision(null)
       setRemarks('')
       setOpen(response.data.id)
+      setApproved(seedLimits(response.data))
       reload()
     } catch (requestError) {
       setError(errorMessage(requestError, 'The decision could not be saved.'))
@@ -111,169 +104,105 @@ function InputApprovalsPage({ selectedSeason = null, cropSeason = '', periodStat
     }
   }
 
-  const addCap = async (event) => {
-    event.preventDefault()
+  const sendLimits = async (row, mode) => {
     setSaving(true)
     setError('')
     try {
-      const response = await apiClient.post('/programme-variety-caps/', {
-        programme: Number(capForm.programme),
-        season: selectedSeason.id,
-        crop: Number(capForm.crop),
-        requirement: Number(capForm.requirement),
-        cap_quantity: capForm.cap_quantity,
-      })
-      setNotice(`${response.data.product_name} capped at ${qty(response.data.cap_quantity)} ${response.data.unit}.`)
-      setCapForm({ programme: capForm.programme, crop: capForm.crop, requirement: '', cap_quantity: '' })
+      const limits = limitPayload(row, approved)
+      const response = await apiClient.post(`/input-supply-requests/${row.id}/set-hectares/`, { mode, limits, remarks })
+      setNotice(mode === 'approve'
+        ? `${response.data.reference}: requested hectares approved. ${response.data.lead_farmer_name} can now distribute them.`
+        : `${response.data.reference}: approved hectares sent to ${response.data.lead_farmer_name}.`)
+      setRemarks('')
+      setOpen(response.data.id)
+      setApproved(seedLimits(response.data))
       reload()
     } catch (requestError) {
-      setError(errorMessage(requestError, 'The cap could not be saved.'))
+      setError(errorMessage(requestError, 'The approved hectares could not be saved.'))
     } finally {
       setSaving(false)
     }
   }
 
-  const changeCap = async (cap, quantity) => {
-    setError('')
-    try {
-      await apiClient.patch(`/programme-variety-caps/${cap.id}/`, { cap_quantity: quantity })
-      setNotice(`${cap.product_name} cap updated.`)
-      reload()
-    } catch (requestError) {
-      setError(errorMessage(requestError, 'The cap could not be updated.'))
-    }
-  }
-
   return (
     <div className="page-card">
-      <PageHead title="Input approvals" subtitle="Set how much of each variety is available, then approve, reject or return the requests lead farmers submit. Approval is what uses the cap." />
+      <PageHead
+        title="Input approvals"
+        subtitle="Review what each lead farmer requested. Approve those hectares, or set the maximum hectares they may use. Confirm the farmer distribution only after they submit it."
+      />
       {blocked ? <div className="form-message">Choose an agricultural year in the header.</div> : null}
-      {readOnlyYear ? <div className="form-message">{selectedSeason.name} is not the active agricultural year. You can still review requests that were already submitted.</div> : null}
       {notice ? <div className="form-message success" role="status">{notice}</div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
 
       <div className="tabs" role="tablist" aria-label="Input approval sections">
-        {TABS.map(([id, label]) => (
-          <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}{id === 'pending' && combined ? ` (${combined.submitted_count})` : ''}</button>
-        ))}
+        {TABS.map(([id, label]) => {
+          const count = id === 'hectares' ? counts?.submitted_count : id === 'confirmation' ? counts?.confirmation_count : null
+          return (
+            <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
+              {label}{count ? ` (${count})` : ''}
+            </button>
+          )
+        })}
       </div>
 
-      {tab !== 'caps' ? (
-        <section className="card">
-          <div className="card-head"><h3>Combined requirements</h3></div>
-          {combined?.caps?.length ? (
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead><tr><th>Programme</th><th>Crop</th><th>Season</th><th>Input</th><th>Variety</th><th className="num">Cap</th><th className="num">Approved</th><th className="num">Awaiting approval</th><th className="num">Remaining</th></tr></thead>
-                <tbody>
-                  {combined.caps.map((cap) => (
-                    <tr key={cap.id}>
-                      <td>{cap.programme_name}</td>
-                      <td>{cap.crop_name}</td>
-                      <td>{cap.crop_season_label}</td>
-                      <td>{cap.input_category_label}</td>
-                      <td>{cap.product_name}</td>
-                      <td className="num">{qty(cap.cap_quantity)} {cap.unit}</td>
-                      <td className="num">{qty(cap.approved_quantity)} {cap.unit}</td>
-                      <td className="num">{qty(cap.submitted_quantity)} {cap.unit}</td>
-                      <td className="num"><strong>{qty(cap.remaining_quantity)} {cap.unit}</strong></td>
+      <section className="card">
+        <div className="card-head">
+          <h3>{tab === 'hectares' ? 'Submissions awaiting hectare limits' : tab === 'confirmation' ? 'Distributions awaiting confirmation' : 'All submissions'}</h3>
+        </div>
+        {loading ? <div className="form-message">Loading submissions…</div> : null}
+        {!loading && !rows.length ? (
+          <EmptyState icon="shield" title={tab === 'all' ? 'No submissions' : 'Nothing is waiting'}>
+            {tab === 'hectares' ? 'Submitted requests from lead farmers appear here.' : 'Lead farmers submit a final distribution after you set their hectare limits.'}
+          </EmptyState>
+        ) : null}
+        {rows.length ? (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Lead farmer</th><th>Submission</th><th>Programme</th><th>Year</th><th>Season</th><th>Crop</th><th className="num">Hectares</th><th className="num">Estimated cost</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                {rows.map((row) => (
+                  <Fragment key={row.id}>
+                    <tr>
+                      <td>{row.lead_farmer_name}</td>
+                      <td><strong>{row.reference}</strong></td>
+                      <td>{row.programme_name}</td>
+                      <td>{row.season_name}</td>
+                      <td>{row.crop_season_label}</td>
+                      <td>{row.crop_name}</td>
+                      <td className="num">{qty(row.hectares_total)} ha</td>
+                      <td className="num">{money(row.estimated_cost)}</td>
+                      <td><Pill tone={STATUS_TONE[row.status] || ''}>{row.status_label}</Pill></td>
+                      <td><button type="button" className="ghost-btn" onClick={() => reveal(row)}>{open === row.id ? 'Hide' : 'Review'}</button></td>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : <EmptyState icon="layers" title="No variety caps">Add caps before lead farmers can request inputs.</EmptyState>}
-        </section>
-      ) : null}
-
-      {tab !== 'caps' ? (
-        <section className="card">
-          <div className="card-head"><h3>{tab === 'pending' ? 'Requests awaiting a decision' : 'All lead farmer requests'}</h3></div>
-          {loading ? <div className="form-message">Loading requests…</div> : null}
-          {!loading && !rows.length ? <EmptyState icon="shield" title={tab === 'pending' ? 'Nothing is waiting' : 'No requests'}>{tab === 'pending' ? 'Submitted requests from lead farmers appear here.' : 'Requests for this year appear here.'}</EmptyState> : null}
-          {rows.length ? (
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead><tr><th>Lead farmer</th><th>Request</th><th>Programme</th><th>Year</th><th>Season</th><th>Crop</th><th>Farmers</th><th>Status</th><th></th></tr></thead>
-                <tbody>
-                  {rows.map((row) => (
-                    <Fragment key={row.id}>
+                    {open === row.id ? (
                       <tr>
-                        <td>{row.lead_farmer_name}</td>
-                        <td><strong>{row.reference}</strong></td>
-                        <td>{row.programme_name}</td>
-                        <td>{row.season_name}</td>
-                        <td>{row.crop_season_label}</td>
-                        <td>{row.crop_name}<small className="block-hint">{qty(row.hectares_total)} ha</small></td>
-                        <td>{row.farmer_count}</td>
-                        <td><Pill tone={STATUS_TONE[row.status] || ''}>{row.status_label}</Pill></td>
-                        <td><button type="button" className="ghost-btn" onClick={() => setOpen(open === row.id ? null : row.id)}>{open === row.id ? 'Hide' : 'Review'}</button></td>
+                        <td colSpan={10}>
+                          <RequestDetail
+                            row={row}
+                            canDecide={canDecide}
+                            approved={approved}
+                            remarks={remarks}
+                            saving={saving}
+                            onApproved={(key, value) => setApproved((current) => clampToParents(row, current, key, value))}
+                            onRemarks={setRemarks}
+                            onApproveRequested={() => sendLimits(row, 'approve')}
+                            onDistribute={() => sendLimits(row, 'distribute')}
+                            onDecide={(action) => { setDecision({ row, action }); setRemarks('') }}
+                          />
+                        </td>
                       </tr>
-                      {open === row.id ? (
-                        <tr>
-                          <td colSpan={9}>
-                            <RequestDetail row={row} canDecide={canDecide} onDecide={(action) => { setDecision({ row, action }); setRemarks('') }} />
-                          </td>
-                        </tr>
-                      ) : null}
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-        </section>
-      ) : null}
-
-      {tab === 'caps' ? (
-        <section className="card">
-          <div className="card-head"><h3>Available quantity by variety</h3></div>
-          <p className="card-sub">A cap is how much of one variety lead farmers may request. It is not allocated to a farmer from here.</p>
-          {canConfigure && !readOnlyYear ? (
-            <form className="filter-row" onSubmit={addCap}>
-              <label className="form-field">Programme
-                <select value={capForm.programme} onChange={(event) => { setCapForm({ programme: event.target.value, crop: '', requirement: '', cap_quantity: '' }); loadRequirements('', '') }}>
-                  <option value="">Select</option>
-                  {programmes.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-              </label>
-              <label className="form-field">Crop
-                <select value={capForm.crop} onChange={(event) => { const cropId = event.target.value; setCapForm({ ...capForm, crop: cropId, requirement: '' }); loadRequirements(capForm.programme, cropId) }}>
-                  <option value="">Select</option>
-                  {programmeCrops.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-                </select>
-              </label>
-              <label className="form-field">Variety
-                <select value={capForm.requirement} onChange={(event) => setCapForm({ ...capForm, requirement: event.target.value })}>
-                  <option value="">Select</option>
-                  {requirementChoices.map((item) => <option key={item.id} value={item.id}>{CATEGORY_LABEL[item.input_category] || item.input_category}: {item.input_product_name} ({item.unit || 'unit'})</option>)}
-                </select>
-              </label>
-              <label className="form-field">Available cap{selectedRequirement ? ` (${selectedRequirement.unit || 'unit'})` : ''}
-                <input type="number" min="0" step="0.0001" value={capForm.cap_quantity} onChange={(event) => setCapForm({ ...capForm, cap_quantity: event.target.value })} required />
-              </label>
-              <button type="submit" className="primary-btn" disabled={saving || !capForm.requirement}><Icon name="plus" />Add cap</button>
-            </form>
-          ) : null}
-          {selectedRequirement ? <p className="card-sub">Catalogue rate: {qty(selectedRequirement.rate_per_hectare)} {selectedRequirement.unit || ''} per hectare. The unit comes from the crop catalogue.</p> : null}
-          {!caps.length ? <EmptyState icon="layers" title="No caps for this year">Add one variety at a time. Lead farmers only see varieties that have a cap.</EmptyState> : (
-            <div className="table-wrap">
-              <table className="data-table">
-                <thead><tr><th>Programme</th><th>Crop</th><th>Season</th><th>Input</th><th>Variety</th><th className="num">Cap</th><th className="num">Approved</th><th className="num">Remaining</th>{canConfigure && !readOnlyYear ? <th>Change cap</th> : null}</tr></thead>
-                <tbody>
-                  {caps.map((cap) => (
-                    <CapRow key={cap.id} cap={cap} canEdit={canConfigure && !readOnlyYear} onSave={changeCap} />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      ) : null}
+                    ) : null}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </section>
 
       {decision ? (
         <Modal
-          title={decision.action === 'approve' ? 'Approve request' : decision.action === 'reject' ? 'Reject request' : decision.action === 'return-for-corrections' ? 'Return for corrections' : 'Reverse approval'}
+          title={decision.action === 'approve' ? 'Confirm distribution' : decision.action === 'reject' ? 'Reject submission' : decision.action === 'return-for-corrections' ? 'Return for corrections' : 'Reverse confirmation'}
           subtitle={`${decision.row.reference} · ${decision.row.lead_farmer_name}`}
           onClose={() => setDecision(null)}
           footer={(
@@ -286,95 +215,191 @@ function InputApprovalsPage({ selectedSeason = null, cropSeason = '', periodStat
           <label className="form-field">{decision.action === 'approve' ? 'Note to the lead farmer (optional)' : 'Explain the decision'}
             <textarea value={remarks} onChange={(event) => setRemarks(event.target.value)} rows={4} />
           </label>
-          {decision.action === 'reverse' ? <p className="card-sub">Reversing cancels the farmer allocations and releases the cap. The lead farmer can correct the request and submit it again.</p> : null}
+          {decision.action === 'approve' ? <p className="card-sub">Confirming creates the farmer allocations and their input debt. Requested hectares are not confirmed until this step.</p> : null}
+          {decision.action === 'reverse' ? <p className="card-sub">Reversing cancels the farmer allocations and their debt. The approved hectare limits stay, and the lead farmer can correct the distribution.</p> : null}
         </Modal>
       ) : null}
     </div>
   )
 }
 
-function RequestDetail({ row, canDecide, onDecide }) {
+function limitPayload(row, approved) {
+  const limits = [{ scope: 'CROP', approved_hectares: approved.crop }]
+  ;(row.categories || []).forEach((category) => {
+    limits.push({ scope: 'CATEGORY', input_category: category.input_category, approved_hectares: approved[`cat:${category.input_category}`] })
+  })
+  ;(row.totals || []).forEach((variety) => {
+    limits.push({ scope: 'VARIETY', requirement: variety.requirement, approved_hectares: approved[`var:${variety.requirement}`] })
+  })
+  return limits
+}
+
+function capVarieties(row, next, category, cap) {
+  ;(row.totals || []).filter((variety) => variety.input_category === category).forEach((variety) => {
+    const varietyKey = `var:${variety.requirement}`
+    if (Number(next[varietyKey]) > Number(cap)) next[varietyKey] = String(cap)
+  })
+}
+
+function clampToParents(row, current, key, value) {
+  const next = clampLimits(current, key, value)
+  const crop = Number(next.crop)
+  if (key === 'crop') {
+    ;(row.categories || []).forEach((category) => capVarieties(row, next, category.input_category, next[`cat:${category.input_category}`]))
+  }
+  if (key.startsWith('cat:')) {
+    if (Number.isFinite(crop) && Number(next[key]) > crop) next[key] = next.crop
+    capVarieties(row, next, key.slice(4), next[key])
+  }
+  if (key.startsWith('var:')) {
+    const variety = (row.totals || []).find((item) => `var:${item.requirement}` === key)
+    const categoryCap = variety ? Number(next[`cat:${variety.input_category}`]) : NaN
+    if (Number.isFinite(categoryCap) && Number(next[key]) > categoryCap) next[key] = String(categoryCap)
+    if (Number.isFinite(crop) && Number(next[key]) > crop) next[key] = next.crop
+  }
+  return next
+}
+
+function RequestDetail({ row, canDecide, approved, remarks, saving, onApproved, onRemarks, onApproveRequested, onDistribute, onDecide }) {
+  const awaitingLimits = row.status === 'SUBMITTED' && row.stage !== 'DISTRIBUTION'
+  const canAdjust = canDecide && (row.status === 'LIMITS_SET' || (row.stage === 'DISTRIBUTION' && row.status === 'RETURNED') || row.status === 'CONFIRMATION')
+  const cropLimit = (row.limits || []).find((limit) => limit.scope === 'CROP')
   return (
     <div>
       {row.decision_notes ? <p><strong>Latest note:</strong> {row.decision_notes}</p> : null}
+      {row.reviewed_by_name ? <p className="card-sub">Last reviewed by {row.reviewed_by_name} on {when(row.reviewed_at)}.</p> : null}
+      <p className="card-sub">{row.stage_label}. {row.farmer_count} farmer{row.farmer_count === 1 ? '' : 's'}.</p>
+
+      <h4>Crop and input categories</h4>
       <div className="table-wrap">
         <table className="data-table">
-          <thead><tr><th>Farmer</th><th>Farm</th><th className="num">Hectares</th><th>Varieties</th></tr></thead>
+          <thead><tr><th>Level</th><th>Item</th><th className="num">Requested ha</th><th className="num">Approved ha</th><th className="num">Estimated cost</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Crop</td>
+              <td>{row.crop_name}</td>
+              <td className="num">{qty(cropLimit?.requested_hectares || row.hectares_total)}</td>
+              <td className="num">{cropLimit ? qty(cropLimit.approved_hectares) : '—'}</td>
+              <td className="num">{money(row.estimated_cost)}</td>
+            </tr>
+            {(row.categories || []).map((category) => (
+              <tr key={category.input_category}>
+                <td>Input category</td>
+                <td>{category.input_category_label}</td>
+                <td className="num">{qty(category.requested_hectares || category.hectares)}</td>
+                <td className="num">{category.approved_hectares ? qty(category.approved_hectares) : '—'}</td>
+                <td className="num">{money(category.estimated_cost)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Varieties</h4>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead><tr><th>Input</th><th>Variety</th><th className="num">Hectares</th><th className="num">Approved ha</th><th className="num">Quantity</th><th className="num">Estimated cost</th></tr></thead>
+          <tbody>
+            {(row.totals || []).map((line) => (
+              <tr key={line.requirement}>
+                <td>{line.input_category_label}</td>
+                <td>{line.product_name}</td>
+                <td className="num">{qty(line.hectares)} ha</td>
+                <td className="num">{line.approved_hectares ? `${qty(line.approved_hectares)} ha` : '—'}</td>
+                <td className="num"><strong>{qty(line.quantity)} {line.unit}</strong></td>
+                <td className="num">{money(line.estimated_cost)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Farmers</h4>
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead><tr><th>Farmer</th><th>Farm</th><th className="num">Land ha</th><th>Varieties</th></tr></thead>
           <tbody>
             {row.farmers.map((farmer) => (
               <tr key={farmer.id}>
                 <td>{farmer.farmer_name}</td>
                 <td>{farmer.farm_name}</td>
                 <td className="num">{qty(farmer.hectares)}</td>
-                <td>{farmer.lines.map((line) => `${line.input_category_label} ${line.product_name}: ${qty(line.quantity)} ${line.unit}`).join('; ')}</td>
+                <td>{farmer.lines.map((line) => `${line.product_name}: ${qty(line.hectares)} ha = ${qty(line.quantity)} ${line.unit} (${money(line.estimated_cost)})`).join('; ')}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
-      <div className="table-wrap">
-        <table className="data-table">
-          <thead><tr><th>Input</th><th>Variety</th><th className="num">Requested</th><th className="num">Cap</th><th className="num">Approved so far</th><th className="num">Remaining</th></tr></thead>
-          <tbody>
-            {row.totals.map((line) => (
-              <tr key={line.requirement}>
-                <td>{line.input_category_label}</td>
-                <td>{line.product_name}</td>
-                <td className="num"><strong>{qty(line.quantity)} {line.unit}</strong></td>
-                <td className="num">{qty(line.cap_quantity)} {line.unit}</td>
-                <td className="num">{qty(line.approved_quantity)} {line.unit}</td>
-                <td className="num">{qty(line.remaining_quantity)} {line.unit}</td>
-              </tr>
+
+      {canDecide && (awaitingLimits || canAdjust) ? (
+        <div className="card" style={{ marginTop: 12 }}>
+          <h4>{awaitingLimits ? 'Set the maximum hectares' : 'Adjust the approved hectares'}</h4>
+          <p className="card-sub">These are the most hectares this lead farmer may allocate. They are not assigned to individual farmers. A category cannot exceed the crop, and a variety cannot exceed its category.</p>
+          <div className="filter-row">
+            <label className="form-field">{row.crop_name} hectares
+              <input aria-label={`Approved hectares for ${row.crop_name}`} type="number" min="0" step="0.01" value={approved.crop ?? ''} onChange={(event) => onApproved('crop', event.target.value)} />
+            </label>
+            {(row.categories || []).map((category) => (
+              <label key={category.input_category} className="form-field">{category.input_category_label} hectares
+                <input aria-label={`Approved hectares for ${category.input_category_label}`} type="number" min="0" step="0.01" value={approved[`cat:${category.input_category}`] ?? ''} onChange={(event) => onApproved(`cat:${category.input_category}`, event.target.value)} />
+              </label>
             ))}
-          </tbody>
-        </table>
-      </div>
-      <ol className="timeline">
-        {(row.events || []).map((event) => (
-          <li key={event.id}>
-            <Pill tone={STATUS_TONE[event.action] || ''}>{event.action_label}</Pill>
-            <span>{when(event.created_at)} · {event.actor_name || 'System'}</span>
-            {event.remarks ? <p>{event.remarks}</p> : null}
-          </li>
-        ))}
-      </ol>
-      {canDecide && row.status === 'SUBMITTED' ? (
+            {(row.totals || []).map((variety) => (
+              <label key={variety.requirement} className="form-field">{variety.product_name} hectares
+                <input aria-label={`Approved hectares for ${variety.product_name}`} type="number" min="0" step="0.01" value={approved[`var:${variety.requirement}`] ?? ''} onChange={(event) => onApproved(`var:${variety.requirement}`, event.target.value)} />
+              </label>
+            ))}
+          </div>
+          <label className="form-field">Note to the lead farmer (optional)
+            <textarea value={remarks} onChange={(event) => onRemarks(event.target.value)} rows={3} />
+          </label>
+          <div className="page-actions">
+            {awaitingLimits ? <button type="button" className="primary-btn" disabled={saving} onClick={onApproveRequested}><Icon name="check" />Approve requested hectares</button> : null}
+            <button type="button" className="primary-btn" disabled={saving} onClick={onDistribute}>{awaitingLimits ? 'Distribute these hectares' : 'Save approved hectares'}</button>
+          </div>
+        </div>
+      ) : null}
+
+      <History events={row.events} />
+      {canDecide && row.status === 'CONFIRMATION' ? (
         <div className="page-actions">
-          <button type="button" className="primary-btn" onClick={() => onDecide('approve')}><Icon name="check" />Approve</button>
+          <button type="button" className="primary-btn" onClick={() => onDecide('approve')}><Icon name="check" />Confirm distribution</button>
+          <button type="button" className="ghost-btn" onClick={() => onDecide('return-for-corrections')}>Return for corrections</button>
+          <button type="button" className="ghost-btn" onClick={() => onDecide('reject')}>Reject</button>
+        </div>
+      ) : null}
+      {canDecide && awaitingLimits ? (
+        <div className="page-actions">
           <button type="button" className="ghost-btn" onClick={() => onDecide('return-for-corrections')}>Return for corrections</button>
           <button type="button" className="ghost-btn" onClick={() => onDecide('reject')}>Reject</button>
         </div>
       ) : null}
       {canDecide && row.status === 'APPROVED' ? (
         <div className="page-actions">
-          <button type="button" className="ghost-btn" onClick={() => onDecide('reverse')}>Reverse approval</button>
+          <button type="button" className="ghost-btn" onClick={() => onDecide('reverse')}>Reverse confirmation</button>
         </div>
       ) : null}
     </div>
   )
 }
 
-function CapRow({ cap, canEdit, onSave }) {
-  const [quantity, setQuantity] = useState(cap.cap_quantity)
+function History({ events }) {
+  if (!events?.length) return null
   return (
-    <tr>
-      <td>{cap.programme_name}</td>
-      <td>{cap.crop_name}</td>
-      <td>{cap.crop_season_label}</td>
-      <td>{cap.input_category_label}</td>
-      <td>{cap.product_name}</td>
-      <td className="num">{qty(cap.cap_quantity)} {cap.unit}</td>
-      <td className="num">{qty(cap.approved_quantity)} {cap.unit}</td>
-      <td className="num"><strong>{qty(cap.remaining_quantity)} {cap.unit}</strong></td>
-      {canEdit ? (
-        <td>
-          <span className="table-actions">
-            <input aria-label={`New cap for ${cap.product_name}`} type="number" min="0" step="0.0001" value={quantity} onChange={(event) => setQuantity(event.target.value)} style={{ width: 120 }} />
-            <button type="button" className="ghost-btn" onClick={() => onSave(cap, quantity)}>Save</button>
-          </span>
-        </td>
-      ) : null}
-    </tr>
+    <ol className="timeline">
+      {events.map((event) => (
+        <li key={event.id}>
+          <Pill tone={STATUS_TONE[event.action] || ''}>{event.action_label}</Pill>
+          <span>{when(event.created_at)} · {event.actor_name || 'System'}</span>
+          {event.remarks ? <p>{event.remarks}</p> : null}
+          {event.detail?.limits?.length ? (
+            <p className="card-sub">
+              {event.detail.limits.map((limit) => `${limit.name}: requested ${qty(limit.requested_hectares)} ha, approved ${qty(limit.approved_hectares)} ha`).join(' · ')}
+            </p>
+          ) : null}
+        </li>
+      ))}
+    </ol>
   )
 }
 

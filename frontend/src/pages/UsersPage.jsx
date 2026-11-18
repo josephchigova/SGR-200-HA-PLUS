@@ -12,7 +12,7 @@ const EMPTY = { email: '', first_name: '', last_name: '', phone_number: '', role
 const MODULE_LABELS = {
   dashboard: 'Overview', farmers: 'Farmers', verification: 'Verification', clusters: 'Clusters', subscriptions: 'Subscriptions',
   crops: 'Crop catalogue', programmes: 'Programmes', arda: 'Input requests', lead_requests: 'Lead farmer requests', allocations: 'Input allocations',
-  input_caps: 'Input caps', input_approvals: 'Input approvals', input_supply: 'Lead farmer input requests', production: 'Production',
+  input_approvals: 'Input approvals', input_supply: 'Lead farmer input requests', production: 'Production',
   planting: 'Seasonal planting', deliveries: 'GMB deliveries', recovery: 'Grain recovery', finance: 'Finance', reports: 'Operational reports',
   reports_finance: 'Financial reports', reports_users: 'User reports', users: 'Team & access', audit: 'Audit log',
 }

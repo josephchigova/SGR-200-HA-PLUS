@@ -79,8 +79,7 @@ MATRIX = {
         set(),
     ),
     "allocations": (ProgrammeWorkflowPermission.read_roles, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, PROGRAMME_WRITE, set()),
-    # Variety caps and the approval queue belong to programme administrators.
-    "input_caps": (PROGRAMME_WRITE | {User.ROLE_AUDITOR}, PROGRAMME_WRITE, PROGRAMME_WRITE, ADMIN, set(), set()),
+    # Hectare decisions and final confirmation belong to programme administrators.
     "input_approvals": (PROGRAMME_WRITE | {User.ROLE_AUDITOR}, set(), set(), set(), PROGRAMME_WRITE, set()),
     # Farmer-level allocation and submission belong only to the lead farmer. A superuser does not inherit these.
     "input_supply": (

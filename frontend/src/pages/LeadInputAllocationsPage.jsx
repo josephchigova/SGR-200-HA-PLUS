@@ -1,8 +1,8 @@
 // Lead farmer input allocations.
 //
-// Admin has already decided which varieties are available, and how much of each. The lead
-// farmer chooses their own farmers, the hectares and the varieties. Quantities are hectares
-// times the catalogue rate. Saving does not send totals: the server calculates and stores them.
+// The lead farmer chooses their own farmers, a programme variety and the hectares for that
+// variety. Quantity and cost are calculated from the catalogue. Admin's approved hectares,
+// once set, are a maximum: unused hectares stay unused, and the total cannot go over them.
 
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
@@ -10,18 +10,28 @@ import { Link } from 'react-router-dom'
 import apiClient from '../api/client'
 import Icon from '../components/Icon'
 import { EmptyState, PageHead, Pill, errorMessage } from '../components/ui'
-import { CATEGORY_LABEL, qty } from '../programmeData'
-import { STATUS_TONE, when } from '../inputSupply'
+import { canEditSubmission, STATUS_TONE, when } from '../inputSupply'
+import { cropSeasonLabel } from '../period'
+import { CATEGORY_LABEL, money, qty, requestTotal } from '../programmeData'
 
-const blankRow = () => ({ key: `${Date.now()}-${Math.random()}`, farmer: '', farm: '', hectares: '', requirements: [] })
+const blankRow = () => ({ key: `${Date.now()}-${Math.random()}`, farmer: '', farm: '', lines: {} })
 
 const toAllocationRow = (entry) => ({
   key: `saved-${entry.id}`,
   farmer: String(entry.farmer),
   farm: String(entry.farm),
-  hectares: entry.hectares,
-  requirements: entry.lines.map((line) => line.requirement),
+  lines: Object.fromEntries((entry.lines || []).map((line) => [String(line.requirement), line.hectares])),
 })
+
+const positiveLines = (row) => Object.entries(row.lines || {}).filter(([, hectares]) => Number(hectares) > 0)
+
+function previewCost(variety, hectares) {
+  const quantity = (Number(hectares) || 0) * Number(variety?.rate_per_hectare || 0)
+  if (variety?.pack_size && variety?.pack_price) {
+    return quantity / Number(variety.pack_size) * Number(variety.pack_price)
+  }
+  return quantity * Number(variety?.unit_price || 0)
+}
 
 function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', periodStatus = 'ready' }) {
   const [catalogue, setCatalogue] = useState(null)
@@ -36,6 +46,7 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
   const blocked = periodStatus !== 'ready' || !selectedSeason
   const readOnlyYear = Boolean(selectedSeason?.status && selectedSeason.status !== 'ACTIVE')
   const requestKey = JSON.stringify([selectedSeason?.id, cropSeason, token])
+  const seasonName = cropSeasonLabel(selectedSeason, cropSeason)
 
   useEffect(() => {
     if (blocked) return undefined
@@ -44,7 +55,7 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
     if (cropSeason) params.crop_season = cropSeason
     apiClient.get('/input-supply-requests/catalogue/', { params })
       .then((response) => { if (active) { setCatalogue(response.data); setError('') } })
-      .catch((requestError) => { if (active) setError(errorMessage(requestError, 'Available varieties could not be loaded.')) })
+      .catch((requestError) => { if (active) setError(errorMessage(requestError, 'The programme catalogue could not be loaded.')) })
       .finally(() => { if (active) setLoadedKey(requestKey) })
     return () => { active = false }
   }, [blocked, selectedSeason, cropSeason, requestKey])
@@ -60,48 +71,59 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
   const usingOverride = override && override.programme === programme && override.crop === crop
   const request = usingOverride ? override.request : openRequest
   const rows = usingOverride ? override.rows : (openRequest ? openRequest.farmers.map(toAllocationRow) : [])
-  const editable = !request || request.status === 'DRAFT' || request.status === 'RETURNED'
-  const totals = []
-  const summed = new Map()
-  rows.forEach((row) => {
-    row.requirements.forEach((requirementId) => {
-      const variety = varieties.find((item) => item.requirement === requirementId)
-      if (!variety) return
-      const quantity = (Number(row.hectares) || 0) * Number(variety.rate_per_hectare || 0)
-      const current = summed.get(requirementId) || { ...variety, quantity: 0 }
-      current.quantity += quantity
-      summed.set(requirementId, current)
-    })
+  const editable = !readOnlyYear && canEditSubmission(request)
+  const distributing = request?.stage === 'DISTRIBUTION'
+  const limits = request?.limits || []
+
+  const replaceRows = (next, dirty = true) => setOverride({
+    programme,
+    crop,
+    request,
+    dirty,
+    rows: typeof next === 'function' ? next(rows) : next,
   })
-  summed.forEach((value) => totals.push(value))
-
-  const replaceRows = (next) => setOverride({ programme, crop, request, rows: typeof next === 'function' ? next(rows) : next })
-
   const updateRow = (key, changes) => replaceRows((current) => current.map((row) => (row.key === key ? { ...row, ...changes } : row)))
-
   const chooseFarmer = (key, farmerId) => {
     const farmer = farmers.find((item) => String(item.id) === farmerId)
     const farm = farmer?.farms?.[0]
-    const allocated = farmer?.crops?.find((item) => String(item.crop) === crop)
-    updateRow(key, { farmer: farmerId, farm: farm ? String(farm.id) : '', hectares: allocated?.hectares || '' })
+    updateRow(key, { farmer: farmerId, farm: farm ? String(farm.id) : '' })
+  }
+  const setHectares = (key, requirementId, hectares) => {
+    const row = rows.find((item) => item.key === key)
+    updateRow(key, { lines: { ...row.lines, [requirementId]: hectares } })
   }
 
-  const toggleVariety = (key, requirementId) => {
-    const row = rows.find((item) => item.key === key)
-    const selected = row.requirements.includes(requirementId)
-    updateRow(key, { requirements: selected ? row.requirements.filter((id) => id !== requirementId) : [...row.requirements, requirementId] })
-  }
+  const preview = []
+  const summed = new Map()
+  rows.forEach((row) => {
+    positiveLines(row).forEach(([requirementId, hectares]) => {
+      const variety = varieties.find((item) => String(item.requirement) === String(requirementId))
+      if (!variety) return
+      const current = summed.get(variety.requirement) || { ...variety, hectares: 0, quantity: 0, cost: 0 }
+      current.hectares += Number(hectares) || 0
+      current.quantity += (Number(hectares) || 0) * Number(variety.rate_per_hectare || 0)
+      current.cost += previewCost(variety, hectares)
+      summed.set(variety.requirement, current)
+    })
+  })
+  summed.forEach((value) => preview.push(value))
+  const land = rows.reduce((total, row) => total + requestTotal(positiveLines(row).map(([requirementId, hectares]) => {
+    const variety = varieties.find((item) => String(item.requirement) === String(requirementId))
+    return { input_category: variety?.input_category, hectares }
+  })), 0)
 
   const payload = () => ({
     programme: Number(programme),
     season: selectedSeason.id,
     crop: Number(crop),
     crop_season: cropSeason || undefined,
-    farmers: rows.map((row) => ({
+    farmers: rows.filter((row) => row.farmer).map((row) => ({
       farmer: Number(row.farmer),
       farm: row.farm ? Number(row.farm) : undefined,
-      hectares: row.hectares,
-      requirements: row.requirements,
+      lines: positiveLines(row).map(([requirementId, hectares]) => ({
+        requirement: Number(requirementId),
+        hectares,
+      })),
     })),
   })
 
@@ -116,11 +138,15 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
         const submitted = await apiClient.post(`/input-supply-requests/${saved.data.id}/submit/`)
         current = submitted.data
       }
-      setOverride({ programme, crop, request: current, rows: current.farmers.map(toAllocationRow) })
-      setNotice(andSubmit ? `${current.reference} submitted for approval.` : `${current.reference} saved. The quantities below are calculated from the crop catalogue.`)
+      setOverride({ programme, crop, request: current, dirty: false, rows: current.farmers.map(toAllocationRow) })
+      const savedLand = `${qty(current.hectares_total)} ha`
+      const savedCost = money(current.estimated_cost)
+      setNotice(andSubmit
+        ? `${current.reference} ${current.status_label.toLowerCase()}. Calculated total ${savedLand}, estimated cost ${savedCost}.`
+        : `${current.reference} saved. Quantities and costs were calculated from the catalogue (${savedLand}, ${savedCost}).`)
       setToken((value) => value + 1)
     } catch (requestError) {
-      setError(errorMessage(requestError, andSubmit ? 'The request could not be submitted.' : 'The allocation could not be saved.'))
+      setError(errorMessage(requestError, andSubmit ? 'The submission could not be sent.' : 'The allocation could not be saved.'))
     } finally {
       setSaving(false)
     }
@@ -130,10 +156,11 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
     <div className="page-card">
       <PageHead
         title="Input allocations"
-        subtitle="Choose a programme and crop, then split the varieties Admin has made available across your farmers. Quantities are calculated from each farmer's hectares. Submit the total when it is ready."
+        subtitle="Choose the agricultural year and season above, then a programme, crop and variety. Enter the hectares for each variety. Quantities and costs are calculated for you."
       />
       {blocked ? <div className="form-message">Choose an agricultural year in the header.</div> : null}
       {readOnlyYear ? <div className="form-message">{selectedSeason.name} is not the active agricultural year, so allocations are read-only.</div> : null}
+      {!blocked ? <p className="card-sub">Agricultural year {selectedSeason.name}{seasonName ? ` · ${seasonName} season` : ''}.</p> : null}
       {notice ? <div className="form-message success" role="status">{notice}</div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
       {request?.status === 'RETURNED' ? (
@@ -141,9 +168,15 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
           Admin returned {request.reference} for corrections{request.decision_notes ? `: ${request.decision_notes}` : '.'} Update the allocations and submit again.
         </div>
       ) : null}
+      {distributing && editable ? (
+        <div className="form-message" role="status">
+          Admin approved a maximum of {qty(limits.find((limit) => limit.scope === 'CROP')?.approved_hectares)} ha for this crop.
+          Share it across your farmers. Hectares you do not use stay unallocated.
+        </div>
+      ) : null}
       {request && !editable ? (
         <div className="form-message" role="status">
-          {request.reference} is {request.status_label.toLowerCase()}. <Link to="/my-input-requests">View it in your requests</Link>.
+          {request.reference} is {request.status_label.toLowerCase()}. <Link to="/my-input-requests">Open it in your submission history</Link>.
         </div>
       ) : null}
 
@@ -162,21 +195,20 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
             </select>
           </label>
         </div>
-        {loading ? <div className="form-message">Loading varieties…</div> : null}
-        {!loading && catalogue && !programmes.length ? <EmptyState icon="box" title="No varieties are available">Admin has not set input caps for {selectedSeason?.name} yet.</EmptyState> : null}
+        {loading ? <div className="form-message">Loading the catalogue…</div> : null}
+        {!loading && catalogue && !programmes.length ? <EmptyState icon="box" title="No programme catalogue">Admin has not configured varieties for {selectedSeason?.name}{seasonName ? ` ${seasonName}` : ''} yet.</EmptyState> : null}
         {selectedCrop ? (
           <div className="table-wrap">
             <table className="data-table">
-              <thead><tr><th>Input</th><th>Variety</th><th>Per hectare</th><th className="num">Available cap</th><th className="num">Already approved</th><th className="num">Remaining</th></tr></thead>
+              <thead><tr><th>Input</th><th>Variety</th><th>Unit</th><th className="num">Rate per hectare</th><th className="num">Unit price</th></tr></thead>
               <tbody>
                 {varieties.map((variety) => (
-                  <tr key={variety.id}>
+                  <tr key={variety.requirement}>
                     <td>{variety.input_category_label}</td>
                     <td>{variety.product_name}</td>
-                    <td>{qty(variety.rate_per_hectare)} {variety.unit}</td>
-                    <td className="num">{qty(variety.cap_quantity)} {variety.unit}</td>
-                    <td className="num">{qty(variety.approved_quantity)} {variety.unit}</td>
-                    <td className="num"><strong>{qty(variety.remaining_quantity)} {variety.unit}</strong></td>
+                    <td>{variety.unit}</td>
+                    <td className="num">{qty(variety.rate_per_hectare)} {variety.unit}</td>
+                    <td className="num">{variety.pack_size ? `${money(variety.pack_price)} / ${qty(variety.pack_size)} ${variety.unit}` : money(variety.unit_price)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -185,74 +217,121 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
         ) : null}
       </section>
 
+      {limits.length ? (
+        <section className="card">
+          <div className="card-head"><h3>Approved hectare limits</h3></div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>Level</th><th>Item</th><th className="num">Requested</th><th className="num">Approved maximum</th><th className="num">Allocated now</th><th className="num">Still available</th></tr></thead>
+              <tbody>
+                {limits.map((limit) => (
+                  <tr key={limit.id}>
+                    <td>{limit.scope_label}</td>
+                    <td>{limit.name}</td>
+                    <td className="num">{qty(limit.requested_hectares)} ha</td>
+                    <td className="num"><strong>{qty(limit.approved_hectares)} ha</strong></td>
+                    <td className="num">{qty(limit.allocated_hectares)} ha</td>
+                    <td className="num">{qty(limit.remaining_hectares)} ha</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
       {selectedCrop ? (
         <section className="card">
           <div className="card-head">
             <h3>Your farmers</h3>
-            {editable && !readOnlyYear ? <button type="button" className="ghost-btn" onClick={() => replaceRows((current) => [...current, blankRow()])}><Icon name="plus" />Add farmer</button> : null}
+            {editable ? <button type="button" className="ghost-btn" onClick={() => replaceRows((current) => [...current, blankRow()])}><Icon name="plus" />Add farmer</button> : null}
           </div>
           {!farmers.length ? <EmptyState icon="users" title="No farmers in your cluster">Farmers you register appear here once they can receive inputs.</EmptyState> : null}
           {rows.map((row, index) => {
             const farmer = farmers.find((item) => String(item.id) === row.farmer)
+            const approved = farmer?.crops?.find((item) => String(item.crop) === crop)
             return (
               <div key={row.key} className="card" style={{ marginBottom: 12 }}>
                 <div className="filter-row">
                   <label className="form-field">Farmer {index + 1}
-                    <select value={row.farmer} disabled={!editable || readOnlyYear} onChange={(event) => chooseFarmer(row.key, event.target.value)}>
+                    <select value={row.farmer} disabled={!editable} onChange={(event) => chooseFarmer(row.key, event.target.value)}>
                       <option value="">Select a farmer</option>
                       {farmers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                     </select>
                   </label>
                   <label className="form-field">Farm
-                    <select value={row.farm} disabled={!editable || readOnlyYear} onChange={(event) => updateRow(row.key, { farm: event.target.value })}>
+                    <select value={row.farm} disabled={!editable} onChange={(event) => updateRow(row.key, { farm: event.target.value })}>
                       <option value="">Select a farm</option>
                       {(farmer?.farms || []).map((farm) => <option key={farm.id} value={farm.id}>{farm.name}</option>)}
                     </select>
                   </label>
-                  <label className="form-field">Hectares
-                    <input type="number" min="0" step="0.01" value={row.hectares} disabled={!editable || readOnlyYear} onChange={(event) => updateRow(row.key, { hectares: event.target.value })} />
-                  </label>
-                  {editable && !readOnlyYear ? <button type="button" className="ghost-btn" onClick={() => replaceRows((current) => current.filter((item) => item.key !== row.key))}>Remove</button> : null}
+                  {editable ? <button type="button" className="ghost-btn" onClick={() => replaceRows((current) => current.filter((item) => item.key !== row.key))}>Remove</button> : null}
                 </div>
-                <div className="filter-row">
-                  {varieties.map((variety) => (
-                    <label key={variety.requirement} className="check-row">
-                      <input
-                        type="checkbox"
-                        checked={row.requirements.includes(variety.requirement)}
-                        disabled={!editable || readOnlyYear}
-                        onChange={() => toggleVariety(row.key, variety.requirement)}
-                      />
-                      {variety.input_category_label}: {variety.product_name}
-                      {row.hectares ? <small> · {qty((Number(row.hectares) || 0) * Number(variety.rate_per_hectare))} {variety.unit}</small> : null}
-                    </label>
-                  ))}
+                {approved ? <p className="card-sub">Approved {selectedCrop.crop_name}: {qty(approved.hectares)} ha. Each input category must stay within that.</p> : null}
+                <div className="table-wrap">
+                  <table className="data-table">
+                    <thead><tr><th>Input</th><th>Variety</th><th>Hectares</th><th className="num">Quantity</th><th className="num">Estimated cost</th></tr></thead>
+                    <tbody>
+                      {varieties.map((variety) => {
+                        const hectares = row.lines[String(variety.requirement)] ?? row.lines[variety.requirement] ?? ''
+                        const quantity = (Number(hectares) || 0) * Number(variety.rate_per_hectare || 0)
+                        return (
+                          <tr key={variety.requirement}>
+                            <td>{variety.input_category_label}</td>
+                            <td>{variety.product_name}</td>
+                            <td>
+                              <input
+                                aria-label={`Hectares of ${variety.product_name} for farmer ${index + 1}`}
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                value={hectares}
+                                disabled={!editable}
+                                onChange={(event) => setHectares(row.key, String(variety.requirement), event.target.value)}
+                                style={{ width: 120 }}
+                              />
+                            </td>
+                            <td className="num">{hectares ? `${qty(quantity)} ${variety.unit}` : '—'}</td>
+                            <td className="num">{hectares ? money(previewCost(variety, hectares)) : '—'}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             )
           })}
 
-          <h3>Consolidated request</h3>
-          {!totals.length ? <p className="card-sub">Add farmers and varieties. The total of each variety is calculated here and again on the server when you save.</p> : (
+          <h3>{distributing ? 'Distribution' : 'Consolidated submission'}</h3>
+          <p className="card-sub">Land allocated {qty(land)} ha. Varieties of one input type add together. Seed, fertilizer and chemicals share the same land, so the total is the largest of those.</p>
+          {!preview.length ? <p className="card-sub">Enter hectares against a variety. The quantity is hectares times the catalogue rate, and the cost uses that programme's price.</p> : (
             <div className="table-wrap">
               <table className="data-table">
-                <thead><tr><th>Input</th><th>Variety</th><th className="num">Total requested</th></tr></thead>
+                <thead><tr><th>Input</th><th>Variety</th><th className="num">Hectares</th><th className="num">Quantity</th><th className="num">Estimated cost</th></tr></thead>
                 <tbody>
-                  {totals.map((row) => (
+                  {preview.map((row) => (
                     <tr key={row.requirement}>
                       <td>{row.input_category_label || CATEGORY_LABEL[row.input_category]}</td>
                       <td>{row.product_name}</td>
+                      <td className="num">{qty(row.hectares)} ha</td>
                       <td className="num"><strong>{qty(row.quantity)} {row.unit}</strong></td>
+                      <td className="num">{money(row.cost)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
           )}
-          {editable && !readOnlyYear ? (
+          {request && !override?.dirty ? (
+            <p className="card-sub">Last saved calculation: {qty(request.hectares_total)} ha, {money(request.estimated_cost)}. These figures come from the server.</p>
+          ) : null}
+          {editable ? (
             <div className="page-actions" style={{ marginTop: 16 }}>
               <button type="button" className="ghost-btn" disabled={saving || !rows.length} onClick={() => save(false)}>{saving ? 'Saving…' : 'Save draft'}</button>
-              <button type="button" className="primary-btn" disabled={saving || !rows.length} onClick={() => save(true)}><Icon name="send" />Submit for approval</button>
+              <button type="button" className="primary-btn" disabled={saving || !rows.length} onClick={() => save(true)}>
+                <Icon name="send" />{distributing ? 'Submit final distribution' : 'Submit for approval'}
+              </button>
             </div>
           ) : null}
           {request?.events?.length ? (
