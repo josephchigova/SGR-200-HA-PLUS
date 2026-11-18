@@ -16,6 +16,8 @@ function SearchSelect({ label, value, options, onChange, placeholder = 'Choose',
     const term = query.trim().toLowerCase()
     return term ? options.filter((option) => option.label.toLowerCase().includes(term)) : options
   }, [options, query])
+  const shown = visible.slice(0, 40)
+  const hidden = visible.length - shown.length
 
   useEffect(() => {
     if (!open) return undefined
@@ -38,13 +40,13 @@ function SearchSelect({ label, value, options, onChange, placeholder = 'Choose',
       setOpen(false)
     } else if (event.key === 'ArrowDown') {
       event.preventDefault()
-      setActive((index) => Math.min(index + 1, visible.length - 1))
+      setActive((index) => Math.min(index + 1, shown.length - 1))
     } else if (event.key === 'ArrowUp') {
       event.preventDefault()
       setActive((index) => Math.max(index - 1, 0))
     } else if (event.key === 'Enter') {
       event.preventDefault()
-      if (visible[active]) choose(visible[active])
+      if (shown[active]) choose(shown[active])
     }
   }
 
@@ -69,7 +71,7 @@ function SearchSelect({ label, value, options, onChange, placeholder = 'Choose',
             <input ref={search} type="search" value={query} placeholder={`Search ${label.toLowerCase()}`} aria-label={`Search ${label}`} onChange={(event) => { setQuery(event.target.value); setActive(0) }} onKeyDown={onKeyDown} />
           ) : <input ref={search} className="sr-only" aria-label={`${label} options`} readOnly onKeyDown={onKeyDown} />}
           <ul role="listbox" aria-labelledby={`${id}-label`}>
-            {visible.map((option, index) => (
+            {shown.map((option, index) => (
               <li
                 key={option.value}
                 role="option"
@@ -82,7 +84,8 @@ function SearchSelect({ label, value, options, onChange, placeholder = 'Choose',
                 {String(option.value) === String(value) ? <Icon name="check" /> : null}
               </li>
             ))}
-            {!visible.length ? <li className="empty">{options.length ? 'No match.' : emptyText}</li> : null}
+            {!shown.length ? <li className="empty">{options.length ? 'No match.' : emptyText}</li> : null}
+            {hidden > 0 ? <li className="empty">Showing {shown.length} of {visible.length}. Type to narrow the list.</li> : null}
           </ul>
         </div>
       ) : null}

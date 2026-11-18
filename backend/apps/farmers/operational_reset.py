@@ -65,7 +65,18 @@ from apps.source_data.models import (
     ProfitLossLine,
 )
 from apps.geography.models import District, Province, Ward
-from apps.inputs.models import Input, InputAllocation, InputAllocationLine, InputIssue
+from apps.inputs.models import (
+    Input,
+    InputAllocation,
+    InputAllocationLine,
+    InputIssue,
+    InputSupplyAllocation,
+    InputSupplyEvent,
+    InputSupplyFarmer,
+    InputSupplyLimit,
+    InputSupplyLine,
+    InputSupplyRequest,
+)
 from apps.production.models import FarmerProduction, GMBDelivery, ProductionPlan, SeasonalPlantingPlan
 from apps.programmes.models import (
     Crop,
@@ -106,6 +117,8 @@ def operational_models():
         ("Imported expense rows", Expense),
         # Batch stock history points at allocations, allocation lines and batch inputs (PROTECT).
         ("Request batch stock movements", BatchStockMovement),
+        # A confirmed submission points at the allocation it created (PROTECT).
+        ("Input supply allocation links", InputSupplyAllocation),
         ("Input allocation lines", InputAllocationLine),
         ("Input debts", InputDebt),
         ("Input issues", InputIssue),
@@ -127,6 +140,12 @@ def operational_models():
         ("Farmer subscriptions", FarmerSubscription),
         ("Farmer documents", FarmerDocument),
         ("Subscription reminders", Notification),
+        # Supply lines and farmer rows protect catalogue rows, farmers and farms.
+        ("Input supply lines", InputSupplyLine),
+        ("Input supply limits", InputSupplyLimit),
+        ("Input supply events", InputSupplyEvent),
+        ("Input supply farmers", InputSupplyFarmer),
+        ("Input supply requests", InputSupplyRequest),
         ("Registration crop allocations", RegistrationCropAllocation),
         ("Farmer change requests", FarmerChangeRequest),
         ("Farmer registration history", FarmerReviewEvent),

@@ -152,3 +152,29 @@ class ResetOperationalDataTests(TestCase):
         self.assertIn("removed Request batch stock movements: 2", text)
         self.assertIn("removed Request batch inputs: 1", text)
         self.assertIn("removed ARDA request batches: 1", text)
+
+    def test_confirm_deletes_input_supply_rows_that_protect_farms(self):
+        from apps.inputs.models import Input, InputSupplyFarmer, InputSupplyLine, InputSupplyRequest
+        from apps.programmes.models import CropInputRequirement
+
+        seed = Input.objects.create(name="Supply seed", category="SEED", unit="kg")
+        requirement = CropInputRequirement.objects.create(
+            crop=self.crop, programme=self.programme, input_category="SEED", input_product=seed,
+            group_name="Seed", item_name="Supply seed", rate_per_hectare="25", unit="kg", cost_per_unit="2",
+        )
+        supply = InputSupplyRequest.objects.create(
+            reference="LF-RESET", lead_farmer=self.user, programme=self.programme, season=self.season, crop=self.crop,
+        )
+        entry = InputSupplyFarmer.objects.create(request=supply, farmer=self.farmer, farm=self.farm, hectares="5.00")
+        InputSupplyLine.objects.create(
+            farmer_entry=entry, requirement=requirement, hectares="5.00", rate_per_hectare="25",
+            quantity="125", unit="kg", estimated_cost="250.00",
+        )
+
+        call_command("reset_operational_data", "--confirm")
+
+        self.assertFalse(InputSupplyRequest.objects.exists())
+        self.assertFalse(InputSupplyFarmer.objects.exists())
+        self.assertFalse(InputSupplyLine.objects.exists())
+        self.assertFalse(Farm.objects.exists())
+        self.assertTrue(CropInputRequirement.objects.filter(pk=requirement.pk).exists())

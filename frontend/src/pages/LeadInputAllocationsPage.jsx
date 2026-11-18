@@ -281,24 +281,7 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
         </div>
         {loading ? <div className="form-message">Loading the catalogue…</div> : null}
         {!loading && catalogue && !programmes.length ? <EmptyState icon="box" title="No programme catalogue">Admin has not configured varieties for {selectedSeason?.name}{seasonName ? ` ${seasonName}` : ''} yet.</EmptyState> : null}
-        {selectedCrop ? (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead><tr><th>Input</th><th>Variety</th><th>Unit</th><th className="num">Rate per hectare</th><th className="num">Unit price</th></tr></thead>
-              <tbody>
-                {varieties.map((variety) => (
-                  <tr key={variety.requirement}>
-                    <td>{variety.input_category_label}</td>
-                    <td>{variety.product_name}</td>
-                    <td>{variety.unit}</td>
-                    <td className="num">{qty(variety.rate_per_hectare)} {variety.unit}</td>
-                    <td className="num">{variety.pack_size ? `${money(variety.pack_price)} / ${qty(variety.pack_size)} ${variety.unit}` : money(variety.unit_price)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : null}
+        {selectedCrop ? <p className="card-sub">{varieties.length} varieties are in this catalogue. Add only the ones each farmer needs. The rate and price appear on the line you choose.</p> : null}
       </section>
 
       {limits.length ? (
@@ -329,8 +312,9 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
           <div className="card-head">
             <div>
               <h3>Your farmers</h3>
-              <p className="card-sub">Add every farmer on this submission. Search by name, or open the list. The farm fills in from the farmer you choose.</p>
+              <p className="card-sub">Search for a farmer and the farm fills in. Add the next farmer with the button here. Each farmer only lists the varieties you add.</p>
             </div>
+            {editable ? <button type="button" className="ghost-btn" onClick={() => editRows((current) => [...current, blankRow()])}><Icon name="plus" />Add farmer</button> : null}
           </div>
           {!farmers.length ? <EmptyState icon="users" title="No farmers in your cluster">Farmers you register appear here once they can receive inputs.</EmptyState> : null}
           {rows.map((row, index) => {
@@ -378,7 +362,7 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
                         const quantity = (Number(line.hectares) || 0) * Number(variety?.rate_per_hectare || 0)
                         const varietyOptions = varieties
                           .filter((item) => String(item.requirement) === String(line.requirement) || !usedVarieties.has(String(item.requirement)))
-                          .map((item) => ({ value: String(item.requirement), label: `${item.input_category_label} · ${item.product_name}` }))
+                          .map((item) => ({ value: String(item.requirement), label: `${item.input_category_label} · ${item.product_name} · ${qty(item.rate_per_hectare)} ${item.unit}/ha · ${item.pack_size ? `${money(item.pack_price)} / ${qty(item.pack_size)} ${item.unit}` : money(item.unit_price)}` }))
                         return (
                           <tr key={`${row.key}-${lineIndex}`}>
                             <td>
@@ -427,10 +411,6 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
               </div>
             )
           })}
-          {editable ? (
-            <button type="button" className="ghost-btn" onClick={() => editRows((current) => [...current, blankRow()])}><Icon name="plus" />Add farmer</button>
-          ) : null}
-
           <h3>{distributing ? 'Distribution' : 'Consolidated submission'}</h3>
           <p className="card-sub">Land allocated {qty(land)} ha. Varieties of one input type add together. Seed, fertilizer and chemicals share the same land, so the total is the largest of those.</p>
           {!preview.length ? <p className="card-sub">Choose a variety and enter hectares. The quantity is hectares times the catalogue rate, and the cost uses that programme's price.</p> : (
