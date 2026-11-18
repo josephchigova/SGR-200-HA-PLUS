@@ -100,7 +100,7 @@ describe('RegisterFarmerPage submission', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Step 2: Farm details/ }))
     fireEvent.change(screen.getByLabelText(/Total farm size/), { target: { value: '120' } })
-    fireEvent.click(screen.getByRole('button', { name: /Step 3: Crop allocation/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Step 3: Intended planting/ }))
     fireEvent.click(screen.getByRole('button', { name: /Save and continue/ }))
     fireEvent.click(await screen.findByRole('button', { name: /Review registration/ }))
     const again = screen.getByRole('button', { name: 'Submit for approval' })

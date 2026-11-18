@@ -4,7 +4,7 @@ import Icon from './Icon'
 
 // A dropdown with a search box. The value can only be one of the options, so a
 // province, district or ward is always chosen from the list and never typed in.
-function SearchSelect({ label, value, options, onChange, placeholder = 'Choose', disabled = false, loading = false, error = '', hint = '', required = false, emptyText = 'Nothing to choose from.' }) {
+function SearchSelect({ label, value, options, onChange, placeholder = 'Choose', disabled = false, loading = false, error = '', hint = '', required = false, emptyText = 'Nothing to choose from.', searchable = false }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [active, setActive] = useState(0)
@@ -65,7 +65,7 @@ function SearchSelect({ label, value, options, onChange, placeholder = 'Choose',
       </button>
       {open ? (
         <div className="search-select-panel">
-          {options.length > 7 ? (
+          {searchable || options.length > 7 ? (
             <input ref={search} type="search" value={query} placeholder={`Search ${label.toLowerCase()}`} aria-label={`Search ${label}`} onChange={(event) => { setQuery(event.target.value); setActive(0) }} onKeyDown={onKeyDown} />
           ) : <input ref={search} className="sr-only" aria-label={`${label} options`} readOnly onKeyDown={onKeyDown} />}
           <ul role="listbox" aria-labelledby={`${id}-label`}>

@@ -7,7 +7,10 @@ import LeadInputAllocationsPage from './LeadInputAllocationsPage'
 vi.mock('../api/client', () => ({ default: { get: vi.fn(), post: vi.fn() } }))
 
 const catalogue = {
-  farmers: [{ id: 7, name: 'Tendai Moyo', farms: [{ id: 9, name: 'Moyo Farm' }], crops: [{ crop: 5, hectares: '10.00' }] }],
+  farmers: [
+    { id: 7, name: 'Tendai Moyo', farms: [{ id: 9, name: 'Moyo Farm' }], crops: [{ crop: 5, hectares: '10.00' }] },
+    { id: 8, name: 'Rudo Ncube', farms: [{ id: 12, name: 'Ncube Farm' }], crops: [{ crop: 5, hectares: '6.00' }] },
+  ],
   programmes: [{
     programme: 2,
     programme_name: 'ARDA',
@@ -48,18 +51,30 @@ describe('LeadInputAllocationsPage', () => {
     render(<LeadInputAllocationsPage selectedSeason={{ id: 3, name: '2026/2027', status: 'ACTIVE' }} cropSeason="SUMMER" periodStatus="ready" />)
     fireEvent.change(await screen.findByRole('combobox', { name: 'Programme' }), { target: { value: '2' } })
     fireEvent.change(screen.getByRole('combobox', { name: 'Crop' }), { target: { value: '5' } })
+    fireEvent.click(await screen.findByRole('button', { name: /Farmer 1/ }))
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Tendai Moyo' }))
+    expect(screen.getByLabelText('Farm for farmer 1').value).toBe('Moyo Farm')
     fireEvent.click(screen.getByRole('button', { name: 'Add farmer' }))
-    fireEvent.change(screen.getByRole('combobox', { name: 'Farmer 1' }), { target: { value: '7' } })
+    fireEvent.click(screen.getByRole('button', { name: /Farmer 2/ }))
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Rudo Ncube' }))
+    expect(screen.getByLabelText('Farm for farmer 2').value).toBe('Ncube Farm')
     fireEvent.change(screen.getByRole('spinbutton', { name: 'Hectares of Mbizi for farmer 1' }), { target: { value: '8' } })
-    expect(screen.getAllByText('200 kg')).toHaveLength(2)
-    expect(screen.getAllByText('$400.00')).toHaveLength(2)
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Hectares of Mbizi for farmer 2' }), { target: { value: '4' } })
+    expect(screen.getByText('200 kg')).toBeTruthy()
+    expect(screen.getByText('100 kg')).toBeTruthy()
+    expect(screen.getByText('300 kg')).toBeTruthy()
+    expect(screen.getByText('$400.00')).toBeTruthy()
+    expect(screen.getByText('$600.00')).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Save draft' }))
     await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/input-supply-requests/', {
       programme: 2,
       season: 3,
       crop: 5,
       crop_season: 'SUMMER',
-      farmers: [{ farmer: 7, farm: 9, lines: [{ requirement: 11, hectares: '8' }] }],
+      farmers: [
+        { farmer: 7, farm: 9, lines: [{ requirement: 11, hectares: '8' }] },
+        { farmer: 8, farm: 12, lines: [{ requirement: 11, hectares: '4' }] },
+      ],
     }))
   })
 })

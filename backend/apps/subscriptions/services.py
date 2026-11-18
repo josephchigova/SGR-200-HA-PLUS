@@ -15,9 +15,9 @@ class SubscriptionPaymentService:
         return hectares, category, amount
 
     @classmethod
-    def farmer_subscription_details(cls, farmer, season_name=""):
-        """The subscription follows the crops allocated for the agricultural year, not the farm size."""
-        hectares = allocated_hectares([farmer.pk], season_name).get(farmer.pk, Decimal("0.00"))
+    def farmer_subscription_details(cls, farmer, season_name="", crop_season=""):
+        """The fee follows the hectares the farmer intends to plant, for one season when given."""
+        hectares = allocated_hectares([farmer.pk], season_name, crop_season).get(farmer.pk, Decimal("0.00"))
         return cls.subscription_details(hectares)
 
     @staticmethod
@@ -61,45 +61,90 @@ class SubscriptionPaymentService:
 HECTARES = DecimalField(max_digits=14, decimal_places=2)
 
 
-def allocated_hectares(farmer_ids, season_name):
-    """Crop hectares each farmer is allocated for one agricultural year, summed over every crop.
+def normalize_crop_season(value):
+    season = str(value or "").strip().upper()
+    return season if season in {"SUMMER", "WINTER"} else ""
 
-    A farmer with 50 ha of maize and 180 ha of sorghum has 230 ha and pays the 200 ha+ rate,
-    whatever the size of the farm. The crop allocation captured at registration is used. A farmer
-    with no allocation for that year falls back to the hectares on their production records.
+
+def _planting_query(model, farmer_ids, season_name, crop_season, farmer_field="farmer_id"):
+    query = model.objects.filter(**{f"{farmer_field}__in": farmer_ids, "season__name__iexact": season_name})
+    if not crop_season:
+        return query
+    if model.__name__ == "RegistrationCropAllocation":
+        return query.filter(crop__category=crop_season)
+    from django.db.models import Q
+
+    from apps.programmes.models import Crop
+
+    names = list(Crop.objects.filter(category=crop_season).values_list("name", flat=True))
+    if not names:
+        return query.none()
+    name_filter = Q()
+    for name in names:
+        name_filter |= Q(crop__iexact=name)
+    return query.filter(name_filter)
+
+
+def _planting_subquery(model, season_name, crop_season, farmer_ref):
+    query = model.objects.filter(farmer_id=OuterRef(farmer_ref), season__name__iexact=season_name)
+    if not crop_season:
+        return query
+    if model.__name__ == "RegistrationCropAllocation":
+        return query.filter(crop__category=crop_season)
+    from django.db.models import Q
+
+    from apps.programmes.models import Crop
+
+    names = list(Crop.objects.filter(category=crop_season).values_list("name", flat=True))
+    if not names:
+        return query.none()
+    name_filter = Q()
+    for name in names:
+        name_filter |= Q(crop__iexact=name)
+    return query.filter(name_filter)
+
+
+def allocated_hectares(farmer_ids, season_name, crop_season=""):
+    """Hectares each farmer intends to plant.
+
+    With no crop season, every crop in the agricultural year is added together. Summer or winter
+    uses only the crops of that season, so a change in one season changes only that subscription.
+    Registration is used first. A farmer with nothing recorded falls back to production records.
     """
     from apps.farmers.models import RegistrationCropAllocation
     from apps.production.models import FarmerProduction
 
     ids = list(farmer_ids)
+    crop_season = normalize_crop_season(crop_season)
     if not ids or not season_name:
         return {}
     totals = {
         row["farmer_id"]: row["total"] or Decimal("0.00")
-        for row in RegistrationCropAllocation.objects.filter(farmer_id__in=ids, season__name__iexact=season_name)
+        for row in _planting_query(RegistrationCropAllocation, ids, season_name, crop_season)
         .values("farmer_id").annotate(total=Sum("hectares"))
     }
     missing = [farmer_id for farmer_id in ids if farmer_id not in totals]
     if missing:
         for row in (
-            FarmerProduction.objects.filter(farmer_id__in=missing, season__name__iexact=season_name)
+            _planting_query(FarmerProduction, missing, season_name, crop_season)
             .values("farmer_id").annotate(total=Sum("contracted_hectares"))
         ):
             totals[row["farmer_id"]] = row["total"] or Decimal("0.00")
     return totals
 
 
-def allocated_hectares_expression(season_name, farmer_ref="pk"):
+def allocated_hectares_expression(season_name, farmer_ref="pk", crop_season=""):
     """The same figure as allocated_hectares, as a query expression on a Farmer queryset."""
     from apps.farmers.models import RegistrationCropAllocation
     from apps.production.models import FarmerProduction
 
+    crop_season = normalize_crop_season(crop_season)
     allocation = (
-        RegistrationCropAllocation.objects.filter(farmer_id=OuterRef(farmer_ref), season__name__iexact=season_name)
+        _planting_subquery(RegistrationCropAllocation, season_name, crop_season, farmer_ref)
         .values("farmer_id").annotate(total=Sum("hectares")).values("total")[:1]
     )
     production = (
-        FarmerProduction.objects.filter(farmer_id=OuterRef(farmer_ref), season__name__iexact=season_name)
+        _planting_subquery(FarmerProduction, season_name, crop_season, farmer_ref)
         .values("farmer_id").annotate(total=Sum("contracted_hectares")).values("total")[:1]
     )
     return Coalesce(

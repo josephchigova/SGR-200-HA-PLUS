@@ -13,7 +13,7 @@ import { EmptyState, Pill, errorMessage } from './ui'
 const STATUS = { UNPAID: ['Not paid', 'bad'], PARTIAL: ['Partly paid', 'warn'] }
 const money = (value) => Number(value || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 
-export default function SubscriptionDeadlines({ seasonName }) {
+export default function SubscriptionDeadlines({ seasonName, cropSeason = '' }) {
   const { can, profile } = useAuth()
   const canSet = can('subscriptions', 'edit')
   const showMoney = profile?.role !== 'lead_farmer'
@@ -30,7 +30,7 @@ export default function SubscriptionDeadlines({ seasonName }) {
     if (!seasonName) return undefined
     let active = true
     Promise.all([
-      apiClient.get('/farmer-subscriptions/overdue/', { params: { season_name: seasonName } }),
+      apiClient.get('/farmer-subscriptions/overdue/', { params: { season_name: seasonName, crop_season: cropSeason || undefined } }),
       apiClient.get('/notifications/inbox/', { params: { kind: 'SUBSCRIPTION', limit: 100 } }),
     ]).then(([overdue, inbox]) => {
       if (!active) return
@@ -42,7 +42,7 @@ export default function SubscriptionDeadlines({ seasonName }) {
       if (active) setError(errorMessage(requestError, 'Overdue subscriptions could not be loaded.'))
     })
     return () => { active = false }
-  }, [seasonName, token])
+  }, [cropSeason, seasonName, token])
 
   const saveDue = async (event) => {
     event.preventDefault()

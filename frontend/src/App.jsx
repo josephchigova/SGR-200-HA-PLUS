@@ -494,7 +494,7 @@ function Workspace() {
             <Route path="/clusters" element={<Guard module="clusters"><LeadFarmersPage selectedSeason={selectedSeason} /></Guard>} />
             <Route path="/lead-farmers" element={<Navigate to="/clusters" replace />} />
             <Route path="/verification" element={<Guard module="verification"><VerificationPage /></Guard>} />
-            <Route path="/subscriptions" element={<Guard module="subscriptions"><SubscriptionsPage selectedSeason={selectedSeason} /></Guard>} />
+            <Route path="/subscriptions" element={<Guard module="subscriptions"><SubscriptionsPage selectedSeason={selectedSeason} cropSeason={cropSeason} /></Guard>} />
             <Route path="/crops" element={<Guard module="crops"><CropCataloguePage /></Guard>} />
             <Route path="/programmes" element={<Guard module="programmes"><ProgrammesPage {...period} /></Guard>} />
             <Route path="/arda-requests" element={<Guard module="arda"><InputRequestsPage {...period} /></Guard>} />

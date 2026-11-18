@@ -28,7 +28,7 @@ from apps.production.seasonal_services import SeasonalSubscriptionService
 from .models import FarmerSubscription, Subscription, SubscriptionPayment
 from .payments import receive_subscription_payment
 from .serializers import FarmerSubscriptionSerializer, FarmerSubscriptionStatusSerializer, SubscriptionSerializer
-from .services import SubscriptionPaymentService, allocated_hectares, allocated_hectares_expression
+from .services import SubscriptionPaymentService, allocated_hectares, allocated_hectares_expression, normalize_crop_season
 
 
 class FarmerSubscriptionPagination(PageNumberPagination):
@@ -56,18 +56,28 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
         return scope_farmers(farmers, user)
 
     @staticmethod
-    def with_season_payment_status(farmers, season):
+    def with_season_payment_status(farmers, season, crop_season=""):
         money_field = DecimalField(max_digits=14, decimal_places=2)
+        crop_season = normalize_crop_season(crop_season)
         season_payments = FarmerSubscription.objects.filter(
             farmer_id=OuterRef("pk"),
             season__iexact=season,
+            crop_season=crop_season,
         ).order_by("pk").values("paid_amount")[:1]
+        paid = Subquery(season_payments, output_field=money_field)
+        if crop_season:
+            legacy_payments = FarmerSubscription.objects.filter(
+                farmer_id=OuterRef("pk"),
+                season__iexact=season,
+                crop_season="",
+            ).order_by("pk").values("paid_amount")[:1]
+            paid = Coalesce(paid, Subquery(legacy_payments, output_field=money_field))
 
         return farmers.annotate(
-            # The rate follows the crop hectares allocated for this agricultural year.
-            summary_arable_hectares=allocated_hectares_expression(season),
+            # The rate follows the hectares the farmer intends to plant for this season.
+            summary_arable_hectares=allocated_hectares_expression(season, crop_season=crop_season),
             summary_paid_amount=Coalesce(
-                Subquery(season_payments, output_field=money_field),
+                paid,
                 Value(Decimal("0.00")),
                 output_field=money_field,
             ),
@@ -108,7 +118,8 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
         if not season:
             return super().list(request, *args, **kwargs)
 
-        farmers = Farmer.objects.annotate(allocated_hectares=allocated_hectares_expression(season))
+        crop_season = normalize_crop_season(request.query_params.get("crop_season"))
+        farmers = Farmer.objects.annotate(allocated_hectares=allocated_hectares_expression(season, crop_season=crop_season))
         farmers = self.scope_farmers_to_user(farmers, request.user)
 
         farmer_id = request.query_params.get("farmer") or request.query_params.get("farmer_id")
@@ -130,17 +141,14 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
         page = self.paginate_queryset(farmers)
         page_farmers = list(page if page is not None else farmers)
         farmer_ids = [farmer.pk for farmer in page_farmers]
-        subscriptions = {
-            subscription.farmer_id: subscription
-            for subscription in FarmerSubscription.objects.filter(
-                farmer_id__in=farmer_ids,
-                season__iexact=season,
-            )
-        }
+        stored = list(FarmerSubscription.objects.filter(farmer_id__in=farmer_ids, season__iexact=season))
+        subscriptions = {(subscription.farmer_id, subscription.crop_season): subscription for subscription in stored}
 
         rows = []
         for farmer in page_farmers:
-            subscription = subscriptions.get(farmer.pk)
+            subscription = subscriptions.get((farmer.pk, crop_season))
+            if subscription is None and crop_season:
+                subscription = subscriptions.get((farmer.pk, ""))
             hectares, category, expected_amount = SubscriptionPaymentService.subscription_details(farmer.allocated_hectares)
             paid_amount = subscription.paid_amount if subscription else Decimal("0.00")
             summary = SubscriptionPaymentService.calculate_display_summary(expected_amount, paid_amount)
@@ -183,7 +191,8 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
             return Response({"season": ["A season is required."]}, status=status.HTTP_400_BAD_REQUEST)
 
         farmers = self.scope_farmers_to_user(Farmer.objects.all(), request.user)
-        summary = self.with_season_payment_status(farmers, season).aggregate(
+        crop_season = normalize_crop_season(request.query_params.get("crop_season"))
+        summary = self.with_season_payment_status(farmers, season, crop_season).aggregate(
             total_farmers=Count("pk"),
             paid=Count("pk", filter=Q(summary_payment_status="PAID")),
             partial=Count("pk", filter=Q(summary_payment_status="PARTIAL")),
@@ -229,8 +238,18 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
         today = timezone.localdate()
         farmers = list(self.scope_farmers_to_user(Farmer.objects.filter(verification_status__in=[Farmer.STATUS_VERIFIED, Farmer.STATUS_APPROVED], is_active=True), request.user).order_by("surname", "first_name"))
         ids = [farmer.pk for farmer in farmers]
-        paid = dict(FarmerSubscription.objects.filter(farmer_id__in=ids, season__iexact=season.name).values_list("farmer_id", "paid_amount"))
-        hectares = allocated_hectares(ids, season.name)
+        crop_season = normalize_crop_season(request.query_params.get("crop_season"))
+        paid = {}
+        legacy_paid = {}
+        for farmer_id, recorded_season, amount in FarmerSubscription.objects.filter(farmer_id__in=ids, season__iexact=season.name).values_list("farmer_id", "crop_season", "paid_amount"):
+            if recorded_season == crop_season:
+                paid[farmer_id] = amount
+            elif recorded_season == "":
+                legacy_paid[farmer_id] = amount
+        if crop_season:
+            for farmer_id, amount in legacy_paid.items():
+                paid.setdefault(farmer_id, amount)
+        hectares = allocated_hectares(ids, season.name, crop_season)
         private = hides_money(request.user)
         rows = []
         for farmer in farmers:
@@ -273,6 +292,7 @@ class FarmerSubscriptionViewSet(viewsets.ModelViewSet):
             notes=request.data.get("notes") or "",
             idempotency_key=request.data.get("idempotency_key") or request.headers.get("Idempotency-Key") or "",
             user=request.user,
+            crop_season=request.data.get("crop_season") or "",
         )
         payload = FarmerSubscriptionSerializer(subscription).data
         payload["created"] = created

@@ -24,7 +24,7 @@ import {
 const STEPS = [
   { key: 'farmer', label: 'Personal details', hint: 'Who is being registered' },
   { key: 'farm', label: 'Farm details', hint: 'Location and land' },
-  { key: 'crops', label: 'Crop allocation', hint: 'Planned crops' },
+  { key: 'crops', label: 'Intended planting', hint: 'Hectares this season' },
   { key: 'kyc', label: 'KYC documents', hint: 'Upload and submit' },
 ]
 
@@ -70,7 +70,7 @@ function cropProblemsFor(rows, limit) {
     }
   })
   Object.values(totals).forEach((total) => {
-    if (total > limit) problems.push(`Allocated hectares (${total} ha) exceed the ${limit} ha of arable land.`)
+    if (total > limit) problems.push(`Intended planting (${total} ha) exceeds the ${limit} ha of arable land.`)
   })
   return problems
 }
@@ -645,15 +645,15 @@ function RegisterFarmerPage() {
           <div className="card-head">
             <div>
               <p className="eyebrow">Step 3 of {steps.length}</p>
-              <h3>Crop allocation</h3>
-              <p className="card-sub">Add the crops this farmer will grow, or leave the list empty for the administrator. Allocated hectares cannot exceed the {arable.toLocaleString('en-US', { maximumFractionDigits: 2 })} ha of arable land in a season.</p>
+              <h3>Intended planting</h3>
+              <p className="card-sub">For each season, enter the hectares of the {arable.toLocaleString('en-US', { maximumFractionDigits: 2 })} ha of arable land this farmer intends to plant. It can change next season, and that season's subscription follows it.</p>
             </div>
             <button type="button" className="ghost-btn small" onClick={() => setAllocations((current) => [...current, { crop: options.crops[0] ? String(options.crops[0].id) : '', season: options.seasons[0] ? String(options.seasons[0].id) : '', hectares: '' }])}><Icon name="plus" />Add crop</button>
           </div>
           {allocations.length ? (
             <div className="table-wrap">
               <table className="data-table">
-                <thead><tr><th>Crop</th><th>Season</th><th>Allocated hectares</th><th></th></tr></thead>
+                <thead><tr><th>Crop</th><th>Season</th><th>Intends to plant (ha)</th><th></th></tr></thead>
                 <tbody>
                   {allocations.map((row, index) => (
                     <tr key={`${index}-${row.crop}`}>
@@ -678,7 +678,7 @@ function RegisterFarmerPage() {
             </div>
           ) : <p className="card-sub">No crops yet. You can continue and add them later.</p>}
           {cropProblems.length ? <div className="form-message error" role="alert">{cropProblems[0]}</div> : null}
-          <div className="total-strip"><span>Allocated this step</span><strong>{allocations.reduce((sum, row) => sum + (Number(row.hectares) || 0), 0).toLocaleString('en-US', { maximumFractionDigits: 2 })} ha</strong></div>
+          <div className="total-strip"><span>Intends to plant</span><strong>{allocations.reduce((sum, row) => sum + (Number(row.hectares) || 0), 0).toLocaleString('en-US', { maximumFractionDigits: 2 })} ha</strong></div>
           <div className="wizard-actions">
             <button type="button" className="ghost-btn" onClick={() => setStep(1)}><Icon name="arrowLeft" />Back</button>
             <button type="button" className="primary-btn" disabled={busy || Boolean(cropProblems.length)} onClick={continueFromCrops}>{busy ? 'Saving…' : 'Save and continue'}<Icon name="arrowRight" /></button>
@@ -716,13 +716,13 @@ function RegisterFarmerPage() {
               ['Total farm size', `${form.total_hectares} ha`], ['Arable irrigated', `${form.irrigated_hectares} ha`], ['Arable dryland', `${form.dryland_hectares} ha`],
               ['Coordinates', form.latitude !== '' ? `${form.latitude}, ${form.longitude}` : 'Not recorded'],
             ]} />
-            <ReviewBlock title="Crops" onEdit={() => goTo(2)} rows={allocations.length ? allocations.map((row) => [nameOf(options.crops, row.crop), `${row.hectares || 0} ha · ${nameOf(options.seasons, row.season)}`]) : [['Crops', (uploadsKyc ? 'Left for the administrator' : 'None recorded yet')]]} />
+            <ReviewBlock title="Intended planting" onEdit={() => goTo(2)} rows={allocations.length ? allocations.map((row) => [nameOf(options.crops, row.crop), `${row.hectares || 0} ha · ${nameOf(options.seasons, row.season)}`]) : [['Intended planting', (uploadsKyc ? 'Left for the administrator' : 'None recorded yet')]]} />
             {uploadsKyc
               ? <ReviewBlock title="Documents" onEdit={() => goTo(3)} rows={documents.map((document) => [document.label, document.file_name])} />
               : <ReviewBlock title="KYC documents" rows={[['Verification', 'Checked in person by the administrator. Nothing is uploaded.']]} />}
           </div>
           <div className="wizard-actions">
-            <button type="button" className="ghost-btn" onClick={() => { setReviewing(false); if (!uploadsKyc) setStep(2) }}><Icon name="arrowLeft" />{uploadsKyc ? 'Back to documents' : 'Back to crops'}</button>
+            <button type="button" className="ghost-btn" onClick={() => { setReviewing(false); if (!uploadsKyc) setStep(2) }}><Icon name="arrowLeft" />{uploadsKyc ? 'Back to documents' : 'Back to intended planting'}</button>
             <span className="card-sub">{submitReason || (dirty ? 'Unsaved details are saved when you submit.' : uploadsKyc ? 'All required documents are uploaded.' : 'No KYC files are required. The documents were checked in person.')}</span>
             <button type="button" className="primary-btn" disabled={busy || Boolean(submitReason)} onClick={submit}>{busy ? (uploadsKyc ? 'Submitting…' : 'Completing…') : (uploadsKyc ? 'Submit for approval' : 'Complete registration')}<Icon name="check" /></button>
           </div>

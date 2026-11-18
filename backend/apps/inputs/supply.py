@@ -317,7 +317,16 @@ def build_entries(*, lead, programme, season, crop, farmers, exclude_request_id=
             })
 
         by_category = _category_sums(lines)
-        limit = crop_hectares(farmer, crop, season)
+        registered = [row for row in farmer.crop_allocations.all() if row.season_id == season.pk and row.crop_id == crop.pk]
+        if registered:
+            limit = sum((Decimal(row.hectares) for row in registered), Decimal("0.00"))
+        elif any(row.season_id == season.pk for row in farmer.crop_allocations.all()):
+            raise SupplyError(
+                f"{farmer.full_name} has no intended planting recorded for {crop.name} in {season.name}. "
+                "Record it on the farmer's registration before allocating inputs."
+            )
+        else:
+            limit = crop_hectares(farmer, crop, season)
         used = hectares_in_use(farmer, crop, season, exclude_request_id=exclude_request_id)
         ceiling = Decimal(limit) - used if limit is not None else None
         for category, area in by_category.items():
@@ -325,7 +334,7 @@ def build_entries(*, lead, programme, season, crop, farmers, exclude_request_id=
             if ceiling is not None and area > ceiling:
                 allowance = Decimal(limit).quantize(TWO)
                 raise SupplyError(
-                    f"{farmer.full_name} has {allowance} ha of {crop.name} for {season.name}. "
+                    f"{farmer.full_name} intends to plant {allowance} ha of {crop.name} for {season.name}. "
                     f"{used.quantize(TWO)} ha is already allocated or in another submission, "
                     f"so {area} ha of {label.lower()} is too much."
                 )

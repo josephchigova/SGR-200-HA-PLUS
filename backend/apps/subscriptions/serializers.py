@@ -75,6 +75,7 @@ class FarmerSubscriptionSerializer(MoneyPrivacyMixin, serializers.ModelSerialize
         subscription, created = FarmerSubscription.objects.update_or_create(
             farmer=farmer,
             season=season,
+            crop_season="",
             defaults={
                 "category": category,
                 "expected_amount": expected_amount,

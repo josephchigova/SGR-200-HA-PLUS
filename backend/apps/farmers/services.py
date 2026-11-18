@@ -405,7 +405,7 @@ def replace_crop_allocations(farmer, rows):
         totals[season.pk] = totals.get(season.pk, Decimal("0")) + hectares
         if totals[season.pk] > limit:
             raise ValueError(
-                f"Allocated hectares for {season.name} ({totals[season.pk]} ha) exceed the farm's arable hectares ({limit} ha)."
+                f"Intended planting for {season.name} ({totals[season.pk]} ha) exceeds the farm's arable hectares ({limit} ha)."
             )
         cleaned.append((crop, season, hectares))
     farmer.crop_allocations.all().delete()

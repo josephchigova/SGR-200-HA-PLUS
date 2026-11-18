@@ -27,12 +27,15 @@ class FarmerSubscription(models.Model):
     outstanding_amount = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     payment_status = models.CharField(max_length=40, blank=True)
     season = models.CharField(max_length=80, default="2026/2027")
+    # Summer and winter each have their own fee, from the hectares the farmer intends to plant
+    # in that season. Blank keeps an older payment that covered the whole agricultural year.
+    crop_season = models.CharField(max_length=20, blank=True, default="")
     payment_date = models.DateField(null=True, blank=True)
 
     class Meta:
         ordering = ["farmer__surname", "farmer__first_name"]
         constraints = [
-            models.UniqueConstraint(fields=["farmer", "season"], name="unique_farmer_subscription_season")
+            models.UniqueConstraint(fields=["farmer", "season", "crop_season"], name="unique_farmer_subscription_season")
         ]
 
 

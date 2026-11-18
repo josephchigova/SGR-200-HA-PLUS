@@ -291,8 +291,20 @@ def _subscription_roster(spec, params, year_name):
 
     from apps.subscriptions.services import allocated_hectares_expression
 
+    from apps.subscriptions.services import normalize_crop_season
+
     money = DecimalField(max_digits=14, decimal_places=2)
-    paid = FarmerSubscription.objects.filter(farmer_id=OuterRef("pk"), season__iexact=year_name).order_by("pk")
+    crop_season = normalize_crop_season(params.crop_season)
+    paid = FarmerSubscription.objects.filter(farmer_id=OuterRef("pk"), season__iexact=year_name, crop_season=crop_season).order_by("pk")
+    legacy_paid = FarmerSubscription.objects.filter(farmer_id=OuterRef("pk"), season__iexact=year_name, crop_season="").order_by("pk")
+    paid_amount = Coalesce(Subquery(paid.values("paid_amount")[:1], output_field=money), Value(Decimal("0.00")), output_field=money)
+    if crop_season:
+        paid_amount = Coalesce(
+            Subquery(paid.values("paid_amount")[:1], output_field=money),
+            Subquery(legacy_paid.values("paid_amount")[:1], output_field=money),
+            Value(Decimal("0.00")),
+            output_field=money,
+        )
     farmers = scope_queryset(Farmer.objects.all(), params.user, "province_id", "district_id", "cluster_id")
     if params.province_id:
         farmers = farmers.filter(province_id=params.province_id)
@@ -307,10 +319,10 @@ def _subscription_roster(spec, params, year_name):
     if params.farmer:
         farmers = _filter_farmer(farmers, "", params.farmer)
     farmers = farmers.annotate(
-        paid_amount=Coalesce(Subquery(paid.values("paid_amount")[:1], output_field=money), Value(Decimal("0.00")), output_field=money),
+        paid_amount=paid_amount,
         payment_date=Subquery(paid.values("payment_date")[:1]),
-        # The rate follows the crop hectares allocated for the year, not the farm size.
-        summary_arable=allocated_hectares_expression(year_name),
+        # The rate follows the hectares the farmer intends to plant for the selected season.
+        summary_arable=allocated_hectares_expression(year_name, crop_season=crop_season),
     ).annotate(
         expected_amount=Case(
             When(summary_arable__gte=SeasonalSubscriptionService.LARGE_FARM_THRESHOLD, then=Value(SeasonalSubscriptionService.LARGE_FARM_SUBSCRIPTION_AMOUNT)),
@@ -343,7 +355,7 @@ def _subscription_roster(spec, params, year_name):
         province_name=Coalesce(F("province__name"), Value("Not recorded")),
         district_name=Coalesce(F("district__name"), Value("Not recorded")),
         season=Value(year_name),
-        crop_season=Value("Shared by Summer and Winter"),
+        crop_season=Value({"SUMMER": "Summer", "WINTER": "Winter"}.get(crop_season, "Shared by Summer and Winter")),
         payment_status=F("report_status"),
     ).values(
         "id", "farmer_name", "membership_number", "national_id", "phone_primary", "province_name",

@@ -18,7 +18,7 @@ from .services import SubscriptionPaymentService
 
 
 @transaction.atomic
-def receive_subscription_payment(*, farmer, season, amount, payment_date, method, reference="", notes="", idempotency_key, user):
+def receive_subscription_payment(*, farmer, season, amount, payment_date, method, reference="", notes="", idempotency_key, user, crop_season=""):
     amount = Decimal(str(amount))
     if amount <= 0:
         raise ValidationError({"amount": ["Enter an amount greater than zero."]})
@@ -35,13 +35,22 @@ def receive_subscription_payment(*, farmer, season, amount, payment_date, method
     if existing:
         return existing.subscription, existing, False
 
-    _, category, expected_amount = SubscriptionPaymentService.farmer_subscription_details(farmer, season)
-    subscription, _created = FarmerSubscription.objects.get_or_create(
+    from .services import normalize_crop_season
+
+    crop_season = normalize_crop_season(crop_season)
+    _, category, expected_amount = SubscriptionPaymentService.farmer_subscription_details(farmer, season, crop_season)
+    subscription, created = FarmerSubscription.objects.get_or_create(
         farmer=farmer,
         season=season,
+        crop_season=crop_season,
         defaults={"category": category, "expected_amount": expected_amount, "paid_amount": Decimal("0.00"), "outstanding_amount": expected_amount, "payment_status": "UNPAID"},
     )
     subscription = FarmerSubscription.objects.select_for_update().get(pk=subscription.pk)
+    if created and crop_season and subscription.paid_amount == 0:
+        legacy = FarmerSubscription.objects.filter(farmer=farmer, season__iexact=season, crop_season="").exclude(pk=subscription.pk).first()
+        if legacy and legacy.paid_amount:
+            subscription.paid_amount = legacy.paid_amount
+            subscription.payment_date = subscription.payment_date or legacy.payment_date
     subscription.expected_amount = expected_amount
     subscription.category = category
     outstanding = expected_amount - subscription.paid_amount

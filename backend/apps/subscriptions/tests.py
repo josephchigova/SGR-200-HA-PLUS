@@ -177,6 +177,33 @@ class SubscriptionTests(TestCase):
         self.assertEqual(small.data["expected_amount"], "500.00")
         self.assertEqual(small.data["category"], "UNDER_200HA")
 
+    def test_each_season_subscription_follows_what_the_farmer_intends_to_plant(self):
+        from datetime import date
+
+        from apps.farmers.models import RegistrationCropAllocation
+        from apps.programmes.models import Crop, Season
+
+        season = Season.objects.create(name="Planting seasons", start_date=date(2026, 10, 1), end_date=date(2027, 9, 30))
+        maize = Crop.objects.create(name="Seasonal maize", category=Crop.CATEGORY_SUMMER)
+        wheat = Crop.objects.create(name="Seasonal wheat", category=Crop.CATEGORY_WINTER)
+        RegistrationCropAllocation.objects.create(farmer=self.farmer, crop=maize, season=season, hectares="220.00")
+        winter_row = RegistrationCropAllocation.objects.create(farmer=self.farmer, crop=wheat, season=season, hectares="30.00")
+
+        summer = self.client.get(reverse("farmer-subscription-list"), {"season_name": season.name, "crop_season": "SUMMER"}).data["results"][0]
+        winter = self.client.get(reverse("farmer-subscription-list"), {"season_name": season.name, "crop_season": "WINTER"}).data["results"][0]
+        self.assertEqual(summer["allocated_hectares"], "220.00")
+        self.assertEqual(summer["expected_amount"], "1000.00")
+        self.assertEqual(winter["allocated_hectares"], "30.00")
+        self.assertEqual(winter["expected_amount"], "500.00")
+
+        winter_row.hectares = "210.00"
+        winter_row.save(update_fields=["hectares"])
+        changed = self.client.get(reverse("farmer-subscription-list"), {"season_name": season.name, "crop_season": "WINTER"}).data["results"][0]
+        unchanged = self.client.get(reverse("farmer-subscription-list"), {"season_name": season.name, "crop_season": "SUMMER"}).data["results"][0]
+        self.assertEqual(changed["allocated_hectares"], "210.00")
+        self.assertEqual(changed["expected_amount"], "1000.00")
+        self.assertEqual(unchanged["expected_amount"], "1000.00")
+
     def test_production_records_are_used_when_there_is_no_allocation(self):
         from datetime import date
 

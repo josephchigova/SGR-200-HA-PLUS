@@ -29,12 +29,14 @@ const errorMessage = (error) => {
   return 'Unable to complete the subscription request.'
 }
 
-function SubscriptionsPage({ selectedSeason }) {
+function SubscriptionsPage({ selectedSeason, cropSeason = '' }) {
   const { can, profile } = useAuth()
   const canReceive = can('subscriptions', 'create')
   // Lead farmers follow progress as a percentage. The server sends them no amounts.
   const showMoney = profile?.role !== 'lead_farmer'
   const seasonName = selectedSeason?.name || ''
+  const plantingSeason = cropSeason === 'SUMMER' || cropSeason === 'WINTER' ? cropSeason : ''
+  const plantingLabel = plantingSeason === 'WINTER' ? 'Winter' : plantingSeason === 'SUMMER' ? 'Summer' : ''
   const [rows, setRows] = useState([])
   const [summary, setSummary] = useState(null)
   const [loadedSummaryKey, setLoadedSummaryKey] = useState('')
@@ -70,9 +72,9 @@ function SubscriptionsPage({ selectedSeason }) {
       if (data.paymentDate) setPaymentDate(data.paymentDate)
     },
   })
-  const requestKey = JSON.stringify([seasonName, page, debouncedSearch, reloadKey])
-  const summaryRequestKey = JSON.stringify([seasonName, reloadKey])
-  const farmerStatusKey = farmerId && seasonName ? `${seasonName}:${farmerId}` : ''
+  const requestKey = JSON.stringify([seasonName, plantingSeason, page, debouncedSearch, reloadKey])
+  const summaryRequestKey = JSON.stringify([seasonName, plantingSeason, reloadKey])
+  const farmerStatusKey = farmerId && seasonName ? `${seasonName}:${plantingSeason}:${farmerId}` : ''
   const loading = Boolean(seasonName && loadedRequestKey !== requestKey)
   const summaryLoading = Boolean(seasonName && loadedSummaryKey !== summaryRequestKey)
   const currentSummary = seasonName && !summaryLoading ? summary : null
@@ -97,6 +99,7 @@ function SubscriptionsPage({ selectedSeason }) {
 
     let active = true
     const params = new URLSearchParams({ season: seasonName })
+    if (plantingSeason) params.set('crop_season', plantingSeason)
     apiClient.get(`/farmer-subscriptions/summary/?${params.toString()}`)
       .then((response) => {
         if (!active) return
@@ -113,7 +116,7 @@ function SubscriptionsPage({ selectedSeason }) {
     return () => {
       active = false
     }
-  }, [reloadKey, seasonName, summaryRequestKey])
+  }, [plantingSeason, reloadKey, seasonName, summaryRequestKey])
 
   useEffect(() => {
     if (!seasonName) {
@@ -126,6 +129,7 @@ function SubscriptionsPage({ selectedSeason }) {
       page: String(page),
       page_size: String(PAGE_SIZE),
     })
+    if (plantingSeason) params.set('crop_season', plantingSeason)
     if (debouncedSearch) params.set('search', debouncedSearch)
 
     apiClient.get(`/farmer-subscriptions/?${params.toString()}`)
@@ -149,7 +153,7 @@ function SubscriptionsPage({ selectedSeason }) {
     return () => {
       active = false
     }
-  }, [debouncedSearch, page, reloadKey, requestKey, seasonName])
+  }, [debouncedSearch, page, plantingSeason, reloadKey, requestKey, seasonName])
 
   useEffect(() => {
     if (!farmerId || !seasonName) {
@@ -158,6 +162,7 @@ function SubscriptionsPage({ selectedSeason }) {
 
     let active = true
     const params = new URLSearchParams({ season: seasonName, farmer: farmerId, page_size: '1' })
+    if (plantingSeason) params.set('crop_season', plantingSeason)
     apiClient.get(`/farmer-subscriptions/?${params.toString()}`)
       .then((response) => {
         if (!active) return
@@ -177,7 +182,7 @@ function SubscriptionsPage({ selectedSeason }) {
     return () => {
       active = false
     }
-  }, [farmerId, farmerStatusKey, seasonName])
+  }, [farmerId, farmerStatusKey, plantingSeason, seasonName])
 
   const submitPayment = async (event) => {
     event.preventDefault()
@@ -202,6 +207,7 @@ function SubscriptionsPage({ selectedSeason }) {
         reference: paymentReference,
         notes: paymentNotes,
         season: seasonName,
+        crop_season: plantingSeason,
         idempotency_key: `${farmerId}-${seasonName}-${paymentDate}-${paidAmount}-${paymentReference}-${Date.now()}`,
       })
       setFarmerStatus((current) => ({ ...current, ...response.data }))
@@ -224,12 +230,12 @@ function SubscriptionsPage({ selectedSeason }) {
         <div>
           <p className="eyebrow">{seasonName || 'Season unavailable'}</p>
           <h3>Subscriptions</h3>
-          <p className="period-note">Annual membership subscriptions. Payments belong to the agricultural year and are shared by Summer and Winter.{canReceive ? '' : ' Payments are recorded by the finance team.'}{showMoney ? '' : ' You see each farmer’s progress as a percentage.'}</p>
+          <p className="period-note">The fee follows the hectares a farmer intends to plant{plantingLabel ? ` in ${plantingLabel}` : ''}. Change that figure on the farmer's registration and this season's subscription changes with it. Summer and winter are calculated separately.{canReceive ? '' : ' Payments are recorded by the finance team.'}{showMoney ? '' : ' You see each farmer’s progress as a percentage.'}</p>
         </div>
         <span className="subscription-record-count">{visibleCount.toLocaleString()} farmers</span>
       </header>
 
-      <SubscriptionDeadlines seasonName={seasonName} />
+      <SubscriptionDeadlines seasonName={seasonName} cropSeason={plantingSeason} />
 
       {!seasonName ? <div className="form-message">Choose a season to view payment statuses.</div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
@@ -246,7 +252,7 @@ function SubscriptionsPage({ selectedSeason }) {
       {canReceive ? <form className="workflow-form subscription-payment-form" onSubmit={submitPayment}>
         <div className="workflow-heading">
           <h4>Record or update payment</h4>
-          <span className="subscription-season-label">{seasonName || 'No season selected'}</span>
+          <span className="subscription-season-label">{[seasonName, plantingLabel].filter(Boolean).join(' · ') || 'No season selected'}</span>
         </div>
         <div className="workflow-fields">
           <FarmerAutocomplete
@@ -275,10 +281,10 @@ function SubscriptionsPage({ selectedSeason }) {
             />
           </label>
           <label className="form-field">
-            Allocated crop hectares
+            Intends to plant (ha)
             <input
-              aria-label="Allocated crop hectares"
-              title="All crops allocated to this farmer for the agri year, summer and winter together. 200 ha or more is 200HA+."
+              aria-label="Intends to plant (ha)"
+              title="Hectares this farmer intends to plant in the selected season. 200 ha or more is 200HA+."
               value={farmerStatusLoading ? '' : currentFarmerStatus?.allocated_hectares ?? currentFarmerStatus?.farmer_arable_hectares ?? ''}
               readOnly
             />
@@ -364,7 +370,7 @@ function SubscriptionsPage({ selectedSeason }) {
               <thead>
                 <tr>
                   <th>Farmer</th>
-                  <th title="All crops allocated for the agri year">Allocated ha</th>
+                  <th title="Hectares the farmer intends to plant in this season">Intends to plant (ha)</th>
                   <th>Category</th>
                   {showMoney ? <><th>Expected</th><th>Paid to date</th><th>Balance</th></> : <th>Subscription compliance</th>}
                   <th>Status</th>
