@@ -20,5 +20,5 @@ export const when = (value) => (value ? new Date(value).toLocaleString('en-GB', 
 export const canEditSubmission = (request) => {
   if (!request) return true
   if (request.stage === 'DISTRIBUTION') return request.status === 'LIMITS_SET' || request.status === 'RETURNED'
-  return request.status === 'DRAFT' || request.status === 'RETURNED'
+  return request.status === 'DRAFT' || request.status === 'SUBMITTED' || request.status === 'RETURNED'
 }

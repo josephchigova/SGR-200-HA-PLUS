@@ -190,7 +190,13 @@ def _context(*, programme_id, season_id, crop_id, crop_season=None):
 def _can_edit(supply):
     if supply.stage == InputSupplyRequest.STAGE_DISTRIBUTION:
         return supply.status in (InputSupplyRequest.STATUS_LIMITS_SET, InputSupplyRequest.STATUS_RETURNED)
-    return supply.status in (InputSupplyRequest.STATUS_DRAFT, InputSupplyRequest.STATUS_RETURNED)
+    # A submitted request stays open so the lead farmer can add the other farmers
+    # until Admin sets the hectare limits. One farmer does not close the programme.
+    return supply.status in (
+        InputSupplyRequest.STATUS_DRAFT,
+        InputSupplyRequest.STATUS_SUBMITTED,
+        InputSupplyRequest.STATUS_RETURNED,
+    )
 
 
 def hectares_in_use(farmer, crop, season, exclude_request_id=None):
@@ -470,6 +476,8 @@ def save_draft(*, lead, programme_id, season_id, crop_id, farmers, crop_season=N
         _event(supply, InputSupplyEvent.SAVED, lead, "Draft saved.")
     elif supply.status == InputSupplyRequest.STATUS_RETURNED:
         _event(supply, InputSupplyEvent.CORRECTED, lead, "Allocations updated after Admin asked for corrections.")
+    elif supply.status == InputSupplyRequest.STATUS_SUBMITTED:
+        _event(supply, InputSupplyEvent.CORRECTED, lead, "Another farmer was added to the submitted request.")
     elif supply.stage == InputSupplyRequest.STAGE_DISTRIBUTION:
         _event(supply, InputSupplyEvent.CORRECTED, lead, "Farmer distribution updated within the approved hectares.")
     return supply, created
@@ -492,12 +500,13 @@ def submit(*, request_id, user):
         _enforce_limits(supply, measure(entries))
     _apply(supply, entries)
     was_returned = supply.status == InputSupplyRequest.STATUS_RETURNED
+    already_submitted = supply.status == InputSupplyRequest.STATUS_SUBMITTED
     if final:
         supply.status = InputSupplyRequest.STATUS_CONFIRMATION
         action = InputSupplyEvent.FINAL_RESUBMITTED if was_returned else InputSupplyEvent.FINAL_SUBMITTED
     else:
         supply.status = InputSupplyRequest.STATUS_SUBMITTED
-        action = InputSupplyEvent.RESUBMITTED if was_returned else InputSupplyEvent.SUBMITTED
+        action = InputSupplyEvent.RESUBMITTED if (was_returned or already_submitted) else InputSupplyEvent.SUBMITTED
     supply.submitted_at = timezone.now()
     supply.decision_notes = ""
     supply.reviewed_at = None

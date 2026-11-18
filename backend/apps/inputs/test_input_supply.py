@@ -359,6 +359,18 @@ class InputSupplyWorkflowTests(TestCase):
         self.assertEqual(InputSupplyRequest.objects.get(pk=saved.data["id"]).status, InputSupplyRequest.STATUS_SUBMITTED)
         queue = self.officer_api.get(reverse("input-supply-request-list"), {"status": "SUBMITTED", "season": self.season.id})
         self.assertEqual(queue.data["results"][0]["lead_farmer_name"], "John Moyo")
+        added = self.save(self.lead_api, programme, [
+            (self.farmer, [(mbizi, "2")]),
+            (self.third, [(mbizi, "3")]),
+        ])
+        self.assertEqual(added.status_code, 200, added.data)
+        self.assertEqual(added.data["id"], saved.data["id"])
+        self.assertEqual(added.data["status"], "SUBMITTED")
+        self.assertEqual(added.data["farmer_count"], 2)
+        again = self.submit(self.lead_api, saved.data["id"])
+        self.assertEqual(again.status_code, 200, again.data)
+        self.assertEqual(again.data["status"], "SUBMITTED")
+        self.assertEqual(again.data["events"][-1]["action"], "RESUBMITTED")
         self.assertEqual(queue.data["results"][0]["crop_season_label"], "Summer")
         summary = self.officer_api.get(reverse("input-supply-request-consolidated"), {"season": self.season.id, "crop_season": "SUMMER"})
         self.assertEqual(summary.data["submitted_count"], 1)

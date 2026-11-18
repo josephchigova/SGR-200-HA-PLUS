@@ -77,4 +77,42 @@ describe('LeadInputAllocationsPage', () => {
       ],
     }))
   })
+
+  it('keeps the farmer search open after one farmer has been submitted', async () => {
+    apiClient.get.mockResolvedValue({
+      data: {
+        ...catalogue,
+        open_requests: [{
+          id: 9,
+          reference: 'LF00009',
+          programme: 2,
+          crop: 5,
+          stage: 'REQUEST',
+          status: 'SUBMITTED',
+          status_label: 'Submitted',
+          hectares_total: '4.00',
+          estimated_cost: '200.00',
+          limits: [],
+          events: [],
+          farmers: [{
+            id: 1,
+            farmer: 7,
+            farmer_name: 'Tendai Moyo',
+            farm: 9,
+            lines: [{ requirement: 11, hectares: '4.00' }],
+          }],
+        }],
+      },
+    })
+    render(<LeadInputAllocationsPage selectedSeason={{ id: 3, name: '2026/2027', status: 'ACTIVE' }} cropSeason="SUMMER" periodStatus="ready" />)
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Programme' }), { target: { value: '2' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Crop' }), { target: { value: '5' } })
+    expect(await screen.findByText(/Search for another farmer/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Add farmer' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Add farmer' }))
+    fireEvent.click(screen.getByRole('button', { name: /Farmer 2/ }))
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Rudo Ncube' }))
+    expect(screen.getByLabelText('Farm for farmer 2').value).toBe('Ncube Farm')
+    expect(screen.getByRole('button', { name: 'Submit another farmer' })).toBeTruthy()
+  })
 })

@@ -258,6 +258,11 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
           Share it across your farmers. Hectares you do not use stay unallocated.
         </div>
       ) : null}
+      {request?.status === 'SUBMITTED' && !distributing && editable ? (
+        <div className="form-message" role="status">
+          {request.reference} is submitted. Search for another farmer and submit them on this same programme. It stays open until Admin sets the hectare limits.
+        </div>
+      ) : null}
       {request && !editable ? (
         <div className="form-message" role="status">
           {request.reference} is {request.status_label.toLowerCase()}. <Link to="/my-input-requests">Open it in your submission history</Link>.
@@ -438,7 +443,7 @@ function LeadInputAllocationsPage({ selectedSeason = null, cropSeason = '', peri
             <div className="page-actions" style={{ marginTop: 16 }}>
               <button type="button" className="ghost-btn" disabled={saving || !payloadFarmers.length || overLimit} onClick={() => save(false)}>{saving ? 'Saving…' : 'Save draft'}</button>
               <button type="button" className="primary-btn" disabled={saving || !payloadFarmers.length || overLimit} onClick={() => save(true)}>
-                <Icon name="send" />{distributing ? 'Submit final distribution' : 'Submit for approval'}
+                <Icon name="send" />{distributing ? 'Submit final distribution' : request?.status === 'SUBMITTED' ? 'Submit another farmer' : 'Submit for approval'}
               </button>
             </div>
           ) : null}
