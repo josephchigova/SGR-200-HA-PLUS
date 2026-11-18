@@ -312,6 +312,82 @@ class InputSupplyWorkflowTests(TestCase):
         reversed_ = self.act("reverse", first.data["id"], remarks="Wrong farm")
         self.assertEqual((reversed_.data["status"], reversed_.data["stage"]), ("RETURNED", "REQUEST"))
 
+    def test_redistributing_a_maximum_in_the_same_submission(self):
+        pk = self.build()["id"]  # Tendai: Mbizi 8 + Compound D 8; Chipo: Mbizi 5. Maize land 13 ha.
+        self.act("submit", pk, client=self.lead_api)
+        capped = self.act("set-hectares", pk, mode="distribute", limits=[
+            {"scope": "CROP", "crop": self.maize.id, "approved_hectares": "10"},
+            {"scope": "VARIETY", "requirement": self.mbizi, "approved_hectares": "10"},
+            {"scope": "VARIETY", "requirement": self.compound, "approved_hectares": "8"},
+        ]).data
+        self.assertEqual((capped["id"], capped["status_label"], capped["requested_hectares"], capped["approved_hectares"]), (pk, "Maximum hectares set", "13.00", "10.00"))
+        # One farmer at a time: a reduction saves even while other levels are still over.
+        chipo = self.entry(capped, self.third)
+        step = self.edit(chipo, [(self.mbizi, "4")])
+        self.assertEqual(step.status_code, 200, step.data)
+        # Nothing may grow past a maximum.
+        tendai = self.entry(step.data, self.farmer)
+        grow = self.edit(tendai, [(self.mbizi, "8"), (self.compound, "9")])
+        self.assertEqual(grow.status_code, 400)
+        self.assertIn("Compound D is limited to 8.00 ha", str(grow.data))
+        # Sending it back explains exactly what to reduce.
+        early = self.act("submit", pk, client=self.lead_api)
+        self.assertEqual(early.status_code, 400)
+        self.assertIn("reduce it by 2.00 ha", str(early.data))
+        # The whole redistribution saves together; 0 ha removes a farmer.
+        url = reverse("input-supply-request-redistribute", kwargs={"pk": pk})
+        changes = [
+            {"allocation": tendai["id"], "version": tendai["version"], "lines": [{"requirement": self.mbizi, "hectares": "7"}, {"requirement": self.compound, "hectares": "7"}]},
+            {"allocation": chipo["id"], "version": chipo["version"] + 1, "lines": [{"requirement": self.mbizi, "hectares": "0"}]},
+        ]
+        saved = self.lead_api.post(url, {"changes": changes}, format="json")
+        self.assertEqual(saved.status_code, 200, saved.data)
+        self.assertEqual([row["farmer"] for row in saved.data["allocations"]], [self.farmer.id])
+        self.assertEqual((saved.data["hectares_total"], saved.data["remaining_hectares"]), ("7.00", "3.00"))
+        self.assertEqual({line["product_name"]: line["quantity"] for line in saved.data["allocations"][0]["lines"]}, {"Mbizi": "175", "Compound D": "2800"})
+        # A stale screen cannot overwrite it, and a failed batch changes nothing.
+        self.assertEqual(self.lead_api.post(url, {"changes": changes[:1]}, format="json").status_code, 409)
+        fresh = self.entry(self.fetch(pk), self.farmer)
+        bad = [{"allocation": fresh["id"], "version": fresh["version"], "lines": [{"requirement": self.mbizi, "hectares": "11"}, {"requirement": self.compound, "hectares": "7"}]}]
+        self.assertEqual(self.lead_api.post(url, {"changes": bad}, format="json").status_code, 400)
+        self.assertEqual(self.fetch(pk)["hectares_total"], "7.00")
+        # Another lead farmer cannot redistribute it.
+        self.assertEqual(self.other_api.post(url, {"changes": bad}, format="json").status_code, 400)
+        # Progress while provisional, from the saved records.
+        progress = lambda **params: self.admin_api.get(reverse("input-supply-request-progress"), {"programme": self.arda, **params}).data
+        totals = progress()["totals"]
+        self.assertEqual(
+            (totals["requested_hectares"], totals["approved_hectares"], totals["distributed_hectares"], totals["remaining_hectares"], totals["final_hectares"], totals["progress_percent"]),
+            ("13.00", "10.00", "7.00", "3.00", "0.00", "70.0"),
+        )
+        # Back to Admin, approved, debts created once.
+        self.assertEqual(self.act("submit", pk, client=self.lead_api).data["status"], "CONFIRMATION")
+        self.assertEqual(self.act("approve", pk).status_code, 200)
+        self.assertEqual(InputDebt.objects.count(), 1)
+        self.assertEqual(InputDebt.objects.get().input_value, Decimal("2142.00"))  # 175 kg x 2.00 + 2,800 kg / 50 x 32
+        totals = progress()["totals"]
+        self.assertEqual((totals["final_hectares"], totals["provisional_hectares"]), ("7.00", "0.00"))
+        variety = progress(requirement=self.mbizi)["totals"]
+        self.assertEqual((variety["requested_hectares"], variety["approved_hectares"], variety["distributed_hectares"]), ("13.00", "10.00", "7.00"))
+        self.assertEqual(self.lead_api.get(reverse("input-supply-request-progress"), {"programme": self.arda}).status_code, 403)
+
+    def test_progress_counts_each_lead_farmer_and_undecided_hectares(self):
+        mine = self.add(self.farmer, [(self.mbizi, "6")])
+        self.act("submit", mine.data["id"], client=self.lead_api)
+        self.act("approve", mine.data["id"])
+        waiting = self.add(self.third, [(self.mbizi, "4")])
+        self.act("submit", waiting.data["id"], client=self.lead_api)
+        theirs = self.add(self.other_farmer, [(self.mbizi, "3")], client=self.other_api)
+        self.assertEqual(theirs.status_code, 201, theirs.data)
+        self.act("submit", theirs.data["id"], client=self.other_api)
+        data = self.admin_api.get(reverse("input-supply-request-progress"), {"programme": self.arda, "crop_season": "SUMMER"}).data
+        rows = {row["lead_farmer_name"]: row for row in data["lead_farmers"]}
+        self.assertEqual((rows["John Moyo"]["requested_hectares"], rows["John Moyo"]["final_hectares"], rows["John Moyo"]["awaiting_hectares"]), ("10.00", "6.00", "4.00"))
+        self.assertEqual((rows["Ruth Dube"]["requested_hectares"], rows["Ruth Dube"]["approved_hectares"], rows["Ruth Dube"]["awaiting_hectares"]), ("3.00", "0.00", "3.00"))
+        self.assertEqual(data["totals"]["requested_hectares"], "13.00")
+        only = self.admin_api.get(reverse("input-supply-request-progress"), {"programme": self.arda, "lead_farmer": self.other_lead.id}).data
+        self.assertEqual([row["lead_farmer_name"] for row in only["lead_farmers"]], ["Ruth Dube"])
+
     def test_eligibility_and_access_are_enforced_on_the_server(self):
         too_much = self.add(self.farmer, [(self.mbizi, "12")])
         self.assertEqual(too_much.status_code, 400)

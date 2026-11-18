@@ -386,10 +386,10 @@ def _distributed(limit, measured):
     return measured["crops"].get(limit.crop_id, ZERO)
 
 
-def limit_breaches(supply):
-    """Every approved maximum the saved distribution goes past."""
+def _levels_over(supply):
+    """Each approved maximum the saved distribution goes past, keyed by level, with its message and hectares used."""
     measured = measure(supply)
-    breaches = []
+    over = {}
     limits = list(supply.limits.select_related("crop", "requirement__input_product"))
     if supply.stage == InputSupplyRequest.STAGE_DISTRIBUTION:
         limited_varieties = {limit.requirement_id for limit in limits if limit.scope == InputSupplyLimit.SCOPE_VARIETY}
@@ -397,22 +397,44 @@ def limit_breaches(supply):
         for crop_id, hectares in measured["crops"].items():
             if crop_id not in limited_crops and hectares > 0:
                 crop = Crop.objects.filter(pk=crop_id).first()
-                breaches.append(f"{crop.name if crop else 'That crop'} has no approved hectares in this submission.")
+                over[("crop", crop_id)] = (f"{crop.name if crop else 'That crop'} has no approved hectares in this submission.", hectares)
         for requirement_id, hectares in measured["varieties"].items():
             if requirement_id not in limited_varieties and hectares > 0:
                 requirement = CropInputRequirement.objects.select_related("input_product").filter(pk=requirement_id).first()
-                breaches.append(f"{_product_name(requirement) if requirement else 'That variety'} was not approved for this submission.")
+                over[("variety", requirement_id)] = (f"{_product_name(requirement) if requirement else 'That variety'} was not approved for this submission.", hectares)
     for limit in limits:
         used = _distributed(limit, measured)
         if used > Decimal(limit.approved_hectares):
-            breaches.append(f"{_limit_name(limit)} is limited to {_ha(limit.approved_hectares)} ha; the allocations use {_ha(used)} ha.")
-    return breaches
+            over[("limit", limit.pk)] = (
+                f"{_limit_name(limit)} is limited to {_ha(limit.approved_hectares)} ha; the allocations use {_ha(used)} ha, "
+                f"so reduce it by {_ha(used - Decimal(limit.approved_hectares))} ha.",
+                used,
+            )
+    return over
+
+
+def limit_breaches(supply):
+    """Every approved maximum the saved distribution goes past, explained."""
+    return [message for message, _used in _levels_over(supply).values()]
 
 
 def _enforce_limits(supply):
     breaches = limit_breaches(supply)
     if breaches:
         raise SupplyError(" ".join(breaches) + " Unused hectares can stay unallocated, but an approved maximum cannot be exceeded.")
+
+
+def _refuse_new_excess(supply, before):
+    """While a maximum is being shared out, any reduction can be saved, one farmer at a time.
+
+    Only a change that pushes a level further past its maximum is refused. Every maximum is
+    checked in full when the lead farmer sends the submission back to Admin.
+    """
+    if before is None:
+        return
+    worse = [message for key, (message, used) in _levels_over(supply).items() if used > before.get(key, ("", ZERO))[1]]
+    if worse:
+        raise SupplyError(" ".join(worse) + " Reduce other allocations first, or lower this one.")
 
 
 # Lead farmer: one allocation at a time ---------------------------------------------------
@@ -500,10 +522,10 @@ def add_allocation(*, user, programme_id, season_id, crop_season, farmer_id, cro
 
     supply = _target_submission(lead, programme, season, crop_season, request_id)
     _refuse_duplicate(supply, farmer, crop)
+    before = _levels_over(supply) if supply.stage == InputSupplyRequest.STAGE_DISTRIBUTION else None
     entry = InputSupplyFarmer.objects.create(request=supply, farmer=farmer, farm=farm, crop=crop, hectares=land_hectares(calculated))
     _write_lines(entry, calculated)
-    if supply.stage == InputSupplyRequest.STAGE_DISTRIBUTION:
-        _enforce_limits(supply)
+    _refuse_new_excess(supply, before)
     _event(supply, InputSupplyEvent.ALLOCATION_ADDED, lead, "", _allocation_detail(entry, calculated))
     return supply, entry
 
@@ -534,17 +556,71 @@ def update_allocation(*, user, entry_id, lines, version, farm_id=None):
     _check_version(entry, version)
     farm = Farm.objects.filter(pk=farm_id).first() if farm_id else entry.farm
     calculated = _lines(supply.programme, entry.crop, entry.farmer, lines)
-    _check_farmer(lead=lead, farmer=entry.farmer, farm=farm, crop=entry.crop, season=supply.season, lines=calculated, exclude_entry_id=entry.pk)
+    before = _levels_over(supply) if supply.stage == InputSupplyRequest.STAGE_DISTRIBUTION else None
+    _save_entry(supply, lead, entry, farm, calculated)
+    _refuse_new_excess(supply, before)
+    return supply, entry
+
+
+def _save_entry(supply, lead, entry, farm, calculated):
     entry.farm = farm
     entry.hectares = land_hectares(calculated)
     entry.version = F("version") + 1
     entry.save(update_fields=["farm", "hectares", "version", "updated_at"])
     entry.refresh_from_db()
     _write_lines(entry, calculated)
-    if supply.stage == InputSupplyRequest.STAGE_DISTRIBUTION:
-        _enforce_limits(supply)
     _event(supply, InputSupplyEvent.ALLOCATION_CHANGED, lead, "", _allocation_detail(entry, calculated))
-    return supply, entry
+
+
+@transaction.atomic
+def redistribute(*, user, request_id, changes):
+    """Save new hectares for several allocations of one submission together.
+
+    Used to share out a maximum Admin set: each change carries the allocation's version, and
+    a variety set to 0 ha is removed (an allocation left with none is removed). Either every
+    change is saved or none is. Quantities and costs are recalculated on the server.
+    """
+    lead = _lead(user)
+    supply = _locked(request_id)
+    if supply.lead_farmer_id != lead.pk:
+        raise SupplyError("You can only change your own submission.")
+    if not _can_edit(supply):
+        raise SupplyError(_waiting_message(supply))
+    if not isinstance(changes, list) or not changes:
+        raise SupplyError("There are no changes to save.")
+    before = _levels_over(supply) if supply.stage == InputSupplyRequest.STAGE_DISTRIBUTION else None
+    seen = set()
+    for change in changes:
+        if not isinstance(change, dict) or not str(change.get("allocation") or "").isdigit():
+            raise SupplyError("Each change must name the allocation it is for. Refresh the page.")
+        entry_id = int(change["allocation"])
+        if entry_id in seen:
+            raise SupplyError("An allocation was sent twice. Refresh the page.")
+        seen.add(entry_id)
+        entry = InputSupplyFarmer.objects.select_for_update(of=("self",)).select_related("farmer", "crop", "farm").filter(pk=entry_id, request=supply).first()
+        if entry is None:
+            raise SupplyConflict("One of these allocations was removed since you opened the page. Refresh to see the latest figures.")
+        _check_version(entry, change.get("version"))
+        current = {line.requirement_id for line in entry.lines.all()}
+        raw = change.get("lines")
+        if not isinstance(raw, list):
+            raise SupplyError(f"Enter the hectares for {entry.farmer.full_name}.")
+        kept = []
+        for line in raw:
+            if not isinstance(line, dict) or not str(line.get("requirement") or "").isdigit() or int(line["requirement"]) not in current:
+                raise SupplyError(f"Only the hectares of {entry.farmer.full_name}'s existing varieties can change here.")
+            if _decimal(line.get("hectares"), "hectares") > 0:
+                kept.append(line)
+        if not kept:
+            detail = _allocation_detail(entry, [{"requirement": line.requirement, "hectares": line.hectares} for line in entry.lines.select_related("requirement__input_product")])
+            entry.delete()
+            _event(supply, InputSupplyEvent.ALLOCATION_REMOVED, lead, "", detail)
+            continue
+        calculated = _lines(supply.programme, entry.crop, entry.farmer, kept)
+        _check_farmer(lead=lead, farmer=entry.farmer, farm=entry.farm, crop=entry.crop, season=supply.season, lines=calculated, exclude_entry_id=entry.pk)
+        _save_entry(supply, lead, entry, entry.farm, calculated)
+    _refuse_new_excess(supply, before)
+    return supply
 
 
 @transaction.atomic
@@ -1129,6 +1205,115 @@ def consolidated(*, season_id, crop_season=None, programme_id=None):
             {**row, "hectares": _ha(row["hectares"]), "quantity": _qty(row["quantity"]), "estimated_cost": _money(row["estimated_cost"]), "approved_hectares": _ha(row["approved_hectares"])}
             for row in sorted(varieties.values(), key=lambda row: (row["programme_name"], row["crop_name"], row["input_category_label"], row["product_name"]))
         ],
+    }
+
+
+def _measured_at(measured, *, crop_id, category, requirement_id):
+    """Hectares from measure() at the level the filters ask for: variety, input type, or crop land."""
+    if requirement_id:
+        return measured["varieties"].get(requirement_id, ZERO)
+    if category:
+        return sum((value for (crop, code), value in measured["categories"].items() if code == category and (not crop_id or crop == crop_id)), ZERO)
+    return sum((value for crop, value in measured["crops"].items() if not crop_id or crop == crop_id), ZERO)
+
+
+def _limits_at(limits, field, *, crop_id, category, requirement_id):
+    if requirement_id:
+        rows = [limit for limit in limits if limit.scope == InputSupplyLimit.SCOPE_VARIETY and limit.requirement_id == requirement_id]
+    elif category:
+        rows = [limit for limit in limits if limit.scope == InputSupplyLimit.SCOPE_CATEGORY and limit.input_category == category and (not crop_id or limit.crop_id == crop_id)]
+    else:
+        rows = [limit for limit in limits if limit.scope == InputSupplyLimit.SCOPE_CROP and (not crop_id or limit.crop_id == crop_id)]
+    return sum((Decimal(getattr(limit, field)) for limit in rows), ZERO)
+
+
+def programme_progress(*, programme_id, crop_season=None, crop_id=None, category=None, requirement_id=None, lead_id=None):
+    """How far a programme's hectares have got, worked out from the saved submissions.
+
+    Requested: hectares lead farmers sent to Admin. Approved: the maximums Admin set, or the
+    requested hectares where Admin approved a submission as it was. Distributed: farmer
+    allocations in submissions Admin has approved or limited (provisional until approved).
+    Finally approved: allocations in approved submissions. Awaiting decision: submitted
+    hectares Admin has not decided on yet. Drafts and rejected submissions are left out.
+    """
+    programme = _load(Programme, programme_id, "programme")
+    to_int = lambda value: int(value) if str(value or "").isdigit() else None
+    crop_id, requirement_id, lead_id = to_int(crop_id), to_int(requirement_id), to_int(lead_id)
+    category = str(category or "").upper() or None
+    if requirement_id:
+        requirement = CropInputRequirement.objects.filter(pk=requirement_id, programme=programme).first()
+        if requirement is None:
+            raise SupplyError("That variety is not in this programme's catalogue.")
+    queryset = (
+        InputSupplyRequest.objects.filter(programme=programme)
+        .exclude(status__in=[InputSupplyRequest.STATUS_DRAFT, InputSupplyRequest.STATUS_REJECTED])
+        .select_related("lead_farmer", "crop").prefetch_related("limits")
+    )
+    if crop_season:
+        queryset = queryset.filter(Q(crop_season=crop_season) | Q(crop__category=crop_season))
+    leads = {}
+    for supply in queryset:
+        level = {"crop_id": crop_id, "category": category, "requirement_id": requirement_id}
+        distributed = _measured_at(measure(supply), **level)
+        limits = list(supply.limits.all())
+        approved_status = supply.status == InputSupplyRequest.STATUS_APPROVED
+        if limits:
+            requested, approved, decided = _limits_at(limits, "requested_hectares", **level), _limits_at(limits, "approved_hectares", **level), True
+        elif approved_status:
+            requested, approved, decided = distributed, distributed, True
+        else:
+            requested, approved, decided = distributed, ZERO, False
+        if not (requested or distributed or approved):
+            continue
+        row = leads.setdefault(supply.lead_farmer_id, {
+            "lead_farmer": supply.lead_farmer_id, "lead_farmer_name": person_name(supply.lead_farmer), "submissions": 0,
+            "requested": ZERO, "approved": ZERO, "distributed": ZERO, "final": ZERO, "awaiting": ZERO,
+        })
+        row["submissions"] += 1
+        row["requested"] += requested
+        if decided:
+            row["approved"] += approved
+            row["distributed"] += distributed
+        else:
+            row["awaiting"] += distributed
+        if approved_status:
+            row["final"] += distributed
+
+    def shaped(row):
+        remaining = row["approved"] - row["distributed"]
+        progress = (row["distributed"] / row["approved"] * 100).quantize(Decimal("0.1")) if row["approved"] else None
+        return {
+            **{key: value for key, value in row.items() if key not in ("requested", "approved", "distributed", "final", "awaiting")},
+            "requested_hectares": _ha(row["requested"]), "approved_hectares": _ha(row["approved"]),
+            "distributed_hectares": _ha(row["distributed"]), "remaining_hectares": _ha(remaining),
+            "final_hectares": _ha(row["final"]), "awaiting_hectares": _ha(row["awaiting"]),
+            "provisional_hectares": _ha(row["distributed"] - row["final"]),
+            "progress_percent": str(progress) if progress is not None else None,
+        }
+
+    rows = sorted(leads.values(), key=lambda row: row["lead_farmer_name"].lower())
+    if lead_id:
+        rows = [row for row in rows if row["lead_farmer"] == lead_id]
+    totals = {"requested": ZERO, "approved": ZERO, "distributed": ZERO, "final": ZERO, "awaiting": ZERO, "submissions": 0}
+    for row in rows:
+        for key in totals:
+            totals[key] += row[key]
+    requirements = CropInputRequirement.objects.filter(programme=programme, active=True).select_related("crop", "input_product").order_by("crop__name", "input_category")
+    if crop_season:
+        requirements = requirements.filter(crop__category=crop_season)
+    return {
+        "programme": programme.pk, "programme_name": programme.name,
+        "totals": shaped({**totals, "lead_farmer": None, "lead_farmer_name": ""}),
+        "lead_farmers": [shaped(row) for row in rows],
+        "options": {
+            "crops": [{"id": crop, "name": name} for crop, name in sorted({(item.crop_id, item.crop.name) for item in requirements}, key=lambda pair: pair[1])],
+            "categories": [code for code in INPUT_CATEGORIES if any(item.input_category == code for item in requirements)],
+            "varieties": [
+                {"requirement": item.pk, "crop": item.crop_id, "input_category": item.input_category, "name": f"{_product_name(item)} · {item.crop.name}"}
+                for item in requirements
+            ],
+            "lead_farmers": [{"id": row["lead_farmer"], "name": row["lead_farmer_name"]} for row in sorted(leads.values(), key=lambda row: row["lead_farmer_name"].lower())],
+        },
     }
 
 

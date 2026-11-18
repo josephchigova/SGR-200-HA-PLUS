@@ -21,6 +21,8 @@ from .supply import (
     delete_allocation,
     options_for,
     present,
+    programme_progress,
+    redistribute,
     reject,
     return_for_corrections,
     reverse,
@@ -41,7 +43,7 @@ class InputSupplyPermission(permissions.BasePermission):
     """Lead farmers allocate and submit. Administrators issue limits and give the final approval."""
 
     DECISIONS = {"approve", "reject", "return_for_corrections", "reverse", "set_hectares"}
-    LEAD_ONLY = {"allocations", "allocation", "submit", "catalogue", "destroy"}
+    LEAD_ONLY = {"allocations", "allocation", "submit", "catalogue", "destroy", "redistribute"}
 
     def has_permission(self, request, view):
         user = request.user
@@ -53,7 +55,7 @@ class InputSupplyPermission(permissions.BasePermission):
         name = getattr(view, "action", None)
         if name in self.DECISIONS:
             return writer
-        if name == "consolidated":
+        if name in {"consolidated", "progress"}:
             return writer or auditor
         if name in self.LEAD_ONLY:
             return lead
@@ -131,6 +133,28 @@ class InputSupplyRequestViewSet(viewsets.ModelViewSet):
             return Response(options_for(lead=request.user, season_id=request.query_params.get("season"), crop_season=request.query_params.get("crop_season")))
         except SupplyError as error:
             return self._error(error)
+
+    @action(detail=False, methods=["get"])
+    def progress(self, request):
+        """A programme's requested, approved, distributed and finally approved hectares, by lead farmer."""
+        params = request.query_params
+        try:
+            return Response(programme_progress(
+                programme_id=params.get("programme"), crop_season=parse_crop_season(params.get("crop_season")),
+                crop_id=params.get("crop"), category=params.get("input_category"),
+                requirement_id=params.get("requirement"), lead_id=params.get("lead_farmer"),
+            ))
+        except SupplyError as error:
+            return self._error(error)
+
+    @action(detail=True, methods=["post"])
+    def redistribute(self, request, pk=None):
+        """Save new hectares for several of the submission's allocations together."""
+        try:
+            supply = redistribute(user=request.user, request_id=pk, changes=request.data.get("changes"))
+        except SupplyError as error:
+            return self._error(error)
+        return Response(self._fresh(supply.pk))
 
     @action(detail=False, methods=["get"])
     def consolidated(self, request):
