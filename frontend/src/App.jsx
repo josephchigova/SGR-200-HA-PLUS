@@ -26,8 +26,10 @@ import ClusterDashboard from './pages/ClusterDashboard'
 import LeadFarmersPage from './pages/LeadFarmersPage'
 import FarmerDetailsPage from './pages/FarmerDetailsPage'
 import FarmersPage from './pages/FarmersPage'
-import InputAllocationsPage from './pages/InputAllocationsPage'
+import InputApprovalsPage from './pages/InputApprovalsPage'
 import InputRequestsPage from './pages/InputRequestsPage'
+import LeadInputAllocationsPage from './pages/LeadInputAllocationsPage'
+import MyInputRequestsPage from './pages/MyInputRequestsPage'
 import ProgrammesPage from './pages/ProgrammesPage'
 import ProductionPage from './pages/ProductionPage'
 import InputDebtPage from './pages/InputDebtPage'
@@ -63,8 +65,9 @@ const navGroups = [
     items: [
       { label: 'Programmes', to: '/programmes', icon: 'clipboard', module: 'programmes' },
       { label: 'Crop catalogue', to: '/crops', icon: 'book', module: 'crops' },
-      { label: 'Input requests', to: '/arda-requests', icon: 'send', module: 'arda' },
-      { label: 'Input allocations', to: '/input-allocations', icon: 'box', module: 'allocations' },
+      { label: 'Input approvals', to: '/input-approvals', icon: 'shield', module: 'input_approvals' },
+      { label: 'Input allocations', to: '/input-allocations', icon: 'box', module: 'input_supply' },
+      { label: 'My input requests', to: '/my-input-requests', icon: 'send', module: 'input_supply' },
     ],
   },
   {
@@ -269,7 +272,7 @@ function Workspace() {
   const historicalMessage = !selectedSeason || !historical
     ? ''
     : selectedSeason.status !== 'ACTIVE'
-      ? `${selectedSeason.name} is not the active season. Records stay available to view. Input requests can only be created or edited for an active season.`
+      ? `${selectedSeason.name} is not the active season. Records stay available to view. Input caps and requests can only be changed for an active season.`
       : `Historical period. Viewing ${selectedSeason.name}${selectedCropLabel ? ` · ${selectedCropLabel}` : ''}. Selecting this period does not change saved records.`
 
   const applySelection = (selection) => {
@@ -494,7 +497,9 @@ function Workspace() {
             <Route path="/crops" element={<Guard module="crops"><CropCataloguePage /></Guard>} />
             <Route path="/programmes" element={<Guard module="programmes"><ProgrammesPage {...period} /></Guard>} />
             <Route path="/arda-requests" element={<Guard module="arda"><InputRequestsPage {...period} /></Guard>} />
-            <Route path="/input-allocations" element={<Guard module="allocations"><InputAllocationsPage {...period} /></Guard>} />
+            <Route path="/input-approvals" element={<Guard module="input_approvals"><InputApprovalsPage {...period} /></Guard>} />
+            <Route path="/input-allocations" element={<Guard module="input_supply"><LeadInputAllocationsPage {...period} /></Guard>} />
+            <Route path="/my-input-requests" element={<Guard module="input_supply"><MyInputRequestsPage {...period} /></Guard>} />
             <Route path="/production" element={<Guard module="production"><ProductionPage {...period} /></Guard>} />
             <Route path="/seasonal-planting" element={<Guard module="planting"><WorkflowPage {...workflowPages.seasonalPlanting} {...period} module="planting" /></Guard>} />
             <Route path="/deliveries" element={<Guard module="deliveries"><WorkflowPage {...workflowPages.deliveries} {...period} module="deliveries" /></Guard>} />

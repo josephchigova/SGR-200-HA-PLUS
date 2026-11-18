@@ -169,11 +169,15 @@ class Notification(models.Model):
     KIND_SUBSCRIPTION_DUE = "SUBSCRIPTION_DUE"
     KIND_SUBSCRIPTION_OVERDUE = "SUBSCRIPTION_OVERDUE"
     KIND_SUBSCRIPTION_STILL_UNPAID = "SUBSCRIPTION_STILL_UNPAID"
+    KIND_INPUT_SUPPLY_SUBMITTED = "INPUT_SUPPLY_SUBMITTED"
+    KIND_INPUT_SUPPLY_DECIDED = "INPUT_SUPPLY_DECIDED"
     KIND_CHOICES: ClassVar[list[tuple[str, str]]] = [
         (KIND_SUBSCRIPTION_UPCOMING, "Subscription due soon"),
         (KIND_SUBSCRIPTION_DUE, "Subscription due today"),
         (KIND_SUBSCRIPTION_OVERDUE, "Subscription overdue"),
         (KIND_SUBSCRIPTION_STILL_UNPAID, "Subscription still unpaid"),
+        (KIND_INPUT_SUPPLY_SUBMITTED, "Input request submitted"),
+        (KIND_INPUT_SUPPLY_DECIDED, "Input request decided"),
     ]
     STATUS_PENDING = "PENDING"
     STATUS_DELIVERED = "DELIVERED"

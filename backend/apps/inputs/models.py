@@ -4,8 +4,7 @@ from typing import ClassVar
 from django.db import models
 
 from apps.farmers.models import Farmer
-from apps.programmes.models import Programme
-from apps.programmes.models import Crop
+from apps.programmes.models import Crop, Programme, Season
 
 
 class Input(models.Model):
@@ -157,3 +156,172 @@ class InputAllocationLine(models.Model):
 
     def __str__(self):
         return f"{self.item_name} ({self.allocation_id})"
+
+
+class ProgrammeVarietyCap(models.Model):
+    """How much of one catalogue variety Admin has made available.
+
+    The cap is a quantity (kg, litres, bags), not a farmer allocation and not a stock balance.
+    Approval of a lead farmer's request is what consumes it.
+    """
+
+    programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="variety_caps")
+    season = models.ForeignKey(Season, on_delete=models.PROTECT, related_name="variety_caps")
+    crop = models.ForeignKey(Crop, on_delete=models.PROTECT, related_name="variety_caps")
+    requirement = models.ForeignKey(
+        "programmes.CropInputRequirement", on_delete=models.PROTECT, related_name="variety_caps",
+    )
+    cap_quantity = models.DecimalField(max_digits=16, decimal_places=4)
+    # The catalogue unit this cap is measured in (kg, litres, bags). It is not a stock balance.
+    unit = models.CharField(max_length=40)
+    notes = models.TextField(blank=True)
+    created_by = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="variety_caps_created",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["programme__name", "crop__name", "requirement__input_category", "requirement__item_name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["programme", "season", "crop", "requirement"],
+                name="unique_programme_variety_cap",
+            ),
+            models.CheckConstraint(condition=models.Q(cap_quantity__gt=0), name="variety_cap_positive"),
+        ]
+
+    def __str__(self):
+        return f"{self.programme_id} {self.crop_id} {self.requirement_id}"
+
+
+class InputSupplyRequest(models.Model):
+    """A lead farmer's consolidated request for the varieties they allocated to their farmers."""
+
+    STATUS_DRAFT = "DRAFT"
+    STATUS_SUBMITTED = "SUBMITTED"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_RETURNED = "RETURNED"
+    STATUS_REJECTED = "REJECTED"
+    STATUS_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_SUBMITTED, "Submitted"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_RETURNED, "Returned for corrections"),
+        (STATUS_REJECTED, "Rejected"),
+    ]
+    EDITABLE = (STATUS_DRAFT, STATUS_RETURNED)
+
+    reference = models.CharField(max_length=40, unique=True, blank=True)
+    lead_farmer = models.ForeignKey(
+        "accounts.User", on_delete=models.PROTECT, related_name="input_supply_requests",
+    )
+    programme = models.ForeignKey(Programme, on_delete=models.PROTECT, related_name="input_supply_requests")
+    season = models.ForeignKey(Season, on_delete=models.PROTECT, related_name="input_supply_requests")
+    crop = models.ForeignKey(Crop, on_delete=models.PROTECT, related_name="input_supply_requests")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    reviewed_at = models.DateTimeField(null=True, blank=True)
+    reviewed_by = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="input_supply_reviews",
+    )
+    decision_notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-submitted_at", "-updated_at", "-id"]
+        constraints = [
+            # One open request per lead farmer, programme, year and crop. Approved and rejected
+            # requests stay as history and do not block a later one.
+            models.UniqueConstraint(
+                fields=["lead_farmer", "programme", "season", "crop"],
+                condition=models.Q(status__in=["DRAFT", "SUBMITTED", "RETURNED"]),
+                name="one_open_input_supply_request",
+            ),
+        ]
+
+    def __str__(self):
+        return self.reference or f"Request {self.pk}"
+
+
+class InputSupplyFarmer(models.Model):
+    """The hectares of one farmer that a request covers. Varieties hang off this row."""
+
+    request = models.ForeignKey(InputSupplyRequest, on_delete=models.CASCADE, related_name="farmers")
+    farmer = models.ForeignKey(Farmer, on_delete=models.PROTECT, related_name="input_supply_rows")
+    farm = models.ForeignKey("farmers.Farm", on_delete=models.PROTECT, related_name="input_supply_rows")
+    hectares = models.DecimalField(max_digits=12, decimal_places=2)
+
+    class Meta:
+        ordering = ["farmer__surname", "farmer__first_name", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["request", "farmer"], name="unique_supply_request_farmer"),
+            models.CheckConstraint(condition=models.Q(hectares__gt=0), name="supply_farmer_hectares_positive"),
+        ]
+
+
+class InputSupplyLine(models.Model):
+    """One variety allocated to one farmer. Quantity is hectares times the catalogue rate."""
+
+    farmer_entry = models.ForeignKey(InputSupplyFarmer, on_delete=models.CASCADE, related_name="lines")
+    requirement = models.ForeignKey(
+        "programmes.CropInputRequirement", on_delete=models.PROTECT, related_name="supply_lines",
+    )
+    cap = models.ForeignKey(ProgrammeVarietyCap, on_delete=models.PROTECT, related_name="supply_lines")
+    rate_per_hectare = models.DecimalField(max_digits=14, decimal_places=4, default=Decimal("0.0000"))
+    quantity = models.DecimalField(max_digits=16, decimal_places=4, default=Decimal("0.0000"))
+    unit = models.CharField(max_length=40, blank=True, default="")
+    unit_price = models.DecimalField(max_digits=14, decimal_places=4, null=True, blank=True)
+
+    class Meta:
+        ordering = ["requirement__input_category", "requirement__item_name", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["farmer_entry", "requirement"], name="unique_supply_farmer_variety"),
+            models.CheckConstraint(condition=models.Q(quantity__gt=0), name="supply_line_quantity_positive"),
+        ]
+
+
+class InputSupplyEvent(models.Model):
+    SUBMITTED = "SUBMITTED"
+    RESUBMITTED = "RESUBMITTED"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    RETURNED = "RETURNED"
+    REVERSED = "REVERSED"
+    CORRECTED = "CORRECTED"
+    SAVED = "SAVED"
+    ACTION_CHOICES: ClassVar[list[tuple[str, str]]] = [
+        (SAVED, "Draft saved"),
+        (CORRECTED, "Corrections saved"),
+        (SUBMITTED, "Submitted"),
+        (RESUBMITTED, "Resubmitted"),
+        (APPROVED, "Approved"),
+        (REJECTED, "Rejected"),
+        (RETURNED, "Returned for corrections"),
+        (REVERSED, "Approval reversed"),
+    ]
+
+    request = models.ForeignKey(InputSupplyRequest, on_delete=models.CASCADE, related_name="events")
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    actor = models.ForeignKey(
+        "accounts.User", on_delete=models.SET_NULL, null=True, blank=True, related_name="input_supply_events",
+    )
+    actor_name = models.CharField(max_length=180, blank=True)
+    remarks = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+
+class InputSupplyAllocation(models.Model):
+    """The official allocation created when Admin approves a request. Reversal cancels it."""
+
+    request = models.ForeignKey(InputSupplyRequest, on_delete=models.PROTECT, related_name="allocations")
+    allocation = models.ForeignKey(InputAllocation, on_delete=models.PROTECT, related_name="supply_links")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["request", "allocation"], name="unique_supply_allocation_link"),
+        ]
