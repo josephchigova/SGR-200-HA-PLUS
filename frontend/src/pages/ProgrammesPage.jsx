@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from 'react'
 import apiClient from '../api/client'
 import { useAuth } from '../auth'
 import Icon from '../components/Icon'
+import ProgrammeProgress from '../components/ProgrammeProgress'
 import { DraftNotice, EmptyState, Modal, PageHead, Pill, errorMessage } from '../components/ui'
 import { useFormDraft } from '../drafts'
 import { CATEGORIES } from '../inputCategories'
@@ -128,6 +129,7 @@ function ProgrammesPage({ selectedSeason = null, cropSeason = '', periodStatus =
                   <ProgrammeRow
                     key={row.id}
                     row={row}
+                    cropSeason={cropSeason}
                     open={expanded === row.id}
                     onToggle={() => setExpanded(expanded === row.id ? null : row.id)}
                     onEdit={canEdit ? () => setEditing(row) : null}
@@ -149,14 +151,7 @@ function ProgrammesPage({ selectedSeason = null, cropSeason = '', periodStatus =
   )
 }
 
-function ProgrammeRow({ row, open, onToggle, onEdit, onDelete }) {
-  const [figures, setFigures] = useState(null)
-  useEffect(() => {
-    if (!open) return undefined
-    let active = true
-    apiClient.get(`/programmes/${row.id}/figures/`).then((response) => { if (active) setFigures(response.data) }).catch(() => { if (active) setFigures({ crops: [] }) })
-    return () => { active = false }
-  }, [open, row.id])
+function ProgrammeRow({ row, cropSeason, open, onToggle, onEdit, onDelete }) {
   const active = row.capacity_status === 'ACTIVE'
   return (
     <>
@@ -170,7 +165,7 @@ function ProgrammeRow({ row, open, onToggle, onEdit, onDelete }) {
         <td><Pill tone={active ? 'good' : 'bad'}>{active ? 'Active' : 'Inactive'}</Pill></td>
         <td>
           <span className="table-actions">
-            <button type="button" className="icon-btn" title={open ? 'Hide crops' : 'Show crops'} aria-label={`${open ? 'Hide' : 'Show'} crop figures for ${row.name}`} onClick={onToggle}><Icon name="eye" /></button>
+            <button type="button" className="icon-btn" title={open ? 'Hide progress' : 'Show allocation progress'} aria-label={`${open ? 'Hide' : 'Show'} allocation progress for ${row.name}`} aria-expanded={open} onClick={onToggle}><Icon name="chart" /></button>
             {onEdit ? <button type="button" className="icon-btn" title="Edit" aria-label={`Edit ${row.name}`} onClick={onEdit}><Icon name="pencil" /></button> : null}
             {onDelete ? <button type="button" className="icon-btn danger" title="Delete" aria-label={`Delete ${row.name}`} onClick={onDelete}><Icon name="trash" /></button> : null}
           </span>
@@ -179,23 +174,8 @@ function ProgrammeRow({ row, open, onToggle, onEdit, onDelete }) {
       {open ? (
         <tr className="allocation-lines">
           <td colSpan="8">
-            {!figures ? <div className="form-message">Loading…</div> : (
-              <table className="data-table compact">
-                <thead><tr><th>Crop</th><th>Season</th><th className="num">Allocated</th><th className="num">Farmers</th><th className="num">Catalogue products</th></tr></thead>
-                <tbody>
-                  {figures.crops.map((crop) => (
-                    <tr key={crop.crop}>
-                      <td>{crop.crop_name}</td>
-                      <td>{crop.season}</td>
-                      <td className="num">{hectares(crop.allocated_hectares)}</td>
-                      <td className="num">{crop.farmers}</td>
-                      <td className="num">{crop.inputs_configured || <span className="field-error">None</span>}</td>
-                    </tr>
-                  ))}
-                  {!figures.crops.length ? <tr><td colSpan="5">This programme supports no crops yet.</td></tr> : null}
-                </tbody>
-              </table>
-            )}
+            <h4 className="progress-title">Allocation progress · {row.name}</h4>
+            <ProgrammeProgress programme={row} cropSeason={cropSeason} />
           </td>
         </tr>
       ) : null}

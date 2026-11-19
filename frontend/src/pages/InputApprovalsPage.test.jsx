@@ -58,13 +58,15 @@ describe('InputApprovalsPage', () => {
     expect(await screen.findByText('Maximum hectares issued to Lead One.')).toBeTruthy()
   })
 
-  it('approves the requested hectares after confirmation', async () => {
-    apiClient.post.mockResolvedValue({ data: submission({ stage: 'DISTRIBUTION', status: 'LIMITS_SET', status_label: 'Approved limits issued' }) })
+  it('approves a submission as it is in one step', async () => {
+    apiClient.post.mockResolvedValue({ data: submission({ status: 'APPROVED', status_label: 'Approved', approved_hectares: '12.00' }) })
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Review' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Approve requested hectares' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }))
+    expect(screen.getByText(/Lead One can keep sending new submissions/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Confirm' }))
-    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/input-supply-requests/4/set-hectares/', { mode: 'approve', remarks: '' }))
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/input-supply-requests/4/approve/', { remarks: '' }))
+    expect(await screen.findByText('LF00004 approved. 2 farmer allocations are official.')).toBeTruthy()
   })
 
   it('needs a reason to return or reject, and gives the final approval to a distribution', async () => {
@@ -72,7 +74,7 @@ describe('InputApprovalsPage', () => {
     apiClient.post.mockResolvedValue({ data: { ...rows[0], status: 'RETURNED', status_label: 'Returned for corrections' } })
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Review' }))
-    expect(screen.queryByRole('button', { name: 'Approve requested hectares' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Final approval' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Return for corrections' }))
     const confirm = screen.getByRole('button', { name: 'Confirm' })

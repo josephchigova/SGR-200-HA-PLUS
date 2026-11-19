@@ -3743,3 +3743,264 @@ select.invalid,
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+
+/* Lead farmer allocation form: farmer and crop, then searched varieties as rows ----------- */
+.submission-picker .chip svg {
+  width: 14px;
+  height: 14px;
+}
+
+.allocation-who {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 14px 18px;
+  align-items: start;
+}
+
+.crop-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.variety-picker {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.variety-rows {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.variety-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 132px minmax(110px, auto) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.variety-name {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.variety-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.variety-name small {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.variety-hectares {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.variety-hectares input {
+  width: 100%;
+  min-width: 0;
+  text-align: right;
+}
+
+.variety-hectares span {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.variety-figures {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.variety-figures small {
+  color: var(--text-muted);
+}
+
+.allocation-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.allocation-footer strong {
+  color: var(--text);
+}
+
+@media (max-width: 720px) {
+  .allocation-who {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .variety-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .variety-name {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .variety-row > .icon-btn {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+  }
+
+  .variety-hectares {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .variety-figures {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}
+
+/* Sharing out a maximum Admin set ------------------------------------------------------- */
+.redistribution {
+  display: grid;
+  gap: 14px;
+}
+
+.redistribution-intro {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warning-bg);
+  color: var(--text);
+}
+
+.redistribution-intro svg {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  color: var(--warning);
+}
+
+.redistribution-intro p {
+  margin: 0;
+}
+
+.hectare-strip span.over strong {
+  color: var(--danger);
+}
+
+.redistribution-problems {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 10px 14px 10px 30px;
+  border-radius: var(--radius-sm);
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.redistribution-table .hectare-input {
+  width: 96px;
+  text-align: right;
+}
+
+.redistribution-table tr.changed-row td {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.redistribution-table tfoot th {
+  border-top: 2px solid var(--border-strong);
+}
+
+.redistribution-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.redistribution-actions .spacer {
+  flex: 1 1 auto;
+}
+
+.expandable {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.expandable > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.expandable[open] > summary {
+  margin-bottom: 10px;
+}
+
+/* Programme allocation progress -------------------------------------------------------- */
+.programme-progress {
+  display: grid;
+  gap: 12px;
+  padding: 4px 0 8px;
+}
+
+.progress-title {
+  margin: 4px 0 10px;
+}
+
+.progress-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.progress-head span {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.progress-bar {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-3);
+}
+
+.progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.3s ease;
+}

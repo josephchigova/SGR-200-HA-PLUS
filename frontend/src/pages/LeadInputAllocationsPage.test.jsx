@@ -22,7 +22,7 @@ const catalogue = {
 const allocation = {
   id: 31, version: 2, farmer: 7, farmer_name: 'Tendai Moyo', membership_number: 'F-007', crop: 5, crop_name: 'Maize',
   hectares: '8.00', estimated_cost: '400.00',
-  lines: [{ id: 1, requirement: 11, input_category: 'SEED', product_name: 'Mbizi', hectares: '8.00', quantity: '200.00', unit: 'kg' }],
+  lines: [{ id: 1, requirement: 11, input_category: 'SEED', input_category_label: 'Seed', product_name: 'Mbizi', hectares: '8.00', quantity: '200.00', unit: 'kg', rate_per_hectare: '25', estimated_cost: '400.00' }],
 }
 
 const submission = (changes = {}) => ({
@@ -50,10 +50,14 @@ describe('LeadInputAllocationsPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Farmer/ }))
     fireEvent.mouseDown(screen.getByRole('option', { name: 'Tendai Moyo · F-007' }))
     expect(screen.getByText(/intends to plant 10 ha of Maize/)).toBeTruthy()
-    fireEvent.change(screen.getByRole('combobox', { name: 'Variety or product' }), { target: { value: '11' } })
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Hectares for line 1' }), { target: { value: '8' } })
-    expect(screen.getByText(/200 kg/)).toBeTruthy()
-    expect(screen.getByText(/Estimated cost \$400.00/)).toBeTruthy()
+    // Varieties are searched, then added as rows with the farmer's planting filled in.
+    fireEvent.click(screen.getByRole('button', { name: /Varieties and products/ }))
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search Varieties and products' }), { target: { value: 'mbi' } })
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Mbizi · Seed · 25 kg/ha' }))
+    expect(screen.getByRole('spinbutton', { name: 'Hectares of Mbizi' }).value).toBe('10')
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Hectares of Mbizi' }), { target: { value: '8' } })
+    expect(screen.getByText('200 kg')).toBeTruthy()
+    expect(screen.getAllByText('$400.00').length).toBeGreaterThan(0)
     fireEvent.click(screen.getByRole('button', { name: 'Save allocation' }))
     await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/input-supply-requests/allocations/', {
       programme: 2, season: 3, crop_season: 'SUMMER', farmer: 7, crop: 5, lines: [{ requirement: 11, hectares: '8' }],
@@ -71,7 +75,7 @@ describe('LeadInputAllocationsPage', () => {
     apiClient.patch.mockImplementation(() => { open = [edited]; return Promise.resolve({ data: edited }) })
     renderPage()
     fireEvent.click(await screen.findByRole('button', { name: 'Edit Tendai Moyo Maize' }))
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Hectares for line 1' }), { target: { value: '6' } })
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Hectares of Mbizi' }), { target: { value: '6' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }))
     await waitFor(() => expect(apiClient.patch).toHaveBeenCalledWith('/input-supply-requests/allocations/31/', { lines: [{ requirement: 11, hectares: '6' }], version: 2 }))
 
@@ -102,35 +106,80 @@ describe('LeadInputAllocationsPage', () => {
       return Promise.resolve({ data: sent })
     })
     renderPage()
-    fireEvent.click(await screen.findByRole('button', { name: 'Submit request to Admin' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Send to Admin' }))
     await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/input-supply-requests/4/submit/'))
-    expect(await screen.findByText('LF00004 submitted.')).toBeTruthy()
+    expect(await screen.findByText('LF00004 was sent to Admin.')).toBeTruthy()
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Edit Tendai Moyo Maize' })).toBeNull())
   })
 
-  it('sends more farmers in a new submission while the first is with Admin', async () => {
+  it('opens the next submission once one is with Admin, and keeps the sent one as it was', async () => {
     open = [submission({ status: 'SUBMITTED', status_label: 'Submitted', editable: false })]
     const second = submission({ id: 5, reference: 'LF00005', allocations: [{ ...allocation, id: 40, farmer: 8, farmer_name: 'Rudo Ncube', membership_number: 'F-008' }] })
     apiClient.post.mockImplementation(() => { open = [second, ...open]; return Promise.resolve({ status: 201, data: second }) })
     renderPage()
-    // The submitted one is shown as sent, with no way to change it.
-    expect(await screen.findByText(/Admin is reviewing these hectares/)).toBeTruthy()
+    // The page starts the next submission straight away.
+    expect(await screen.findByText(/Add the farmers for your next submission/)).toBeTruthy()
+    // The submitted one is still there, read-only.
+    fireEvent.click(screen.getByRole('button', { name: /LF00004 · Submitted/ }))
+    expect(screen.getByText(/Admin is reviewing this submission/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Edit Tendai Moyo Maize' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Save allocation' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: /New submission/ }))
     fireEvent.click(screen.getByRole('button', { name: /Farmer/ }))
+    // A farmer whose crop is already with Admin is not offered again.
+    expect(screen.queryByRole('option', { name: 'Tendai Moyo · F-007' })).toBeNull()
     fireEvent.mouseDown(screen.getByRole('option', { name: 'Rudo Ncube · F-008' }))
-    fireEvent.change(screen.getByRole('combobox', { name: 'Variety or product' }), { target: { value: '11' } })
-    fireEvent.change(screen.getByRole('spinbutton', { name: 'Hectares for line 1' }), { target: { value: '5' } })
+    fireEvent.click(screen.getByRole('button', { name: /Varieties and products/ }))
+    fireEvent.mouseDown(screen.getByRole('option', { name: 'Mbizi · Seed · 25 kg/ha' }))
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Hectares of Mbizi' }), { target: { value: '5' } })
     fireEvent.click(screen.getByRole('button', { name: 'Save allocation' }))
     await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/input-supply-requests/allocations/', {
       programme: 2, season: 3, crop_season: 'SUMMER', farmer: 8, crop: 5, lines: [{ requirement: 11, hectares: '5' }],
     }))
-    // Both submissions are listed; the new draft is open, and the farmer already sent is not offered again.
     expect(await screen.findByRole('button', { name: /LF00005 · Draft/ })).toBeTruthy()
-    expect(screen.getByRole('button', { name: /LF00004 · Submitted/ })).toBeTruthy()
     expect(screen.queryByRole('button', { name: /New submission/ })).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: /Farmer/ }))
-    expect(screen.queryByRole('option', { name: 'Tendai Moyo · F-007' })).toBeNull()
+  })
+
+  it('redistributes a maximum in the same submission and sends it back to Admin', async () => {
+    const limits = [
+      { id: 1, scope: 'CROP', scope_label: 'Crop', crop: 5, input_category: '', requirement: null, name: 'Maize', requested_hectares: '8.00', approved_hectares: '6.00', difference_hectares: '-2.00', distributed_hectares: '8.00', remaining_hectares: '-2.00' },
+      { id: 2, scope: 'VARIETY', scope_label: 'Variety', crop: 5, input_category: 'SEED', requirement: 11, name: 'Mbizi', requested_hectares: '8.00', approved_hectares: '6.00', difference_hectares: '-2.00', distributed_hectares: '8.00', remaining_hectares: '-2.00' },
+    ]
+    const capped = submission({ stage: 'DISTRIBUTION', status: 'LIMITS_SET', status_label: 'Maximum hectares set', hectares_capped: true, requested_hectares: '8.00', approved_hectares: '6.00', remaining_hectares: '-2.00', limits })
+    open = [capped]
+    const fixed = submission({ ...capped, allocations: [{ ...allocation, version: 3, hectares: '6.00', lines: [{ ...allocation.lines[0], hectares: '6.00', estimated_cost: '300.00' }] }] })
+    apiClient.post.mockImplementation((url) => Promise.resolve({ data: url.endsWith('/submit/') ? { ...fixed, status: 'CONFIRMATION', status_label: 'Final distribution submitted', editable: false } : fixed }))
+    renderPage()
+    // Opens on the same submission's redistribution screen... unless a new one is chosen.
+    fireEvent.click(await screen.findByRole('button', { name: /LF00004 · Maximum hectares set/ }))
+    expect(screen.getByText(/Admin has reduced the hectares for this submission/)).toBeTruthy()
+    const summary = screen.getByLabelText('Redistribution summary')
+    expect(within(summary).getByText('Hectares to reduce')).toBeTruthy()
+    expect(within(summary).getByText('2 ha')).toBeTruthy()
+    expect(screen.getByLabelText('Still to fix').textContent).toContain('Mbizi: reduce by 2 ha')
+    const send = screen.getByRole('button', { name: 'Send back to Admin for approval' })
+    expect(send.disabled).toBe(true)
+    // Typing updates every figure at once.
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'New hectares of Mbizi for Tendai Moyo' }), { target: { value: '6' } })
+    expect(within(summary).getByText('Remaining')).toBeTruthy()
+    expect(within(summary).getByText('$300.00')).toBeTruthy()
+    expect(screen.getByText(/Every maximum is met/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Show quantities and costs' }))
+    expect(screen.getByText('150 kg')).toBeTruthy()
+    // Sending saves the changes together, then sends the same submission back.
+    fireEvent.click(send)
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/input-supply-requests/4/redistribute/', {
+      changes: [{ allocation: 31, version: 2, lines: [{ requirement: 11, hectares: '6' }] }],
+    }))
+    await waitFor(() => expect(apiClient.post).toHaveBeenCalledWith('/input-supply-requests/4/submit/'))
+    expect(await screen.findByText('LF00004 was sent back to Admin for approval.')).toBeTruthy()
+  })
+
+  it('starts a new submission for other farmers even while a maximum is being shared out', async () => {
+    open = [submission({ stage: 'DISTRIBUTION', status: 'LIMITS_SET', status_label: 'Maximum hectares set', hectares_capped: true, approved_hectares: '6.00', remaining_hectares: '-2.00' })]
+    renderPage()
+    expect(await screen.findByText(/Admin set maximum hectares on LF00004/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /New submission/ }).getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Save allocation' })).toBeTruthy()
   })
 })

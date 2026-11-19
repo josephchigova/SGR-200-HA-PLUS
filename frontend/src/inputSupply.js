@@ -19,18 +19,20 @@ export function nextStep(submission) {
   if (!submission) return 'Add your first allocation to start this season’s request.'
   const limitsIssued = submission.stage === 'DISTRIBUTION'
   switch (submission.status) {
-    case 'DRAFT': return 'Add or change allocations, then submit the request to Admin.'
-    case 'SUBMITTED': return 'Admin is reviewing these hectares. To send more farmers, start a new submission.'
-    case 'LIMITS_SET': return 'Admin has issued your maximum hectares. Share them among your farmers, then submit the final distribution.'
-    case 'RETURNED': return limitsIssued ? 'Admin returned the distribution. Correct it within the approved hectares and submit it again.' : 'Admin returned the request. Correct it and submit it again.'
+    case 'DRAFT': return 'Add your farmers, then send the submission to Admin.'
+    case 'SUBMITTED': return 'Admin is reviewing this submission. To send more farmers, start a new submission.'
+    case 'LIMITS_SET': return submission.hectares_capped
+      ? 'Admin has reduced the hectares for this submission. Adjust your farmers’ allocations below to fit, then send it back to Admin for approval.'
+      : 'Its hectares were approved unchanged. Submit it to confirm, or wait for Admin to approve it.'
+    case 'RETURNED': return limitsIssued ? 'Admin returned it for corrections. Adjust the allocations within the approved hectares, then send it back.' : 'Admin returned it for corrections. Make the changes Admin asked for, then send it back.'
     case 'CONFIRMATION': return 'Admin is reviewing your final distribution.'
-    case 'APPROVED': return 'Approved. These allocations are official and the farmers’ input debts were created.'
+    case 'APPROVED': return 'Approved. These allocations are official and the farmers’ input debts were created. Send more farmers in a new submission.'
     case 'REJECTED': return 'Rejected. It stays in your history; you can start a new request.'
     default: return ''
   }
 }
 
-export const submitLabel = (submission) => (submission?.stage === 'DISTRIBUTION' ? 'Submit final distribution' : 'Submit request to Admin')
+export const submitLabel = (submission) => (submission?.stage === 'DISTRIBUTION' ? 'Send back to Admin for approval' : 'Send to Admin')
 
 // Quantity and cost the server will calculate, shown while typing. The server's figures are what is saved.
 export function estimate(variety, hectares) {

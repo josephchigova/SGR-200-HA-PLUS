@@ -71,16 +71,14 @@ function MyInputRequestsPage({ selectedSeason = null, cropSeason = '', periodSta
               <p className="card-sub">{nextStep(current)}</p>
               {current.decision_notes ? <p className={['RETURNED', 'REJECTED'].includes(current.status) ? 'field-error' : 'card-sub'}>Admin: {current.decision_notes}</p> : null}
             </div>
-            {current.editable ? <Link className="primary-btn small" to="/input-allocations">Open in Input allocations</Link> : null}
+            {current.editable ? <Link className="primary-btn small" to={`/input-allocations?submission=${current.id}`}>{current.hectares_capped ? 'Adjust to the maximum' : 'Open in Input allocations'}</Link> : null}
           </div>
           <HectareSummary submission={current} />
-          {current.limits?.length ? <><h4>Approved maximum hectares</h4><LimitsTable limits={current.limits} /></> : null}
-          <h4>By crop and variety</h4>
-          <CropBreakdown crops={current.crops} />
           <h4>Farmer allocations</h4>
           <AllocationsTable allocations={current.allocations} />
-          <h4>History</h4>
-          <History events={current.events} />
+          {current.limits?.length ? <details className="expandable"><summary>Approved maximum hectares</summary><LimitsTable limits={current.limits} /></details> : null}
+          <details className="expandable"><summary>Totals by crop and variety</summary><CropBreakdown crops={current.crops} /></details>
+          {current.events?.length ? <details className="expandable"><summary>History and Admin feedback</summary><History events={current.events} /></details> : null}
         </section>
       ) : null}
     </div>

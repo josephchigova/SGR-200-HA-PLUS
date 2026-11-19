@@ -64,7 +64,7 @@ function InputApprovalsPage({ selectedSeason = null, cropSeason = '', periodStat
 
   return (
     <div className="page-card">
-      <PageHead title="Input approvals" subtitle="Review each lead farmer’s request, approve the hectares or set a maximum, then give the final approval to their farmer distribution. Only the final approval creates farmer input debts." />
+      <PageHead title="Input approvals" subtitle="Approve each lead farmer’s submission as it is, or set maximum hectares for them to share among their farmers. Approval makes the allocations official and creates the farmers’ input debts. Lead farmers can keep sending new submissions." />
       {blocked ? <div className="form-message">Choose the agricultural year and season in the header.</div> : null}
       {notice ? <div className="form-message success" role="status">{notice}</div> : null}
       {error ? <div className="form-message error" role="alert">{error}</div> : null}
@@ -238,12 +238,13 @@ function Review({ submission, canDecide, onDecided, onError }) {
         <div className="decision-bar">
           {issuing ? (
             <>
-              <button type="button" className="primary-btn" disabled={busy} onClick={() => setConfirming({ path: 'set-hectares', title: 'Approve the requested hectares?', body: { mode: 'approve' }, done: (fresh) => `Requested hectares approved for ${fresh.lead_farmer_name}. They can now submit the final distribution.` })}><Icon name="check" />Approve requested hectares</button>
+              <button type="button" className="primary-btn" disabled={busy} onClick={() => setConfirming({ path: 'approve', title: `Approve ${submission.reference}?`, note: `This makes ${submission.allocation_count} farmer allocation${submission.allocation_count === 1 ? '' : 's'} official and creates their input debts. ${submission.lead_farmer_name} can keep sending new submissions.`, done: (fresh) => `${fresh.reference} approved. ${fresh.allocation_count === 1 ? '1 farmer allocation is' : `${fresh.allocation_count} farmer allocations are`} official.` })}><Icon name="check" />Approve</button>
               <button type="button" className="ghost-btn" disabled={busy} onClick={startLimits}>Set maximum hectares</button>
             </>
           ) : null}
           {adjustable ? <button type="button" className="ghost-btn" disabled={busy} onClick={startLimits}>Change approved hectares</button> : null}
-          {submission.status === 'CONFIRMATION' ? <button type="button" className="primary-btn" disabled={busy} onClick={() => setConfirming({ path: 'approve', title: 'Give the final approval?', note: 'This makes every farmer allocation official and creates their input debts. It cannot be done twice.', done: (fresh) => `${fresh.reference} approved. ${fresh.allocation_count} farmer allocations are official.` })}><Icon name="check" />Final approval</button> : null}
+          {submission.status === 'LIMITS_SET' && !submission.hectares_capped ? <button type="button" className="primary-btn" disabled={busy} onClick={() => setConfirming({ path: 'approve', title: `Approve ${submission.reference}?`, note: 'Its hectares were approved unchanged earlier. This makes the farmer allocations official and creates their input debts.', done: (fresh) => `${fresh.reference} approved. ${fresh.allocation_count === 1 ? '1 farmer allocation is' : `${fresh.allocation_count} farmer allocations are`} official.` })}><Icon name="check" />Approve</button> : null}
+          {submission.status === 'CONFIRMATION' ? <button type="button" className="primary-btn" disabled={busy} onClick={() => setConfirming({ path: 'approve', title: 'Give the final approval?', note: 'This makes every farmer allocation official and creates their input debts. It cannot be done twice.', done: (fresh) => `${fresh.reference} approved. ${fresh.allocation_count === 1 ? '1 farmer allocation is' : `${fresh.allocation_count} farmer allocations are`} official.` })}><Icon name="check" />Final approval</button> : null}
           {['SUBMITTED', 'CONFIRMATION'].includes(submission.status) ? <button type="button" className="ghost-btn" disabled={busy} onClick={() => setConfirming({ path: 'return-for-corrections', title: 'Return for corrections?', needsReason: true, done: (fresh) => `${fresh.reference} returned to ${fresh.lead_farmer_name}.` })}>Return for corrections</button> : null}
           {['SUBMITTED', 'CONFIRMATION', 'LIMITS_SET', 'RETURNED'].includes(submission.status) ? <button type="button" className="danger-btn" disabled={busy} onClick={() => setConfirming({ path: 'reject', title: 'Reject this submission?', needsReason: true, note: 'It stays in the history and creates no debt.', done: (fresh) => `${fresh.reference} rejected.` })}>Reject</button> : null}
           {submission.status === 'APPROVED' ? <button type="button" className="danger-btn" disabled={busy} onClick={() => setConfirming({ path: 'reverse', title: 'Reverse the final approval?', needsReason: true, note: 'Its allocations and debts are cancelled, not deleted, and the submission returns to the lead farmer. Allocations with grain already recovered cannot be reversed.', done: (fresh) => `${fresh.reference} approval reversed.` })}>Reverse approval</button> : null}
@@ -253,7 +254,7 @@ function Review({ submission, canDecide, onDecided, onError }) {
       {limits ? (
         <div className="limits-editor">
           <h4>{issuing ? 'Set the maximum hectares for this lead farmer' : 'Change the approved hectares'}</h4>
-          <p className="field-hint">These are maximums for the lead farmer to share among their farmers, not allocations to individual farmers.</p>
+          <p className="field-hint">These are maximums for the lead farmer to share among their farmers, not allocations to individual farmers. {submission.lead_farmer_name} shares them among this submission’s farmers, cannot go past them, and submits the final distribution for approval. Their other submissions are not affected.</p>
           <div className="table-wrap">
             <table className="data-table compact">
               <thead><tr><th>Approved for</th><th>Level</th><th className="num">Requested</th><th className="num">Approved maximum</th><th className="num">Difference</th></tr></thead>
@@ -275,8 +276,7 @@ function Review({ submission, canDecide, onDecided, onError }) {
         </div>
       ) : null}
 
-      <h4>History</h4>
-      <History events={submission.events} />
+      {submission.events?.length ? <details className="expandable"><summary>History</summary><History events={submission.events} /></details> : null}
 
       {confirming ? <Confirm decision={confirming} busy={busy} onClose={() => setConfirming(null)} onConfirm={(remarks) => run(confirming.path, { ...(confirming.body || {}), remarks }, confirming.done)} /> : null}
     </section>
